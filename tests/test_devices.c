@@ -86,6 +86,12 @@ int main(void) {
     CHECK(mem_read32_cia(&cpu,0x0d000018,0)==0x20000 && m.vi_config==0x20000);
     mem_write32_cia(&cpu,0x0d000018,0,0);CHECK(!mem_read32_cia(&cpu,0xcd800018,0));
     CHECK(mem_read32_cia(&cpu,0xcd800180,0)==0x53102 && wii_hollywood_audio_clock(&m.hollywood));
+    CHECK(mem_read32_cia(&cpu,0xcd800024,0)==0);
+    mem_write32_cia(&cpu,0xcd800024,0,0);
+    CHECK(!cpu.halted && mem_read32_cia(&cpu,0x0d000024,0)==0);
+    mem_write32_cia(&cpu,0xcd800024,0x1100,0);
+    CHECK(!cpu.halted && mem_read32_cia(&cpu,0x0d000024,0)==0x1100);
+    CHECK(!wii_hollywood_write(&m.hollywood,0x0d800024,0x1101) && m.hollywood.vi_solid==0x1100);
     gcn_ai_init_model(&m.ai,true);
     gcn_ai_write(&m.ai,&cpu,GCN_AI_BASE,GCN_AI_CR_PSTAT|GCN_AI_CR_SCRESET,4);
     const u32 samples=m.ai.sample_counter;

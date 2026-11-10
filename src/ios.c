@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    ES_GET_STORED_CONTENT_COUNT=0x10,ES_GET_STORED_CONTENTS=0x11,
+    ES_GET_TICKET_VIEW_COUNT=0x12,ES_GET_TICKET_VIEWS=0x13,
+    ES_GET_TMD_VIEW_SIZE=0x14,ES_GET_TMD_VIEW=0x15
+};
+
 static u8* ios_memory(CPUState* cpu,u32 address,u32* available) {
     const u32 physical=gcn_reservation_key(address);
     if(!(physical<cpu->ram_size || (physical>=0x10000000u && physical-0x10000000u<cpu->mem2_size))) {
@@ -81,7 +87,21 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     if(!request || available<32 || (ios->message&3))return false;
     ios->command=read_be32(request);
     const u32 fd=read_be32(request+8);
-    if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"IOS request command=%u fd=%u argument=%08x\n",ios->command,fd,read_be32(request+12));
+    if(getenv("WIILLR_IOS_TRACE")) {
+        fprintf(stderr,"IOS request command=%u fd=%u argument=%08x\n",ios->command,fd,read_be32(request+12));
+        if(ios->command==7 && fd<24 && ios->descriptors[fd]==6) {
+            const u32 inputs=read_be32(request+16),outputs=read_be32(request+20);
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(inputs<=8 && outputs<=8 && vectors && available>=(inputs+outputs)*8)
+                for(u32 n=0;n<inputs+outputs;n++)fprintf(stderr,"ES vector%u address=%08x size=%u\n",n,
+                    read_be32(vectors+n*8),read_be32(vectors+n*8+4));
+            if(inputs && vectors && available>=8 && read_be32(vectors+4)==8 &&
+               (read_be32(request+12)==0x17 || read_be32(request+12)==0x18)) {
+                const u8* title=ios_memory(cpu,read_be32(vectors),&available);
+                if(title && available>=8)fprintf(stderr,"ES deletion title=%08x%08x\n",read_be32(title),read_be32(title+4));
+            }
+        }
+    }
     if(ios->command==1) {
         const u8* path=ios_memory(cpu,read_be32(request+12),&available);
         if(!path || !memchr(path,0,available<64 ? available:64))return false;
@@ -95,6 +115,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/es") && ios->fs)device=6;
         if(!strcmp((const char*)path,"/dev/net/kd/request") && ios->fs)device=7;
         if(!strcmp((const char*)path,"/dev/net/kd/time") && ios->fs)device=8;
+        if(!strcmp((const char*)path,"/dev/net/ncd/manage") && ios->fs)device=10;
         if(!strcmp((const char*)path,"/dev/usb/oh1/57e/305"))device=9;
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
@@ -115,6 +136,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
                 ios->fs_handles[n]=(u32)opened;
             }
             if(device==3 && !ios->di_initialized) {di_registers(ios,cpu);ios->di_initialized=true;}
+            if(device==6)ios->es_uids[n]=wii_fs_uid(ios->fs);
             ios->descriptors[n]=device;ios->result=(s32)n;break;
         }
         return true;
@@ -123,6 +145,39 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         return di_ioctl(ios,cpu,request);
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==9 && ios->bluetooth)
         return wii_bluetooth_submit(ios->bluetooth,ios->message)?2:0;
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==7) {
+        // This development profile has no attached network interface. Report
+        // NCD's disconnected link, with a successful status query only.
+        ios->result=-4;
+        if(read_be32(request+16)!=0 || read_be32(request+20)!=1)return 1;
+        const u8* vector=ios_memory(cpu,read_be32(request+24),&available);
+        if(!vector || available<8 || read_be32(vector+4)<8)return 1;
+        const u32 output=read_be32(vector),size=read_be32(vector+4);
+        if(!ios_memory(cpu,output,&available) || available<size)return 1;
+        mem_write32_cia(cpu,output,0,cpu->pc);mem_write32_cia(cpu,output+4,2,cpu->pc); /* LINK_NONE */
+        ios->result=0;return 1;
+    }
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==8 && ios->fs) {
+        ios->result=-4;
+        if(read_be32(request+16)!=0 || read_be32(request+20)!=2)return 1;
+        const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+        if(!vectors || available<16 || read_be32(vectors+4)<4 || read_be32(vectors+12)<6)return 1;
+        const u32 output=read_be32(vectors),mac_output=read_be32(vectors+8);
+        if(!ios_memory(cpu,output,&available) || available<read_be32(vectors+4) ||
+           !ios_memory(cpu,mac_output,&available) || available<read_be32(vectors+12))return 1;
+        u8 mac[6];if(!wii_fs_network_mac(ios->fs,mac)){ios->result=-117;return 1;}
+        for(u32 n=0;n<6;n++)mem_write8_cia(cpu,mac_output+n,mac[n],cpu->pc);
+        mem_write32_cia(cpu,output,0,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==1) {
+        // Suspending an unavailable WiiConnect24 scheduler reports disabled.
+        // There is no background network engine whose work can be suspended.
+        ios->result=-4;
+        const u32 output=read_be32(request+24),size=read_be32(request+28);
+        if(read_be32(request+20) || !output || (output&3) || size<32 ||
+           !ios_memory(cpu,output,&available) || available<size)return 1;
+        mem_write32_cia(cpu,output,(u32)-39,cpu->pc);ios->result=0;return 1;
+    }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==1 && read_be32(request+12)==0x5001 && ios->hollywood) {
         ios->result=-4;
         const u32 input=read_be32(request+16),output=read_be32(request+24);
@@ -135,6 +190,19 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!wii_hollywood_video_update(ios->hollywood,set,keep,old,&flags))return 0;
         for(unsigned n=0;n<3;n++)mem_write32_cia(cpu,output+n*4,old[n],cpu->pc);
         mem_write32_cia(cpu,output+12,flags,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==0x22) {
+        const u32 address=read_be32(request+16),output=read_be32(request+24);
+        const u8* input=ios_memory(cpu,address,&available);
+        ios->result=-4;
+        if(!address || (address&3) || read_be32(request+20)<4 || !input || available<4 ||
+           !output || (output&3) || read_be32(request+28)<4 ||
+           !ios_memory(cpu,output,&available) || available<4)return 1;
+        /* NWC24 SetScriptMode. This profile has no network script engine.
+         * Report WC24_ERR_DISABLED through the service result, rather than
+         * acknowledging script execution or silently enabling network work. */
+        const s32 result=read_be32(input)<=1 ? -39 : -3;
+        mem_write32_cia(cpu,output,(u32)result,cpu->pc);ios->result=0;return 1;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==8 && read_be32(request+12)==0x17) {
         const u32 address=read_be32(request+16),output=read_be32(request+24);
@@ -167,6 +235,147 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs) {
         const u32 operation=read_be32(request+12);
+        if(operation==0x45) {
+            // This provider has no Korean common-key slot. IOS reports
+            // ES_EINVAL for that provisioning query; it is not a region test
+            // that should be answered with success for every title.
+            ios->result=-1017;
+            if(read_be32(request+16) || read_be32(request+20))return 1;
+            return 1;
+        }
+        if(operation==0x24) {
+            ios->result=-1017;
+            if(read_be32(request+16)!=3 || read_be32(request+20)!=0)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<24 || read_be32(vectors+4)!=8 || read_be32(vectors+12)!=0xd8 || read_be32(vectors+20)!=4)return 1;
+            const u8* id=ios_memory(cpu,read_be32(vectors),&available);if(!id || available<8)return 1;
+            const u64 title=(u64)read_be32(id)<<32|read_be32(id+4);
+            const u8* view=ios_memory(cpu,read_be32(vectors+8),&available);if(!view || available<0xd8)return 1;
+            const u8* index=ios_memory(cpu,read_be32(vectors+16),&available);if(!index || available<4)return 1;
+            ios->result=wii_es_title_content_open(ios->fs,title,view,read_be32(index));return 1;
+        }
+        if(operation==0x21) {
+            ios->result=-1017;
+            if(read_be32(request+16)!=1 || read_be32(request+20)!=0)return 1;
+            const u8* vector=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vector || available<8 || read_be32(vector+4)!=8)return 1;
+            const u8* id=ios_memory(cpu,read_be32(vector),&available);
+            if(!id || available<8)return 1;
+            ios->result=wii_es_set_uid(ios->fs,ios->es_uids[fd],(u64)read_be32(id)<<32|read_be32(id+4));return 1;
+        }
+        if(operation==ES_GET_STORED_CONTENT_COUNT || operation==ES_GET_STORED_CONTENTS) {
+            ios->result=-1017;
+            const u32 inputs=operation==ES_GET_STORED_CONTENT_COUNT?1:2;
+            if(read_be32(request+16)!=inputs || read_be32(request+20)!=1)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<(inputs+1)*8 || read_be32(vectors+4)!=8)return 1;
+            const u8* id=ios_memory(cpu,read_be32(vectors),&available);
+            if(!id || available<8)return 1;const u64 title=(u64)read_be32(id)<<32|read_be32(id+4);
+            u32 maximum=0;
+            if(inputs==2) {
+                if(read_be32(vectors+12)!=4)return 1;
+                const u8* count=ios_memory(cpu,read_be32(vectors+8),&available);
+                if(!count || available<4)return 1;maximum=read_be32(count);
+                if(maximum>UINT32_MAX/4)return 1;
+            }
+            const u32 output=read_be32(vectors+inputs*8),size=inputs==2?maximum*4:4;
+            if(read_be32(vectors+inputs*8+4)!=size)return 1;
+            u8* data=size?ios_memory(cpu,output,&available):NULL;
+            if(size && (!data || available<size))return 1;
+            u32 actual=0;ios->result=wii_es_stored_contents(ios->fs,title,inputs==2?data:NULL,maximum,&actual);
+            if(!ios->result) {
+                if(inputs==1)mem_write32_cia(cpu,output,actual,cpu->pc);
+                else for(u32 n=0;n<(actual<maximum?actual:maximum)*4;n++)mem_write8_cia(cpu,output+n,data[n],cpu->pc);
+            }
+            return 1;
+        }
+        if(operation==0x17) {
+            ios->result=-1017;
+            if(read_be32(request+16)!=1 || read_be32(request+20)!=0)return 1;
+            const u8* vector=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vector || available<8 || read_be32(vector+4)!=8)return 1;
+            const u8* id=ios_memory(cpu,read_be32(vector),&available);
+            if(!id || available<8)return 1;
+            ios->result=wii_es_delete_title(ios->fs,(u64)read_be32(id)<<32|read_be32(id+4));return 1;
+        }
+        if(operation==ES_GET_TMD_VIEW_SIZE || operation==ES_GET_TMD_VIEW) {
+            ios->result=-1017;
+            const u32 inputs=operation==ES_GET_TMD_VIEW_SIZE?1:2;
+            if(read_be32(request+16)!=inputs || read_be32(request+20)!=1)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<(inputs+1)*8 || read_be32(vectors+4)<8)return 1;
+            const u8* id=ios_memory(cpu,read_be32(vectors),&available);
+            if(!id || available<read_be32(vectors+4))return 1;
+            const u64 title=(u64)read_be32(id)<<32|read_be32(id+4);
+            u32 capacity=0;
+            if(inputs==2) {
+                if(read_be32(vectors+12)!=4)return 1;
+                const u8* length=ios_memory(cpu,read_be32(vectors+8),&available);
+                if(!length || available<4)return 1;capacity=read_be32(length);
+            }
+            const u32 output=read_be32(vectors+inputs*8),extent=read_be32(vectors+inputs*8+4);
+            if((inputs==1 && extent<4) || (inputs==2 && extent!=capacity))return 1;
+            u8* data=extent?ios_memory(cpu,output,&available):NULL;
+            if(extent && (!data || available<extent))return 1;
+            u32 size=0;ios->result=wii_es_tmd_view(ios->fs,title,inputs==2?data:NULL,capacity,&size);
+            if(!ios->result) {
+                if(inputs==1)mem_write32_cia(cpu,output,size,cpu->pc);
+                else if(!extent){ios->result=-1017;return 1;}
+                else for(u32 n=0;n<size;n++)mem_write8_cia(cpu,output+n,data[n],cpu->pc);
+            }
+            return 1;
+        }
+        if(operation==ES_GET_TICKET_VIEW_COUNT || operation==ES_GET_TICKET_VIEWS) {
+            ios->result=-1017;
+            const u32 inputs=operation==ES_GET_TICKET_VIEW_COUNT?1:2;
+            if(read_be32(request+16)!=inputs || read_be32(request+20)!=1)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<(inputs+1)*8 || read_be32(vectors+4)<8)return 1;
+            const u8* id=ios_memory(cpu,read_be32(vectors),&available);
+            if(!id || available<read_be32(vectors+4))return 1;const u64 title=(u64)read_be32(id)<<32|read_be32(id+4);
+            u32 maximum=0;
+            if(inputs==2) {
+                if(read_be32(vectors+12)!=4)return 1;
+                const u8* count=ios_memory(cpu,read_be32(vectors+8),&available);
+                if(!count || available<4)return 1;maximum=read_be32(count);
+                if(maximum>UINT32_MAX/0xd8)return 1;
+            }
+            const u32 output=read_be32(vectors+inputs*8),size=inputs==2?maximum*0xd8:4;
+            const u32 extent=read_be32(vectors+inputs*8+4);
+            if(extent<size)return 1;
+            u8* data=extent?ios_memory(cpu,output,&available):NULL;
+            if(extent && (!data || available<extent))return 1;
+            u32 actual=0;ios->result=wii_es_ticket_views(ios->fs,title,inputs==2?data:NULL,maximum,&actual);
+            if(!ios->result) {
+                if(inputs==1)mem_write32_cia(cpu,output,actual,cpu->pc);
+                else for(u32 n=0;n<(actual<maximum?actual:maximum)*0xd8;n++)mem_write8_cia(cpu,output+n,data[n],cpu->pc);
+            }
+            return 1;
+        }
+        if(operation==0x0e || operation==0x0f) {
+            ios->result=-1017;
+            const u32 inputs=operation==0x0f;
+            if(read_be32(request+16)!=inputs || read_be32(request+20)!=1)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<(inputs+1)*8)return 1;
+            u32 maximum=0;
+            if(inputs) {
+                if(read_be32(vectors+4)!=4)return 1;
+                const u8* count=ios_memory(cpu,read_be32(vectors),&available);
+                if(!count || available<4)return 1;maximum=read_be32(count);
+                if(maximum>UINT32_MAX/8)return 1;
+            }
+            const u32 output=read_be32(vectors+inputs*8),size=inputs?maximum*8:4;
+            if(read_be32(vectors+inputs*8+4)!=size)return 1;
+            u8* data=size?ios_memory(cpu,output,&available):NULL;
+            if(size && (!data || available<size))return 1;
+            u32 actual=0;ios->result=wii_es_titles(ios->fs,inputs?data:NULL,maximum,&actual);
+            if(!ios->result) {
+                if(!inputs)mem_write32_cia(cpu,output,actual,cpu->pc);
+                else for(u32 n=0;n<(actual<maximum?actual:maximum)*8;n++)mem_write8_cia(cpu,output+n,data[n],cpu->pc);
+            }
+            return 1;
+        }
         if(operation==0x16) {
             ios->result=-1017;
             if(read_be32(request+16)!=1 || read_be32(request+20)!=2)return 1;

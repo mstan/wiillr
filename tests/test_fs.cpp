@@ -9,6 +9,7 @@ extern "C" {
 #include <fstream>
 #include <iostream>
 #include <chrono>
+#include <vector>
 #define CHECK(x) do {if(!(x)){std::cerr<<"FAIL "<<__LINE__<<": "<<#x<<'\n';return 1;}}while(0)
 int main(int argc,char** argv) {
   namespace fs=std::filesystem;
@@ -19,6 +20,9 @@ int main(int argc,char** argv) {
   CHECK(!wii_fs_mount(path.c_str(),0,0));
   std::ofstream(root/".wiillr-nand-profile")<<"wiillr-copied-nand-v1\n";
   fs::create_directories(root/"sys");fs::create_directories(root/"title/00010001/41424344/content");
+  fs::create_directories(root/"title/00010001/55555555/data");
+  std::ofstream(root/"title/00010001/55555555/data/progress")<<"fixture progress";
+  std::ofstream(root/"title/00010001/77777777")<<"not a directory";
   const uint8_t uid_record[]={0,1,0,1,0x41,0x42,0x43,0x44,0,0,0,0};
   std::ofstream(root/"sys/uid.sys",std::ios::binary).write(reinterpret_cast<const char*>(uid_record),12);
   std::array<uint8_t,0x208> tmd{};tmd[1]=1;tmd[3]=1;
@@ -31,6 +35,9 @@ int main(int argc,char** argv) {
   std::memcpy(ticket.data()+0x1dc,uid_record,8);ticket[0x1f1]=152;ticket[0x2a3]=0x7b;
   std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   auto* nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  uint8_t mac[6]{},mac_copy[6]{};
+  CHECK(wii_fs_network_mac(nand,mac) && (mac[0]&3)==2);
+  CHECK(wii_fs_network_mac(nand,mac_copy) && !std::memcmp(mac,mac_copy,6));
   uint8_t bt_data[64]{};uint32_t bt_size=99;
   CHECK(wii_fs_bt_read(nand,bt_data,sizeof bt_data,&bt_size) && !bt_size);
   const uint8_t bt_fixture[]={0x57,0x49,0x49,0x42,0x54,0,1,2,3};
@@ -56,6 +63,7 @@ int main(int argc,char** argv) {
   CHECK(!wii_fs_close(nand,fd) && wii_fs_close(nand,fd)==-101);
   wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  CHECK(wii_fs_network_mac(nand,mac_copy) && !std::memcmp(mac,mac_copy,6));
   CHECK(wii_fs_bt_read(nand,bt_data,sizeof bt_data,&bt_size) && bt_size==sizeof bt_fixture && !std::memcmp(bt_data,bt_fixture,bt_size));
   CHECK(!wii_fs_bt_read(nand,bt_data,1,&bt_size));
   const int restored=wii_fs_open(nand,"/save",1);CHECK(restored>=0);
@@ -91,6 +99,9 @@ int main(int argc,char** argv) {
   std::memcpy(cpu.ram+0x800,"/dev/es",8);
   mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,0x800,0);mem_write32_cia(&cpu,message+16,0,0);
   CHECK(exchange() && ios.descriptors[0]==6);
+  mem_write32_cia(&cpu,message,7,0);mem_write32_cia(&cpu,message+8,0,0);mem_write32_cia(&cpu,message+12,0x45,0);
+  mem_write32_cia(&cpu,message+16,0,0);mem_write32_cia(&cpu,message+20,0,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
   mem_write32_cia(&cpu,message,7,0);mem_write32_cia(&cpu,message+8,0,0);mem_write32_cia(&cpu,message+12,0x20,0);
   mem_write32_cia(&cpu,message+16,0,0);mem_write32_cia(&cpu,message+20,1,0);mem_write32_cia(&cpu,message+24,0x1000,0);
   mem_write32_cia(&cpu,0x1000,buffer,0);mem_write32_cia(&cpu,0x1004,8,0);
@@ -109,6 +120,44 @@ int main(int argc,char** argv) {
     mem_write32_cia(&cpu,message+12,op,0);mem_write32_cia(&cpu,message+16,inputs,0);
     mem_write32_cia(&cpu,message+20,outputs,0);mem_write32_cia(&cpu,message+24,0x1000,0);
   };
+  ios.descriptors[2]=10;
+  mem_write32_cia(&cpu,0x1000,buffer,0);mem_write32_cia(&cpu,0x1004,4,0);
+  mem_write32_cia(&cpu,0x1008,buffer+32,0);mem_write32_cia(&cpu,0x100c,6,0);
+  mem_write32_cia(&cpu,buffer+36,0x11223344,0);
+  es_request(8,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x420,mac,6));
+  CHECK(cpu.mem2[0x426]==0x33 && cpu.mem2[0x427]==0x44);
+  mem_write32_cia(&cpu,0x100c,5,0);mem_write32_cia(&cpu,buffer,0x11223344,0);
+  es_request(8,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-4 && mem_read32_cia(&cpu,buffer,0)==0x11223344);
+  // 0x18 is ticket deletion, not a metadata query, and remains unsupported.
+  for(const auto operation:{0x18u}) {
+    es_request(operation,1,0);mem_write32_cia(&cpu,message+4,0x11223344,0);
+    CHECK(!exchange() && mem_read32_cia(&cpu,message,0)==7 && mem_read32_cia(&cpu,message+4,0)==0x11223344);
+    ios.phase=0;wii_ipc_init(&ipc);
+  }
+  // Directory-backed enumeration includes an installed title's empty data
+  // directory, excludes ordinary files, and bounds writes to the requested list.
+  uint32_t title_count=0;
+  CHECK(!wii_es_titles(nand,nullptr,0,&title_count) && title_count==2);
+  mem_write32_cia(&cpu,0x1000,buffer,0);mem_write32_cia(&cpu,0x1004,4,0);
+  es_request(0x0e,0,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer,0)==2);
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,4,0);
+  mem_write32_cia(&cpu,0x1100,1,0);mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,8,0);
+  mem_write32_cia(&cpu,buffer+8,0x11223344,0);
+  es_request(0x0f,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(mem_read32_cia(&cpu,buffer,0)==0x10001 && mem_read32_cia(&cpu,buffer+4,0)==0x41424344);
+  CHECK(mem_read32_cia(&cpu,buffer+8,0)==0x11223344);
+  mem_write32_cia(&cpu,0x1100,3,0);mem_write32_cia(&cpu,0x100c,24,0);
+  mem_write32_cia(&cpu,buffer+16,0x12345678,0);
+  es_request(0x0f,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(mem_read32_cia(&cpu,buffer+8,0)==0x10001 && mem_read32_cia(&cpu,buffer+12,0)==0x55555555);
+  CHECK(mem_read32_cia(&cpu,buffer+16,0)==0x12345678);
+  mem_write32_cia(&cpu,0x100c,7,0);mem_write32_cia(&cpu,buffer,0x12345678,0);
+  es_request(0x0f,1,1);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
+  CHECK(mem_read32_cia(&cpu,buffer,0)==0x12345678);
+  mem_write32_cia(&cpu,0x1100,0xffffffff,0);
+  es_request(0x0f,1,1);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
   mem_write32_cia(&cpu,0x1000,0,0);mem_write32_cia(&cpu,0x1004,0,0);
   mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,0xd8,0);
   es_request(0x1b,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
@@ -118,8 +167,101 @@ int main(int argc,char** argv) {
   std::array<uint8_t,0xd8> view{};
   CHECK(!wii_es_ticket_view(nand,ticket.data(),ticket.size(),view.data()));
   CHECK(!std::memcmp(view.data()+4,ticket.data()+0x1d0,0xd4));
+  // Arbitrary installed content uses the requested title, exact installed
+  // ticket view and TMD content index; forged views never obtain a handle.
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
+  mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x41424344,0);
+  mem_write32_cia(&cpu,0x1008,0x1200,0);mem_write32_cia(&cpu,0x100c,0xd8,0);
+  std::memcpy(cpu.ram+0x1200,view.data(),view.size());
+  mem_write32_cia(&cpu,0x1010,0x1120,0);mem_write32_cia(&cpu,0x1014,4,0);mem_write32_cia(&cpu,0x1120,3,0);
+  es_request(0x24,3,0);CHECK(exchange());
+  const auto other_content=mem_read32_cia(&cpu,message+4,0);CHECK(other_content<16);
+  uint8_t original_content[8]{};
+  CHECK(wii_es_content_read(nand,other_content,original_content,8)==5 && !std::memcmp(original_content,"title",5));
+  CHECK(!wii_es_content_close(nand,other_content));
+  cpu.ram[0x1224]^=1;es_request(0x24,3,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);cpu.ram[0x1224]^=1;
+  mem_write32_cia(&cpu,0x1104,0x55555555,0);es_request(0x24,3,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1028);
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
+  mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x41424344,0);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,4,0);
+  es_request(0x12,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer,0)==1);
+  mem_write32_cia(&cpu,0x1008,0x1120,0);mem_write32_cia(&cpu,0x100c,4,0);mem_write32_cia(&cpu,0x1120,1,0);
+  mem_write32_cia(&cpu,0x1010,buffer,0);mem_write32_cia(&cpu,0x1014,0xd8,0);
+  es_request(0x13,2,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(!std::memcmp(cpu.mem2+0x400,view.data(),view.size()));
+  mem_write32_cia(&cpu,0x1004,32,0);mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,32,0);
+  mem_write32_cia(&cpu,buffer+4,0x12345678,0);
+  es_request(0x12,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer,0)==1);
+  CHECK(mem_read32_cia(&cpu,buffer+4,0)==0x12345678);
+  mem_write32_cia(&cpu,0x1004,8,0);mem_write32_cia(&cpu,0x1008,0x1120,0);mem_write32_cia(&cpu,0x100c,4,0);
+  mem_write32_cia(&cpu,0x1014,0xd7,0);mem_write32_cia(&cpu,buffer,0x12345678,0);
+  es_request(0x13,2,1);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
+  CHECK(mem_read32_cia(&cpu,buffer,0)==0x12345678);
+  uint32_t view_count=99;std::array<uint8_t,0xd8+1> views{};views.back()=0x77;
+  CHECK(!wii_es_ticket_views(nand,0x0001000155555555ull,views.data(),1,&view_count) && !view_count && views.back()==0x77);
+  // A multi-ticket container is counted in full; a smaller result buffer is
+  // bounded, and an invalid later ticket cannot partially publish views.
+  auto pair=std::vector<uint8_t>(ticket.begin(),ticket.end());pair.insert(pair.end(),ticket.begin(),ticket.end());
+  std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(pair.data()),pair.size());
+  CHECK(!wii_es_ticket_views(nand,0x0001000141424344ull,views.data(),1,&view_count) && view_count==2);
+  CHECK(!std::memcmp(views.data(),view.data(),view.size()) && views.back()==0x77);
+  pair[0x2a4+0x1e0]^=1;views.fill(0x55);
+  std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(pair.data()),pair.size());
+  CHECK(wii_es_ticket_views(nand,0x0001000141424344ull,views.data(),1,&view_count)==-1017 && views[0]==0x55);
+  std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   CHECK(wii_es_unlimited_ticket(nand,0,&result) && !result);
+  // The TMD view excludes signatures/access rights/hashes and retains real
+  // title identity, version and each content's ID/index/type/64-bit size.
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
+  mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x41424344,0);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,4,0);
+  es_request(0x14,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer,0)==0x6c);
+  mem_write32_cia(&cpu,0x1008,0x1120,0);mem_write32_cia(&cpu,0x100c,4,0);mem_write32_cia(&cpu,0x1120,0x6c,0);
+  mem_write32_cia(&cpu,0x1010,buffer,0);mem_write32_cia(&cpu,0x1014,0x6c,0);
+  es_request(0x15,2,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(mem_read32_cia(&cpu,buffer+12,0)==0x10001 && mem_read32_cia(&cpu,buffer+16,0)==0x41424344);
+  CHECK(mem_read32_cia(&cpu,buffer+0x58,0)==1 && mem_read32_cia(&cpu,buffer+0x5c,0)==1);
+  CHECK(mem_read32_cia(&cpu,buffer+0x60,0)==0x00030001 && mem_read32_cia(&cpu,buffer+0x68,0)==5);
+  mem_write32_cia(&cpu,0x1120,0x6b,0);mem_write32_cia(&cpu,0x1014,0x6b,0);
+  mem_write32_cia(&cpu,buffer,0x12345678,0);
+  es_request(0x15,2,1);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
+  CHECK(mem_read32_cia(&cpu,buffer,0)==0x12345678);
+  mem_write32_cia(&cpu,0x1104,0x55555555,0);mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,4,0);
+  es_request(0x14,1,1);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-106);
+  CHECK(mem_read32_cia(&cpu,buffer,0)==0x12345678);
+  auto truncated=tmd;truncated[0x1df]=2;
+  std::ofstream(root/"title/00010001/41424344/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(truncated.data()),truncated.size());
+  uint32_t tmd_view_size=0;views.fill(0x55);
+  CHECK(wii_es_tmd_view(nand,0x0001000141424344ull,views.data(),views.size(),&tmd_view_size)==-1017 && views[0]==0x55);
+  std::ofstream(root/"title/00010001/41424344/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(tmd.data()),tmd.size());
   CHECK(wii_es_unlimited_ticket(nand,1,&result) && result==-1028);
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
+  mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x41424344,0);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,4,0);
+  es_request(0x10,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer,0)==1);
+  mem_write32_cia(&cpu,0x1008,0x1120,0);mem_write32_cia(&cpu,0x100c,4,0);mem_write32_cia(&cpu,0x1120,1,0);
+  mem_write32_cia(&cpu,0x1010,buffer,0);mem_write32_cia(&cpu,0x1014,4,0);mem_write32_cia(&cpu,buffer+4,0x11223344,0);
+  es_request(0x11,2,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer,0)==1);
+  CHECK(mem_read32_cia(&cpu,buffer+4,0)==0x11223344);
+  // Declared shared content is stored only when its hash resolves to an
+  // existing shared file; the returned ID is the TMD ID, not the map filename.
+  std::array<uint8_t,0x22c> shared_tmd{};std::memcpy(shared_tmd.data(),tmd.data(),tmd.size());shared_tmd[0x1df]=2;
+  shared_tmd[0x20b]=2;shared_tmd[0x20e]=0x80;shared_tmd[0x20f]=1;shared_tmd[0x217]=6;
+  std::fill(shared_tmd.begin()+0x218,shared_tmd.end(),0x42);
+  std::ofstream(root/"title/00010001/41424344/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(shared_tmd.data()),shared_tmd.size());
+  uint32_t stored_count=0;std::array<uint8_t,12> ids{};
+  CHECK(!wii_es_stored_contents(nand,boot_title,ids.data(),3,&stored_count) && stored_count==1);
+  fs::create_directory(root/"shared1");
+  std::array<uint8_t,28> map{};std::memcpy(map.data(),"0000000a",8);std::fill(map.begin()+8,map.end(),0x42);
+  std::ofstream(root/"shared1/content.map",std::ios::binary).write(reinterpret_cast<const char*>(map.data()),map.size());
+  CHECK(!wii_es_stored_contents(nand,boot_title,ids.data(),3,&stored_count) && stored_count==1);
+  std::ofstream(root/"shared1/0000000a.app")<<"shared";
+  CHECK(!wii_es_stored_contents(nand,boot_title,ids.data(),3,&stored_count) && stored_count==2 && ids[3]==1 && ids[7]==2);
+  std::ofstream(root/"shared1/content.map",std::ios::binary|std::ios::app)<<'x';ids.fill(0x55);
+  CHECK(wii_es_stored_contents(nand,boot_title,ids.data(),3,&stored_count)==-1017 && ids[0]==0x55);
+  std::ofstream(root/"title/00010001/41424344/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(tmd.data()),tmd.size());
   ticket[0x267]=1;
   std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   CHECK(!wii_es_unlimited_ticket(nand,0,&result));
@@ -169,15 +311,72 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,0x1014,3,0);mem_write32_cia(&cpu,buffer,0x12345678,0);
   es_request(0x0c,1,2);mem_write32_cia(&cpu,message+8,1,0);
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-101 && mem_read32_cia(&cpu,buffer,0)==0x12345678);
-  cpu_free(&cpu);wii_fs_unmount(nand);
-  nand=wii_fs_mount(path.c_str(),0x1001,1);CHECK(nand && wii_fs_open(nand,"/save",1)==-102);wii_fs_unmount(nand);
+  // ES deletion protects system titles and respects handles in the target
+  // tree. Removing a different title preserves this title and unrelated saves.
+  CHECK(wii_es_delete_title(nand,0x0000000100000002ull)==-1017);
+  auto held=wii_fs_open(nand,"/title/00010001/55555555/data/progress",1);CHECK(held>=0);
+  CHECK(wii_es_delete_title(nand,0x0001000155555555ull)<0 && fs::exists(root/"title/00010001/55555555/data/progress"));
+  CHECK(!wii_fs_close(nand,held));
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
+  mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x55555555,0);
+  es_request(0x17,1,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(!fs::exists(root/"title/00010001/55555555") && fs::exists(root/"title/00010001/41424344/content/title.tmd"));
+  CHECK(fs::file_size(root/"save")==5);
+  wii_fs_unmount(nand);
+  nand=wii_fs_mount(path.c_str(),0x1001,1);CHECK(nand && wii_fs_open(nand,"/save",1)==-102);
+  CHECK(!wii_es_titles(nand,nullptr,0,&title_count) && title_count==1);wii_fs_unmount(nand);
+  // SetUID changes actual PPC file access, while existing ES handles retain
+  // their opener's authority and the active-title queries retain boot identity.
+  fs::create_directories(root/"title/00000001/00000002/content");
+  auto menu_tmd=tmd;std::memset(menu_tmd.data()+0x18c,0,8);menu_tmd[0x18f]=1;menu_tmd[0x193]=2;menu_tmd[0x199]=7;
+  std::ofstream(root/"title/00000001/00000002/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(menu_tmd.data()),menu_tmd.size());
+  fs::create_directories(root/"title/00010001/55555555/content");
+  auto target_tmd=tmd;std::memset(target_tmd.data()+0x190,0x55,4);target_tmd[0x198]=0x33;target_tmd[0x199]=0x44;
+  std::ofstream(root/"title/00010001/55555555/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(target_tmd.data()),target_tmd.size());
+  const uint8_t menu_uid[]={0,0,0,1,0,0,0,2,0,0,0x10,0};
+  std::ofstream(root/"sys/uid.sys",std::ios::binary|std::ios::app).write(reinterpret_cast<const char*>(menu_uid),12);
+  std::ofstream(root/"uid-test",std::ios::binary);
+  nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  params.fill(0);params[2]=0x10;params[3]=1;params[4]=0x33;params[5]=0x44;
+  std::memcpy(params.data()+6,"/uid-test",10);params[70]=3;
+  CHECK(wii_fs_ioctl(nand,-1,5,params.data(),params.size(),nullptr,0,&result) && !result);wii_fs_unmount(nand);
+  nand=wii_fs_mount(path.c_str(),0x1000,7);CHECK(nand && wii_fs_open(nand,"/uid-test",1)==-102);
+  wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.fs=nand;
+  std::memcpy(cpu.ram+0x800,"/dev/es",8);
+  mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,0x800,0);mem_write32_cia(&cpu,message+16,0,0);
+  CHECK(exchange() && ios.descriptors[0]==6 && ios.es_uids[0]==0x1000);
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
+  mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x55555555,0);
+  es_request(0x21,1,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && wii_fs_uid(nand)==0x1001);
+  CHECK(fs::file_size(root/"sys/uid.sys")==36);
+  const auto own_save=wii_fs_open(nand,"/uid-test",1);CHECK(own_save>=0);CHECK(!wii_fs_close(nand,own_save));
+  CHECK(wii_fs_boot_title(nand,&boot_title) && boot_title==0x0000000100000002ull);
+  mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,0x800,0);mem_write32_cia(&cpu,message+16,0,0);
+  CHECK(exchange() && ios.descriptors[1]==6 && ios.es_uids[1]==0x1001);
+  mem_write32_cia(&cpu,0x1100,1,0);mem_write32_cia(&cpu,0x1104,2,0);
+  es_request(0x21,1,0);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017 && wii_fs_uid(nand)==0x1001);
+  es_request(0x21,1,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && wii_fs_uid(nand)==0x1000);
+  CHECK(wii_fs_open(nand,"/uid-test",1)==-102);
+  mem_write32_cia(&cpu,0x1104,99,0);es_request(0x21,1,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-106 && wii_fs_uid(nand)==0x1000);
+  CHECK(fs::file_size(root/"sys/uid.sys")==36);wii_fs_unmount(nand);
+  nand=wii_fs_mount(path.c_str(),0x1001,0x3344);CHECK(nand && wii_fs_boot_title(nand,&boot_title) && boot_title==0x0001000155555555ull);
+  wii_fs_unmount(nand);cpu_free(&cpu);
   // Only this exclusively created, flat disposable fixture is removed.
+  CHECK(fs::remove(root/"uid-test"));
+  CHECK(fs::remove(root/".wiillr-network-mac"));
+  CHECK(fs::remove(root/"title/00000001/00000002/content/title.tmd"));CHECK(fs::remove(root/"title/00000001/00000002/content"));
+  CHECK(fs::remove(root/"title/00000001/00000002"));CHECK(fs::remove(root/"title/00000001"));
+  CHECK(fs::remove(root/"title/00010001/55555555/content/title.tmd"));CHECK(fs::remove(root/"title/00010001/55555555/content"));CHECK(fs::remove(root/"title/00010001/55555555"));
   CHECK(fs::remove(root/"save"));CHECK(fs::remove(root/"fst.bin"));
   CHECK(fs::remove(root/"title/00010001/41424344/content/title.tmd"));
   CHECK(fs::remove(root/"title/00010001/41424344/content/00000001.app"));
   CHECK(fs::remove(root/"title/00010001/41424344/content"));CHECK(fs::remove(root/"title/00010001/41424344"));
+  CHECK(fs::remove(root/"title/00010001/77777777"));
   CHECK(fs::remove(root/"title/00010001"));CHECK(fs::remove(root/"title"));
   CHECK(fs::remove(root/"sys/uid.sys"));CHECK(fs::remove(root/"sys"));
+  CHECK(fs::remove(root/"shared1/content.map"));CHECK(fs::remove(root/"shared1/0000000a.app"));CHECK(fs::remove(root/"shared1"));
   CHECK(fs::remove(root/"ticket/00010001/41424344.tik"));CHECK(fs::remove(root/"ticket/00010001"));CHECK(fs::remove(root/"ticket"));
   CHECK(fs::remove(root/".wiillr-bluetooth"));CHECK(fs::remove(root/".wiillr-nand-profile"));CHECK(fs::remove(root));
   return 0;

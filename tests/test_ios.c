@@ -91,6 +91,32 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-4 && !ios.led_mode && gpio==0x300);
+    /* Offline KD scripts report the real disabled status, not successful
+     * script activation. Invalid modes and short buffers remain errors. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=7;
+    mem_write32_cia(&cpu,message+12,0x22,0);mem_write32_cia(&cpu,message+20,4,0);
+    mem_write32_cia(&cpu,message+28,4,0);mem_write32_cia(&cpu,0x10000400,1,0);
+    mem_write32_cia(&cpu,0x10000440,0x12345678,0);
+    mem_write32_cia(&cpu,0x10000444,0xabcdef01,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result);
+    CHECK((s32)mem_read32_cia(&cpu,0x10000440,0)==-39 && mem_read32_cia(&cpu,0x10000444,0)==0xabcdef01);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x10000400,2,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && (s32)mem_read32_cia(&cpu,0x10000440,0)==-3);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+20,3,0);
+    mem_write32_cia(&cpu,0x10000440,0x12345678,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-4 && mem_read32_cia(&cpu,0x10000440,0)==0x12345678);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,1,0);
+    mem_write32_cia(&cpu,message+20,0,0);mem_write32_cia(&cpu,message+28,32,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && (s32)mem_read32_cia(&cpu,0x10000440,0)==-39);
+    CHECK(mem_read32_cia(&cpu,0x10000444,0)==0xabcdef01);
     /* KD's RTC synchronization retains the guest's actual counter and epoch;
      * requesting the unimplemented persistent update must fail before ACK. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=8;
@@ -107,7 +133,24 @@ int main(void) {
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y);
     CHECK(mem_read32_cia(&cpu,message+4,0)==0x11223344 && ios.kd_rtc==1234);
+    /* The offline NCD profile reports a disconnected link and bounds the
+     * complete output vector. Other NCD operations remain unsupported. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=10;
+    mem_write32_cia(&cpu,message,7,0);mem_write32_cia(&cpu,message+8,0,0);mem_write32_cia(&cpu,message+12,7,0);
+    mem_write32_cia(&cpu,message+16,0,0);mem_write32_cia(&cpu,message+20,1,0);mem_write32_cia(&cpu,message+24,0x1000,0);
+    mem_write32_cia(&cpu,0x1000,0x10000400,0);mem_write32_cia(&cpu,0x1004,8,0);
+    for(unsigned n=0;n<3;n++)mem_write32_cia(&cpu,0x10000400+4*n,0x11223344,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result);
+    CHECK(!mem_read32_cia(&cpu,0x10000400,0) && mem_read32_cia(&cpu,0x10000404,0)==2 && mem_read32_cia(&cpu,0x10000408,0)==0x11223344);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x1004,7,0);mem_write32_cia(&cpu,0x10000400,0x11223344,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-4 && mem_read32_cia(&cpu,0x10000400,0)==0x11223344);
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=1;
+    mem_write32_cia(&cpu,message,6,0);
+    mem_write32_cia(&cpu,message+16,0x10000400,0);mem_write32_cia(&cpu,message+24,0x10000440,0);
     WiiHollywood hollywood;wii_hollywood_init(&hollywood);ios.hollywood=&hollywood;
     hollywood.video_regs[0]=8;hollywood.video_regs[1]=0x12340000;hollywood.video_regs[2]=0x56780000;
     mem_write32_cia(&cpu,message+12,0x5001,0);mem_write32_cia(&cpu,message+20,32,0);mem_write32_cia(&cpu,message+28,32,0);

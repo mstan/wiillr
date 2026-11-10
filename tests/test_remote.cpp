@@ -23,6 +23,19 @@ int main() {
   send({0x12,6,0x31});remote.Update(state);CHECK(replies.back()==std::vector<u8>({0x31,1,8,0x80,0x80,0x9a}));
   send({0x17,0,0,0,0x16,0,32});CHECK(replies.back()[5]==0x16);
   remote.Update(state);CHECK(replies.back()[0]==0x21 && replies.back()[5]==0x26);
+  // Real extended IR reports require the sensor bar, both enable reports and
+  // camera initialization. The image contains two distinct sensor-bar dots.
+  input.pointing=true;remote.SetInput(input);
+  remote.PrepareInput(&state,WiimoteCommon::HIDWiimote::SensorBarState::Enabled);
+  send({0x13,4});send({0x1a,4});
+  send({0x16,4,0xb0,0,0x30,1,8});send({0x16,4,0xb0,0,0x33,1,3});
+  send({0x12,6,0x33});remote.Update(state);
+  CHECK(replies.back()==std::vector<u8>({0x33,1,8,0x80,0x80,0x9a,0x9c,0x80,0x55,0x64,0x80,0x65,0xff,0xff,0xff,0xff,0xff,0xff}));
+  remote.PrepareInput(&state,WiimoteCommon::HIDWiimote::SensorBarState::Disabled);remote.Update(state);
+  CHECK(std::all_of(replies.back().begin()+6,replies.back().end(),[](u8 b){return b==0xff;}));
+  remote.PrepareInput(&state,WiimoteCommon::HIDWiimote::SensorBarState::Enabled);
+  send({0x1a,0});remote.Update(state);
+  CHECK(std::all_of(replies.back().begin()+6,replies.back().end(),[](u8 b){return b==0xff;}));
   bool rejected=false;try{send({0x12,6,0x3e});}catch(const std::runtime_error&){rejected=true;}CHECK(rejected);
   return 0;
 }

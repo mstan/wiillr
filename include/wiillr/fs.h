@@ -11,14 +11,27 @@ typedef struct WiiFs WiiFs;
 WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid);
 void wii_fs_unmount(WiiFs*);
 bool wii_fs_boot_title(WiiFs*,uint64_t* title);
+uint32_t wii_fs_uid(WiiFs*);
+int32_t wii_es_set_uid(WiiFs*,uint32_t caller_uid,uint64_t title);
+/* Actual /title directories, including titles whose content is absent.
+ * A non-null output receives up to capacity big-endian title IDs; count is
+ * the total. This query does not establish content or signature validity. */
+int32_t wii_es_titles(WiiFs*,uint8_t* output,uint32_t capacity,uint32_t* count);
+int32_t wii_es_delete_title(WiiFs*,uint64_t title);
 /* Native Bluetooth module EEPROM, stored beside the copied NAND marker. */
 bool wii_fs_bt_read(void*,uint8_t*,uint32_t capacity,uint32_t* size);
 bool wii_fs_bt_write(void*,const uint8_t*,uint32_t size);
+/* Persistent, locally administered identity of the offline virtual adapter. */
+bool wii_fs_network_mac(WiiFs*,uint8_t mac[6]);
 /* Metadata view only; does not authenticate or import a ticket. */
 int32_t wii_es_ticket_view(WiiFs*,const uint8_t* ticket,uint32_t size,uint8_t* view);
+int32_t wii_es_ticket_views(WiiFs*,uint64_t title,uint8_t* views,uint32_t capacity,uint32_t* count);
+int32_t wii_es_tmd_view(WiiFs*,uint64_t title,uint8_t* view,uint32_t capacity,uint32_t* size);
+int32_t wii_es_stored_contents(WiiFs*,uint64_t title,uint8_t* ids,uint32_t capacity,uint32_t* count);
 /* False rejects restricted tickets until real usage accounting is available. */
 bool wii_es_unlimited_ticket(WiiFs*,uint64_t ticket_id,int32_t* result);
 int32_t wii_es_content_open(WiiFs*,uint32_t index);
+int32_t wii_es_title_content_open(WiiFs*,uint64_t title,const uint8_t view[0xd8],uint32_t index);
 int32_t wii_es_content_read(WiiFs*,uint32_t handle,uint8_t*,uint32_t size);
 int32_t wii_es_content_seek(WiiFs*,uint32_t handle,uint32_t offset,uint32_t mode);
 int32_t wii_es_content_close(WiiFs*,uint32_t handle);

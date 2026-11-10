@@ -28,6 +28,7 @@ typedef struct {
     u32 di_output;
     WiiFs* fs; /* borrowed isolated NAND profile */
     u32 fs_handles[24];
+    u32 es_uids[24]; /* identity captured when each ES descriptor opens */
     WiiBluetooth* bluetooth;
     WiiHollywood* hollywood;
 } WiiIosNative;
