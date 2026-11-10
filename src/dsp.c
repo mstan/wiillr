@@ -1,0 +1,103 @@
+/* SPDX-License-Identifier: MIT */
+/* Bounded DSP discovery adapter: maintained LLE/AOT engine, real mailbox and
+ * control semantics. ARAM/AID transfers are not implemented here yet and fail
+ * explicitly. No audio or complete Wii DSP compatibility is claimed. */
+#include "wiillr/dsp.h"
+#include "cpu/native_code.h"
+#include "memory/memory.h"
+#include <stdlib.h>
+#include <string.h>
+
+static bool prepare(void* user, u32 offset, u32 size, bool writing) {
+    WiiDsp* d = user;
+    (void)writing;
+    if(offset>=0x10000000u && offset-0x10000000u<=d->cpu->mem2_size)
+        return size<=d->cpu->mem2_size-(offset-0x10000000u);
+    return offset <= d->cpu->ram_size && size <= d->cpu->ram_size - offset;
+}
+static bool written(void* user, u32 offset, u32 size) {
+    WiiDsp* d = user;
+    if (!prepare(user, offset, size, true)) return false;
+    if (d->cpu->reserve_valid) {
+        u32 reservation = gcn_reservation_key(d->cpu->reserve_addr) & ~31u;
+        if (size && offset < reservation + 32u && reservation < (u64)offset + size)
+            d->cpu->reserve_valid = false;
+    }
+    gcn_native_code_invalidate(offset, size);
+    return true;
+}
+static u64 timebase(void* user) { return ((WiiDsp*)user)->cpu->timebase; }
+static void interrupt(void* user) { ((WiiDsp*)user)->registers.csr |= GCN_DSP_CSR_DSPINT; }
+
+bool wii_dsp_start(WiiDsp* d, CPUState* cpu, const u8* irom, const u8* coef) {
+    memset(d, 0, sizeof *d);
+    gcn_dsp_reset_registers(&d->registers);
+    d->cpu = cpu;
+    d->aram = calloc(1, 0x1000000);
+    if (!d->aram) return false;
+    GcnDspEngineConfig config = {0};
+    config.mem1=cpu->ram; config.mem1_size=cpu->ram_size;
+    config.aram=d->aram; config.aram_size=0x1000000;
+    config.irom=irom; config.irom_size=8192;
+    config.coef=coef; config.coef_size=4096;
+    config.user=d; config.prepare=prepare; config.written=written;
+    config.timebase=timebase; config.interrupt=interrupt;
+    config.wii=true; config.mem2=cpu->mem2; config.mem2_size=cpu->mem2_size;
+    d->engine = gcn_dsp_engine_create(&config);
+    if (!d->engine) { free(d->aram); d->aram=NULL; return false; }
+    return true;
+}
+void wii_dsp_stop(WiiDsp* d) {
+    if (d->engine) gcn_dsp_engine_destroy(d->engine);
+    free(d->aram);
+    d->engine=NULL; d->aram=NULL;
+}
+static bool read16(WiiDsp* d, u32 offset, u16* value) {
+    if (offset <= 6) return gcn_dsp_engine_read_mail(d->engine, offset < 4, (offset & 2) != 0, value);
+    if (offset == GCN_DSP_CSR) {
+        u16 control;
+        if (!gcn_dsp_engine_read_control(d->engine, &control)) return false;
+        *value=(control & GCN_DSP_CONTROL_MASK) | d->registers.csr |
+               (d->registers.dma_active ? GCN_DSP_CSR_DMA:0);
+        return true;
+    }
+    *value=gcn_dsp_reg_read16(&d->registers, offset);
+    return true;
+}
+bool wii_dsp_read(WiiDsp* d, u32 offset, u8 size, u64* value) {
+    if (!d->engine || (size != 2 && size != 4) || (offset & (size-1)) || offset+size > GCN_DSP_SIZE)
+        return false;
+    u16 high, low;
+    if (!read16(d, offset, &high)) return false;
+    if (size == 2) *value=high;
+    else { if (!read16(d, offset+2, &low)) return false; *value=(u32)high<<16 | low; }
+    return true;
+}
+static bool write16(WiiDsp* d, u32 offset, u16 value) {
+    if (offset < 4) return gcn_dsp_engine_write_mail(d->engine, offset == 2, value);
+    if (offset == 4 || offset == 6) return false; /* DSP-owned mailbox */
+    if (offset == GCN_DSP_CSR) {
+        if (!gcn_dsp_engine_write_control(d->engine, value & GCN_DSP_CONTROL_MASK)) return false;
+        /* Interrupt masks are writable; interrupt status is W1C. */
+        d->registers.csr=(d->registers.csr & 0xa8u & ~value) | (value & 0x150u);
+        return true;
+    }
+    if (offset == GCN_DSP_AID_CTRL && (value & GCN_DSP_AID_ENABLE))
+        return false; /* actual transfer must be attached before acceptance */
+    gcn_dsp_reg_write16(&d->registers, offset, value);
+    if(offset==GCN_DSP_AR_CNT_LO)
+        return gcn_dsp_aram_transfer(&d->registers,d->cpu,d->cpu->mem2,d->cpu->mem2_size);
+    return true;
+}
+bool wii_dsp_write(WiiDsp* d, u32 offset, u8 size, u64 value) {
+    if (!d->engine || (size != 2 && size != 4) || (offset & (size-1)) || offset+size > GCN_DSP_SIZE)
+        return false;
+    if (size == 2) return write16(d, offset, (u16)value);
+    return write16(d, offset, (u16)(value >> 16)) && write16(d, offset+2, (u16)value);
+}
+bool wii_dsp_tick(WiiDsp* d, u32 cpu_cycles) {
+    gcn_dsp_aram_advance(&d->registers,cpu_cycles);
+    u64 cycles=(u64)cpu_cycles+d->cycle_phase;
+    d->cycle_phase=(u32)(cycles%6);
+    return !d->engine || !cycles || cycles < 6 || gcn_dsp_engine_run(d->engine, (u32)(cycles/6));
+}

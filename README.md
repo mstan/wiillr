@@ -9,9 +9,25 @@ misses. Development discovery and maintained LLE references remain separate
 from accepted native execution. HLE/LLE service selection happens at build time.
 
 The CMake build consumes pinned shared PowerPC, machine/device and DSP packages.
-Its current products are the compiler and GameCube reference contract tools;
-the Wii-specific machine executable is still being implemented. Initialize
+Its current products include the compiler, reference contract tools and a
+bounded Wii discovery executable. The discovery build interprets original
+guest code with explicit counters and content-identified misses; it is not an
+accepted native menu or game runtime. Initialize
 dependencies with `git submodule update --init --recursive` before configuring.
+
+`tools/wii.py` verifies the NAND title's boot content against its TMD and runs
+`wiillr-discover` from a documented IOS4 v3 NAND-title memory boundary. The
+original PPC entry code initializes the processor and installs its own vectors.
+Boot0/1/2 and IOS execution are outside this development boundary. Required
+unimplemented device/service operations stop execution. No successful IOS
+responses or captured machine initialization are substituted.
+
+The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
+Wii clock selection preserves the existing GameCube defaults. The DSP engine is
+selected at build time with `WIILLR_DSP`; development interpretation and static
+AOT catalogs remain separate builds. DSP ROMs/coefficient data must be supplied
+locally. Rendering, audio delivery, IOS services and title compatibility remain
+in progress.
 
 ## Inspect private inputs
 
