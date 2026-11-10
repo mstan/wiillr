@@ -27,6 +27,9 @@ It allocates/releases STM descriptors and holds event-hook requests until a
 modeled hardware event occurs; unsupported service operations stop
 before acknowledgement. Original ARM execution and a functioning LLE service
 counterpart are not yet qualified for this native route.
+The native disc resource borrows the shared device for register queries,
+interrupt controls and resets. It does not replace drive state with canned
+successful reads.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 Wii clock selection preserves the existing GameCube defaults. The DSP engine is

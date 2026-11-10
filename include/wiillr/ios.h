@@ -3,6 +3,7 @@
 #define WIILLR_IOS_H
 #include "cpu/cpu.h"
 #include "wiillr/ipc.h"
+#include "di/di.h"
 typedef struct {
     u8 descriptors[24],phase;
     u32 message,command;
@@ -10,6 +11,8 @@ typedef struct {
     u64 ready_at,operations;
     u32 event_message,event_output,event_fd;
     bool event_waiting,event_ready;
+    GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
+    bool di_initialized;
 } WiiIosNative;
 /* Experimental native service boundary. Only implemented operations may be
  * acknowledged. False stops discovery with the original request intact. */

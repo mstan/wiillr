@@ -5,6 +5,46 @@
 #include <string.h>
 
 void wii_ios_native_init(WiiIosNative* ios) {memset(ios,0,sizeof *ios);}
+static void di_registers(WiiIosNative* ios,CPUState* cpu) {
+    gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,
+        GCN_DI_SR_TCINT|GCN_DI_SR_DEINT|GCN_DI_SR_TCINTMASK|GCN_DI_SR_DEINTMASK,4);
+    gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CVR,0,4);
+}
+static int di_ioctl(WiiIosNative* ios,CPUState* cpu,const u8* request) {
+    const u32 command=read_be32(request+12),input=read_be32(request+16),input_size=read_be32(request+20);
+    const u32 output=read_be32(request+24),output_size=read_be32(request+28);
+    u32 available;
+    const u8* packet=gcn_mem_resolve(cpu,input,&available);
+    if(input_size!=32 || !packet || available<32) {ios->result=32;return 1;}
+    u32 value;
+    switch(command) {
+    case 0x7a:value=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_CVR,4);break;
+    case 0x84:value=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_IMMBUF,4);break;
+    case 0x88:value=ios->di->disc_present ? 2:1;break;
+    case 0x95:value=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,4);break;
+    case 0x96:value=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_CR,4);break;
+    case 0x7e:di_registers(ios,cpu);ios->result=1;return 1;
+    case 0x85:case 0x86:case 0x89: {
+        const u32 old=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_CVR,4);
+        value=old&GCN_DI_CVR_CVRINTMASK;
+        if(command==0x85)value=0;
+        if(command==0x86)value|=GCN_DI_CVR_CVRINT;
+        if(command==0x89)value|=GCN_DI_CVR_CVRINTMASK;
+        gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CVR,value,4);
+        ios->result=1;return 1;
+    }
+    case 0x8a:
+        gcn_di_reset_drive(ios->di,read_be32(packet+4)!=0);
+        di_registers(ios,cpu);ios->result=1;return 1;
+    default:
+        fprintf(stderr,"native IOS unsupported DI ioctl=%02x\n",command);return 0;
+    }
+    if(output_size<4 || !gcn_mem_resolve(cpu,output,&available) || available<4) {
+        ios->result=32;return 1;
+    }
+    mem_write32_cia(cpu,output,value,cpu->pc);ios->result=1;
+    return 1;
+}
 static int execute(WiiIosNative* ios,CPUState* cpu) {
     u32 available;
     const u8* request=gcn_mem_resolve(cpu,ios->message,&available);
@@ -17,6 +57,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         u8 device=0;
         if(!strcmp((const char*)path,"/dev/stm/immediate"))device=1;
         if(!strcmp((const char*)path,"/dev/stm/eventhook"))device=2;
+        if(!strcmp((const char*)path,"/dev/di") && ios->di)device=3;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
             return false;
@@ -24,10 +65,13 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(read_be32(request+16)>3) {ios->result=-4;return true;}
         ios->result=-5;
         for(u32 n=0;n<24;n++)if(!ios->descriptors[n]) {
+            if(device==3 && !ios->di_initialized) {di_registers(ios,cpu);ios->di_initialized=true;}
             ios->descriptors[n]=device;ios->result=(s32)n;break;
         }
         return true;
     }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==3 && ios->di)
+        return di_ioctl(ios,cpu,request);
     if(ios->command==2) {
         if(ios->event_waiting && fd==ios->event_fd)return false;
         ios->result=-4;
