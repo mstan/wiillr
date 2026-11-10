@@ -8,6 +8,11 @@ Native acceptance requires zero interpreter execution and unresolved native
 misses. Development discovery and maintained LLE references remain separate
 from accepted native execution. HLE/LLE service selection happens at build time.
 
+The CMake build consumes pinned shared PowerPC, machine/device and DSP packages.
+Its current products are the compiler and GameCube reference contract tools;
+the Wii-specific machine executable is still being implemented. Initialize
+dependencies with `git submodule update --init --recursive` before configuring.
+
 ## Inspect private inputs
 
 Supply firmware, NAND, keys and title content locally. `private/` is excluded

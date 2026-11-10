@@ -1,0 +1,6 @@
+[submodule "external/powerpc-recomp-core"]
+	path = external/powerpc-recomp-core
+	url = git@github.com:mstan/powerpc-recomp-core.git
+[submodule "external/gc-wii-core"]
+	path = external/gc-wii-core
+	url = git@github.com:mstan/gc-wii-core.git
