@@ -6,6 +6,7 @@
 #include "wiillr/ipc.h"
 #include "wiillr/ios.h"
 #include "wiillr/ave.h"
+#include "wiillr/hollywood.h"
 #include "mi/mi.h"
 #include "vi/vi.h"
 #include "wiillr/dsp.h"
@@ -34,6 +35,7 @@ typedef struct {
     u32 gpio_out,gpio_direction;
     WiiAve ave;
     u32 vi_config; /* HW_VI1CFG bit17: region/VISEL selection latch */
+    WiiHollywood hollywood;
     GcnCp cp;
     GcnPe pe;
     GcnGp gp;

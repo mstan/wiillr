@@ -10,6 +10,11 @@ static bool faults(auto&& operation) {
 int main() {
     std::vector<uint8_t> mem1(0x1800000),mem2(0x4000000);
     wiillr::Starlet machine(mem1,mem2);
+    CHECK(machine.read32(0x0d800010)==0);
+    machine.advance(127);CHECK(machine.read32(0x0d800010)==0);
+    machine.advance(1);CHECK(machine.read32(0x0d800010)==1);
+    CHECK(machine.read32(0x0d800010)==1);
+    machine.advance((uint64_t(1)<<39)-128);CHECK(machine.read32(0x0d800010)==0);
     machine.write32(0x10000020,0x12345678);
     CHECK(mem2[0x20]==0x12 && machine.read16(0x10000022)==0x5678);
     machine.write32(0xfffffffcu,0xaabbccdd);
@@ -99,5 +104,12 @@ int main() {
     cpwrite(1,0x500f9);
     CHECK(machine.read32(0x20000020)==0x11223344);
     CHECK(faults([&]{machine.coproc_read(14,0,1,0,0);}));
+    cpwrite(1,0x500f8);
+    CHECK(machine.read32(0x0d800180)==0x53102);
+    machine.write32(0x0d8001d0,0);CHECK(machine.read32(0x0d8001d0)==0);
+    machine.write32(0x0d800180,0x53002);
+    machine.write32(0x0d8001cc,wii_audio_pll_preset(false));
+    CHECK(machine.read32(0x0d8001cc)==wii_audio_pll_preset(false));
+    CHECK(faults([&]{machine.write32(0x0d800180,0xffffffff);}));
     return 0;
 }

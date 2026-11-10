@@ -16,6 +16,7 @@ struct WiiFs {
   nand::HostFileSystem backend;
   uint32_t uid;
   uint16_t gid;
+  uint32_t content_handles=0;
   WiiFs(const fs::path& p,uint32_t u,uint16_t g):root(p),backend(p.generic_string()),uid(u),gid(g){}
 };
 static int32_t result(nand::ResultCode code){return code==nand::ResultCode::Success?0:-100-int32_t(code);}
@@ -80,6 +81,33 @@ extern "C" bool wii_fs_boot_title(WiiFs* s,uint64_t* title) {
     *title=found;return true;
   }catch(...){return false;}
 }
+extern "C" int32_t wii_es_ticket_view(WiiFs* s,const uint8_t* ticket,uint32_t size,uint8_t* view) {
+  try {
+    std::array<uint8_t,0x2a4> installed{};
+    if(!size) {
+      uint64_t title;if(!wii_fs_boot_title(s,&title))return -1017;
+      char path[80];std::snprintf(path,sizeof path,"/ticket/%08x/%08x.tik",uint32_t(title>>32),uint32_t(title));
+      check_path(s,path);File::IOFile file(s->root.generic_string()+path,"rb");
+      if(!file)return -1028; /* ES_NO_TICKET */
+      if(file.GetSize()!=installed.size() || !file.ReadArray(installed.data(),installed.size()))return -1017;
+      if((uint64_t(be32(installed.data()+0x1dc))<<32|be32(installed.data()+0x1e0))!=title)return -1017;
+      ticket=installed.data();size=uint32_t(installed.size());
+    }
+    if(!ticket || !view || size!=0x2a4 || be32(ticket)!=0x10001 || ticket[0x1bc]!=0)return -1017;
+    /* RSA2048 v0 view: four-byte version/padding, then the unchanged ticket
+     * fields starting at ticket_id. Encrypted title-key bytes are excluded.
+     * This query does not establish a valid signature or usable key selector. */
+    std::memset(view,0,4);view[0]=ticket[0x1bc];
+    std::memmove(view+4,ticket+0x1d0,0xd4);return 0;
+  }catch(const std::exception&){return -117;}
+}
+extern "C" bool wii_es_unlimited_ticket(WiiFs* s,uint64_t id,int32_t* status) {
+  std::array<uint8_t,0xd8> view{};
+  *status=wii_es_ticket_view(s,nullptr,0,view.data());if(*status)return true;
+  if((uint64_t(be32(view.data()+4))<<32|be32(view.data()+8))!=id){*status=-1028;return true;}
+  for(unsigned i=0;i<8;i++)if(be32(view.data()+0x98+i*8))return false;
+  *status=0;return true;
+}
 extern "C" int32_t wii_fs_open(WiiFs* s,const char* path,uint32_t mode) {
   try {
     if(std::getenv("WIILLR_IOS_TRACE"))std::fprintf(stderr,"NAND open mode=%u path=%s\n",mode,path);
@@ -96,6 +124,59 @@ extern "C" int32_t wii_fs_close(WiiFs* s,uint32_t fd){try{return result(s->backe
 extern "C" int32_t wii_fs_read(WiiFs* s,uint32_t fd,uint8_t* p,uint32_t n){try{return result(s->backend.ReadBytesFromFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_write(WiiFs* s,uint32_t fd,const uint8_t* p,uint32_t n){try{return result(s->backend.WriteBytesToFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_seek(WiiFs* s,uint32_t fd,uint32_t at,uint32_t mode){try{return result(s->backend.SeekFile(fd,at,nand::SeekMode(mode)));}catch(...){return -117;}}
+extern "C" int32_t wii_es_content_open(WiiFs* s,uint32_t index) {
+  try {
+    uint64_t title;if(index>0xffff || !wii_fs_boot_title(s,&title))return -1017;
+    char prefix[80];std::snprintf(prefix,sizeof prefix,"/title/%08x/%08x/content/",uint32_t(title>>32),uint32_t(title));
+    File::IOFile tmd(s->root.generic_string()+prefix+"title.tmd","rb");
+    uint8_t signature[4],header[0xa4];if(!tmd || !tmd.ReadArray(signature,4))return -106;
+    const uint32_t kind=be32(signature),base=kind==0x10000?0x240:kind==0x10001?0x140:kind==0x10002?0x80:0;
+    if(!base || !tmd.Seek(base,File::SeekOrigin::Begin) || !tmd.ReadArray(header,sizeof header))return -1017;
+    const uint32_t count=uint32_t(header[0x9e])<<8|header[0x9f];
+    if(count>4096)return -1017;
+    std::array<uint8_t,36> selected{},entry{};unsigned matches=0;
+    for(uint32_t i=0;i<count;i++) {
+      if(!tmd.ReadArray(entry.data(),entry.size()))return -1017;
+      if((uint32_t(entry[4])<<8|entry[5])==index){selected=entry;++matches;}
+    }
+    if(matches!=1)return -1017;
+    std::string path;
+    if(selected[6]&0x80) {
+      File::IOFile map((s->root/"shared1/content.map").generic_string(),"rb");
+      if(!map || map.GetSize()%28)return -106;
+      uint8_t record[28];unsigned shared_matches=0;
+      while(map.ReadArray(record,sizeof record))if(!std::memcmp(record+8,selected.data()+16,20)) {
+        for(unsigned i=0;i<8;i++)if(!std::isxdigit(record[i]))return -1017;
+        path="/shared1/"+std::string(reinterpret_cast<char*>(record),8)+".app";++shared_matches;
+      }
+      if(shared_matches!=1)return -106;
+    } else {
+      char name[16];std::snprintf(name,sizeof name,"%08x.app",be32(selected.data()));path=std::string(prefix)+name;
+    }
+    check_path(s,path);
+    // ES reads installed title content as the kernel. The active title/UID
+    // was checked above; these handles are distinct from ordinary PPC files.
+    auto file=s->backend.OpenFile(0,0,path,nand::Mode::Read);
+    if(!file)return result(file.error());
+    auto status=file->GetStatus();
+    const uint64_t expected=uint64_t(be32(selected.data()+8))<<32|be32(selected.data()+12);
+    if(!status || status->size!=expected)return -1017;
+    const uint32_t handle=file->Release();
+    if(handle>=32){s->backend.Close(handle);return -109;}
+    s->content_handles|=1u<<handle;return int32_t(handle);
+  }catch(const std::exception&){return -117;}
+}
+static bool content_handle(WiiFs* s,uint32_t handle){return handle<32 && (s->content_handles&(1u<<handle));}
+extern "C" int32_t wii_es_content_read(WiiFs* s,uint32_t handle,uint8_t* data,uint32_t size) {
+  return content_handle(s,handle)?wii_fs_read(s,handle,data,size):-1017;
+}
+extern "C" int32_t wii_es_content_seek(WiiFs* s,uint32_t handle,uint32_t offset,uint32_t mode) {
+  return content_handle(s,handle) && mode<=2?wii_fs_seek(s,handle,offset,mode):-1017;
+}
+extern "C" int32_t wii_es_content_close(WiiFs* s,uint32_t handle) {
+  if(!content_handle(s,handle))return -1017;
+  const int32_t result=wii_fs_close(s,handle);if(!result)s->content_handles&=~(1u<<handle);return result;
+}
 extern "C" bool wii_fs_ioctl(WiiFs* s,int32_t fd,uint32_t command,const uint8_t* in,uint32_t ni,uint8_t* out,uint32_t no,int32_t* r) {
   *r=-101;
   try {

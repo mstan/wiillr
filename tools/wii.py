@@ -35,12 +35,20 @@ def boot_content(nand, title):
 
 
 def discover(args):
-    content, tmd, metadata = boot_content(args.nand.resolve(), args.title)
-    if metadata['ios'] != '0000000100000004':
-        raise ValueError('This discovery boundary implements IOS4 v3 memory only')
-    ios_content, ios_tmd, ios = boot_content(args.nand.resolve(), metadata['ios'])
-    if ios['version'] != 3:
-        raise ValueError('This discovery boundary requires verified IOS4 v3 inputs')
+    starlet = args.processor == 'starlet'
+    original_nand,uid=None,None
+    if args.nand_profile:
+        if starlet:raise ValueError('A native filesystem profile belongs to PPC execution')
+        original_nand,uid=nand_profile.prepare(args.nand,args.nand_profile,args.title)
+    content_root=args.nand_profile if args.nand_profile else args.nand
+    content, tmd, metadata = boot_content(content_root.resolve(), args.title)
+    ios_profile=4;ios_content=ios_tmd=None
+    if metadata['ios']=='0000000100000004':
+        ios_content,ios_tmd,ios=boot_content(args.nand.resolve(),metadata['ios'])
+        if ios['version']!=3:raise ValueError('This boundary requires verified IOS4 v3 inputs')
+    elif metadata['ios']=='0000000100000025' and args.native_ios37 and not starlet:
+        ios_profile=37
+    else:raise ValueError('Unsupported requested IOS; IOS37 native development requires --native-ios37')
     executable = args.executable.resolve(strict=True)
     work = args.work_root.resolve()
     # One invocation owns a fresh directory; previous evidence is never replaced.
@@ -51,24 +59,20 @@ def discover(args):
                GCN_INTERP_BLOB_DIR=str(work / 'pages'))
     if os.name == 'nt':
         env['PATH'] = r'C:\msys64\mingw64\bin' + os.pathsep + env.get('PATH', '')
-    starlet = args.processor == 'starlet'
     command = ([str(executable), str(ios_content), str(args.steps)] if starlet else
                [str(executable), str(content), str(args.steps), str(work / 'mem1.bin'), hex(args.stop_pc)])
     if bool(args.dsp_rom) != bool(args.dsp_coef):
         raise ValueError('Supply both DSP ROM and coefficient files')
     if starlet and (args.dsp_rom or args.stop_pc):
         raise ValueError('DSP ROM/stop-PC options belong to PPC discovery')
-    paths = dict(executable=executable, content=content, tmd=tmd, ios_content=ios_content, ios_tmd=ios_tmd)
+    paths = dict(executable=executable, content=content, tmd=tmd)
+    if ios_content:paths.update(ios_content=ios_content,ios_tmd=ios_tmd)
     if args.dsp_rom:
         if args.dsp_rom.stat().st_size != 8192 or args.dsp_coef.stat().st_size != 4096:
             raise ValueError('Invalid DSP ROM/coefficient extent')
         paths.update(dsp_rom=args.dsp_rom, dsp_coef=args.dsp_coef)
         command += [str(args.dsp_rom.resolve()), str(args.dsp_coef.resolve())]
-    original_nand = None
     if args.nand_profile:
-        if starlet:
-            raise ValueError('A native filesystem profile belongs to PPC discovery')
-        original_nand, uid = nand_profile.prepare(args.nand, args.nand_profile, args.title)
         command += [str(args.nand_profile.absolute()), str(uid), str(metadata['group_id'])]
     if args.gx_library:
         if starlet:
@@ -78,10 +82,11 @@ def discover(args):
         data.mkdir(); cache.mkdir()
         command += ['--gx', str(paths['gx_library']), str(data), str(cache)]
         env.update(SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0', SDL_AUDIODRIVER='dummy', GCN_AUDIO='0')
+    if ios_profile!=4:command+=['--ios-profile',str(ios_profile)]
     before = {name: identity(path) for name,path in paths.items()}
     receipt = dict(inputs=before, title=metadata, command=command,
-                   boot_profile='ios4-v3-elf-kernel-entry' if starlet else 'native-ios4-v3-memory-contract',
-                   execution='ARM-discovery-interpreter' if starlet else ('PPC-static-native' if args.ppc_mode=='static' else 'PPC-discovery-interpreter'), accepted=False,
+                   boot_profile='ios4-v3-elf-kernel-entry' if starlet else ('native-ios37-memory-contract-development' if ios_profile==37 else 'native-ios4-v3-memory-contract'),
+                   execution='ARM-discovery-interpreter' if starlet else {'static':'PPC-static-native','mixed-discovery':'PPC-native-with-discovery','discovery':'PPC-discovery-interpreter'}[args.ppc_mode], accepted=False,
                    boundary=('IOS ELF kernel entry; boot0/1/2 and PPC execution excluded' if starlet else
                              'NAND boot-content PPC entry; boot0/1/2 and IOS execution excluded'))
     if original_nand is not None:
@@ -109,7 +114,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--nand', type=Path, required=True)
     p.add_argument('--processor', choices=('ppc', 'starlet'), default='ppc')
-    p.add_argument('--ppc-mode', choices=('discovery','static'), default='discovery',
+    p.add_argument('--ppc-mode', choices=('discovery','static','mixed-discovery'), default='discovery',
                    help='Static executable uses a cycle budget and stops at its first native miss')
     p.add_argument('--title', default='0000000100000002')
     p.add_argument('--executable', type=Path, required=True)
@@ -121,6 +126,8 @@ def main():
     p.add_argument('--dsp-coef', type=Path)
     p.add_argument('--nand-profile', type=Path, help='Create or reuse an isolated writable NAND copy')
     p.add_argument('--gx-library', type=Path, help='Wii-selected shared native GX service library')
+    p.add_argument('--native-ios37',action='store_true',
+                   help='Explicit native IOS37 development boundary; no original IOS37 ARM execution')
     args = p.parse_args()
     if not 0 < args.steps <= (1000000000 if args.processor == 'starlet' else 5000000000) or args.timeout <= 0:
         p.error('Positive bounded steps/timeout required')

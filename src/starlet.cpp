@@ -17,6 +17,7 @@ uint16_t be16(const uint8_t* p) {return uint16_t(p[0])<<8|p[1];}
 }
 namespace wiillr {
 Starlet::Starlet(std::span<uint8_t> mem1,std::span<uint8_t> mem2):mem1_(mem1),mem2_(mem2) {
+    wii_hollywood_init(&hollywood_);
     cpu.cpsr.mode=uint8_t(armv4t::Mode::Supervisor);
     cpu.cpsr.i=true;cpu.cpsr.f=true;
 }
@@ -137,6 +138,11 @@ uint16_t Starlet::read16(uint32_t at) {
 uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
+    /* HW_TIMER: free-running AHB/128 counter (243MHz /128). MINI's udelay
+     * uses this same approximately1.9MHz timebase; reads do not advance time.
+     * Alarm/interrupt routing remains unsupported until actually implemented. */
+    if(bus_address==0x0d800010u)return uint32_t(cycles_/128);
+    uint32_t hollywood_value;if(wii_hollywood_read(&hollywood_,bus_address,&hollywood_value))return hollywood_value;
     if(bus_address==0x0d800214u)return 0x11; /* selected Hollywood1.1 board profile */
     if(bus_address==0x0d8b0008u)return ahb_flush_mask_;
     if(bus_address==0x0d800070u)return exi_control_;
@@ -176,6 +182,7 @@ void Starlet::write16(uint32_t at,uint16_t v) {
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
+    if(wii_hollywood_write(&hollywood_,bus_address,v))return;
     if(bus_address==0x0d80018cu) {
         /* IOS initializes the decoupled graphics/PI reset lines. They have no
          * attached PPC/GX in this isolated route. Boot-ROM remapping requires

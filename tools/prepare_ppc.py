@@ -13,8 +13,8 @@ def main():
     p.add_argument('--work-root',type=Path,required=True)
     args=p.parse_args();capture=args.capture.resolve();compiler=args.compiler.resolve(strict=True)
     run=json.loads((capture/'run.json').read_text())
-    if run.get('execution')!='PPC-discovery-interpreter' or run.get('exit_code')!=0:
-        raise ValueError('Expected a completed original-title discovery')
+    if run.get('execution') not in ('PPC-discovery-interpreter','PPC-native-with-discovery','PPC-static-native') or run.get('exit_code') not in (0,1):
+        raise ValueError('Expected an original-title execution with explicit miss capture')
     for key in ('log','mem1'):
         path=Path(run[key]['path'])
         if path.parent!=capture or sha(path)!=run[key]['sha256']:raise ValueError('Changed discovery '+key)
@@ -50,7 +50,7 @@ def main():
     identity=dict(capture=str(capture),run_sha256=sha(capture/'run.json'),
         journal_sha256=sha(capture/'native-misses.jsonl'),compiler=dict(path=str(compiler),sha256=sha(compiler)),
         generator_sha256=sha(generator),pages={name:v[1] for name,v in pages.items()},
-        generated={str(path.relative_to(work)):sha(path) for path in chunks},
+        generated={str(path.relative_to(work)):sha(path) for path in sorted((work/'generated').glob('**/*')) if path.is_file()},
         cpu='broadway',pc_namespaces='preserved',execution='unrun static candidate',accepted=False)
     (work/'prepared.json').write_text(json.dumps(identity,indent=2)+'\n')
     print(json.dumps(dict(work_root=str(work),variants=len(chunks),accepted=False)))

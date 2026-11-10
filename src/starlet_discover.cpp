@@ -34,7 +34,7 @@ int main(int argc,char** argv) {
                 throw std::runtime_error("Unsupported ARM/Thumb instruction");
             if(result==armv4t::Interpreter::Result::Swi)
                 throw std::runtime_error("SWI exception routing is not implemented yet");
-            ++retired;cycles+=cost;
+            ++retired;cycles+=cost;machine.advance(cost);
         }
         std::printf("{\"execution\":\"ARM-discovery-interpreter\",\"instructions\":%llu,\"cycles\":%llu,\"pc\":%u,\"limited\":true}\n",
                     static_cast<unsigned long long>(retired),static_cast<unsigned long long>(cycles),machine.cpu.R[15]);

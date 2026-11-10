@@ -12,6 +12,11 @@ typedef struct {
     u64 ready_at,operations;
     u32 event_message,event_output,event_fd;
     bool event_waiting,event_ready;
+    u32 led_mode; /* slot illumination setting: off, dim, bright */
+    u32* gpio_out; /* borrowed GPIO latch; off cancels slot illumination */
+    u32 kd_rtc;
+    u64 kd_rtc_cycles;
+    bool kd_rtc_set;
     GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
     bool di_initialized;
     bool di_waiting;

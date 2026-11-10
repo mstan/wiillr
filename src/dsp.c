@@ -105,7 +105,7 @@ bool wii_dsp_write(WiiDsp* d, u32 offset, u8 size, u64 value) {
     return write16(d, offset, (u16)(value >> 16)) && write16(d, offset+2, (u16)value);
 }
 bool wii_dsp_tick(WiiDsp* d, u32 cpu_cycles,u32 audio_period) {
-    if(!gcn_dsp_aid_advance(&d->registers,d->cpu,cpu_cycles,audio_period)) {
+    if(audio_period && !gcn_dsp_aid_advance(&d->registers,d->cpu,cpu_cycles,audio_period)) {
         fprintf(stderr,"invalid audio DMA address=%08x\n",d->registers.aid_cur_addr);return false;
     }
     gcn_dsp_aram_advance(&d->registers,cpu_cycles);

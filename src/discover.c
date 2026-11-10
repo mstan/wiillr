@@ -42,6 +42,13 @@ static int dump(const char* path, const void* bytes, size_t size) {
 }
 
 int main(int argc, char** argv) {
+    u32 ios_profile=4;
+    if(argc>=3 && !strcmp(argv[argc-2],"--ios-profile")) {
+        if(!strcmp(argv[argc-1],"4"))ios_profile=4;
+        else if(!strcmp(argv[argc-1],"37") && WIILLR_IOS_NATIVE)ios_profile=37;
+        else return 2;
+        argc-=2;
+    }
     const char *gx_library=NULL,*gx_data=NULL,*gx_cache=NULL;
     if(argc>=9 && !strcmp(argv[argc-4],"--gx")) {
         gx_library=argv[argc-3];gx_data=argv[argc-2];gx_cache=argv[argc-1];argc-=4;
@@ -77,12 +84,13 @@ int main(int argc, char** argv) {
     if (!cpu_init(&cpu)) { free(image); return 2; }
     u32 entry;
     if (got != (size_t)length || !cpu_alloc_mem2(&cpu, WII_MEM2_SIZE) ||
-        !wii_ios4_boot_memory(&cpu) ||
+        !wii_native_ios_boot_memory(&cpu,ios_profile) ||
         !wii_dol_load(&cpu, image, got, &entry)) {
         fprintf(stderr, "invalid or unsupported title image\n");
         cpu_free(&cpu); free(image); return 2;
     }
     free(image);
+    printf("{\"boot_ios_profile\":%u,\"original_ARM_boot\":false}\n",ios_profile);
     gcn_rings_init();
     gcn_interpreter_capture_begin();
     /* IOS NAND-title handoff: physical entry, translation disabled. The
@@ -140,8 +148,12 @@ int main(int argc, char** argv) {
         cpu.cycle_deadline=cpu.cycles+64;
         if(!wii_native_call(&cpu,cia)) {
             gcn_interpreter_note_native_miss(&cpu);
+#if WIILLR_PPC_DISCOVERY
+            if(!gcn_interpreter_step(&cpu))break;
+#else
             fprintf(stderr,"static PPC miss pc=%08x cycles=%llu\n",cia,(unsigned long long)cpu.cycles);
             cpu.halted=true;break;
+#endif
         }
 #else
         gcn_interpreter_note_native_miss(&cpu);
@@ -212,7 +224,11 @@ int main(int argc, char** argv) {
     wii_gx_stop(&gx);
 #if WIILLR_PPC_STATIC
     wii_native_summary();
+#if WIILLR_PPC_DISCOVERY
+    const char* execution="static-native-with-discovery";
+#else
     const char* execution="static-native-PPC";
+#endif
 #else
     const char* execution="discovery-interpreter";
 #endif

@@ -70,5 +70,42 @@ int main(void) {
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && !ios.event_waiting);
     CHECK(mem_read32_cia(&cpu,0x10000400,0)==0x20000 && mem_read32_cia(&cpu,message,0)==8);
     CHECK(mem_read32_cia(&cpu,message+8,0)==6 && ios.operations==2);
+    /* Slot illumination changes real service state. Disabling it clears the
+     * existing GPIO light while preserving other pins and output sentinels. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);
+    u32 gpio=0x320;ios.gpio_out=&gpio;ios.descriptors[0]=1;
+    mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+8,0,0);
+    mem_write32_cia(&cpu,message+12,0x6002,0);
+    mem_write32_cia(&cpu,message+16,0x10000400,0);mem_write32_cia(&cpu,message+20,32,0);
+    mem_write32_cia(&cpu,message+24,0x10000440,0);mem_write32_cia(&cpu,message+28,32,0);
+    mem_write32_cia(&cpu,0x10000400,2,0);mem_write32_cia(&cpu,0x10000440,0x12345678,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && ios.led_mode==2 && gpio==0x320);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x10000400,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !ios.led_mode && gpio==0x300);
+    CHECK(mem_read32_cia(&cpu,0x10000440,0)==0x12345678);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+20,3,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-4 && !ios.led_mode && gpio==0x300);
+    /* KD's RTC synchronization retains the guest's actual counter and epoch;
+     * requesting the unimplemented persistent update must fail before ACK. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=8;
+    mem_write32_cia(&cpu,message+12,0x17,0);mem_write32_cia(&cpu,message+20,8,0);
+    mem_write32_cia(&cpu,message+28,4,0);mem_write32_cia(&cpu,0x10000400,1234,0);
+    mem_write32_cia(&cpu,0x10000404,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && ios.kd_rtc_set);
+    CHECK(ios.kd_rtc==1234 && ios.kd_rtc_cycles==cpu.cycles && !mem_read32_cia(&cpu,0x10000440,0));
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x10000404,1,0);
+    mem_write32_cia(&cpu,message+4,0x11223344,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y);
+    CHECK(mem_read32_cia(&cpu,message+4,0)==0x11223344 && ios.kd_rtc==1234);
     cpu_free(&cpu);return 0;
 }

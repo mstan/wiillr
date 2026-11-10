@@ -10,6 +10,8 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     ++m->mmio_reads;
     u32 physical = address & 0x3fffffffu;
     const u32 gpio=physical&~0x00800000u;
+    u32 hollywood_value;
+    if(width==4 && wii_hollywood_read(&m->hollywood,physical,&hollywood_value))return hollywood_value;
     if(width==4 && gpio==0x0d000018u)return m->vi_config;
     if(width==4 && gpio==0x0d0000c0u)return m->gpio_out;
     if(width==4 && gpio==0x0d0000c4u)return m->gpio_direction;
@@ -64,6 +66,7 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     ++m->mmio_writes;
     u32 physical = address & 0x3fffffffu;
     const u32 gpio=physical&~0x00800000u;
+    if(width==4 && value<=0xffffffffu && wii_hollywood_write(&m->hollywood,physical,(u32)value))return;
     /* HW_VI1CFG: preserve the documented region-select latch. Other bits have
      * no implemented contract and must not disappear into a no-op write. */
     if(width==4 && gpio==0x0d000018u && !(value&~0x20000ull)) {m->vi_config=(u32)value;return;}
@@ -174,6 +177,7 @@ static void pe_interrupt(void* user,u32 cause,int asserted) {gcn_pi_set_interrup
 
 void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     memset(m, 0, sizeof *m);
+    wii_hollywood_init(&m->hollywood);
     wii_ave_init(&m->ave);
     gcn_pi_init_model(&m->pi, true);
     gcn_cp_init_model(&m->cp,true);gcn_cp_set_irq(&m->cp,cp_interrupt,&m->pi);
@@ -191,6 +195,7 @@ void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     gcn_exi_set_irq(&m->exi, exi_interrupt, &m->pi);
     gcn_di_init_model(&m->di, true);
     m->ios.di=&m->di;
+    m->ios.gpio_out=&m->gpio_out;
     gcn_di_set_irq(&m->di, di_interrupt, &m->pi);
     gcn_si_init(&m->si);
     gcn_si_set_irq(&m->si, si_interrupt, &m->pi);
@@ -219,13 +224,14 @@ void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
     }
     ppc_decrementer_tick(cpu, ticks);
     const u32 audio_rate=(m->ai.control&GCN_AI_CR_AIDFR)?32000u:48000u;
-    if (!wii_dsp_tick(&m->dsp, (u32)elapsed,(u32)(729000000ull*8/audio_rate))) cpu->halted=true;
+    const bool audio_clock=wii_hollywood_audio_clock(&m->hollywood);
+    if (!wii_dsp_tick(&m->dsp, (u32)elapsed,audio_clock?(u32)(729000000ull*8/audio_rate):0)) cpu->halted=true;
     u32 csr=m->dsp.registers.csr;
     gcn_pi_set_interrupt(&m->pi, GCN_PI_INT_DSP,
                          ((csr & 0x80u) && (csr & 0x100u)) || ((csr & 0x20u) && (csr & 0x40u)) ||
                          ((csr & GCN_DSP_CSR_AIDINT) && (csr & GCN_DSP_CSR_AIDMASK)));
     gcn_vi_tick(cpu->cycles);
-    gcn_ai_tick((u32)elapsed);
+    if(audio_clock)gcn_ai_tick((u32)elapsed);
     gcn_di_tick(cpu, (u32)elapsed);
     if(WIILLR_IOS_NATIVE && !wii_ios_native_tick(&m->ios,&m->ipc,cpu)) {
         fprintf(stderr,"native IOS stopped at unsupported operation pc=%08x message=%08x\n",

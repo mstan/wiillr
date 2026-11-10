@@ -43,6 +43,16 @@ caller permissions and profile confinement. UID/GID come from the supplied
 UID table and boot TMD. Supported ES queries use that boot context; unimplemented
 operations still stop discovery. This development backend requires C++23 and
 retains its upstream GPL license in `third_party/dolphin-ios-fs`.
+Active-title ES content open/read/seek/close resolve real TMD indices and shared
+content mappings. Reads publish their bytes through the CPU memory interface.
+`--native-ios37` explicitly selects an experimental IOS37 memory/service boundary
+for titles requesting it; it executes no original IOS37 ARM firmware. The title's
+requested IOS is retained, and unsupported requests still stop execution.
+Ticket views preserve the installed metadata without claiming authentication.
+Usage-limit queries support unrestricted tickets and reject unimplemented
+restricted-ticket accounting. STM slot-illumination settings update the modeled
+GPIO state; network RTC synchronization retains the guest counter without
+inventing UTC or persistent clock data.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 The GPIO AV encoder bus clocks real I2C transactions into a register bank;
@@ -64,6 +74,8 @@ and code-page identities before using the shared Broadway compiler. Pass its
 private `generated` directory as `WIILLR_PPC_GENERATED_DIR` to build the native
 target, then select `--ppc-mode static` in `tools/wii.py`. That mode's bounded
 budget counts guest cycles; discovery counts interpreted instructions.
+The separate `wiillr-native-discover` target permits counted interpreter misses
+for bring-up (`--ppc-mode mixed-discovery`). It cannot establish native acceptance.
 
 `wiillr-starlet-discover` loads the original IOS4 ARM ELF at its kernel-entry
 boundary using the pinned ARM core. Its development bus covers big-endian

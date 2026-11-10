@@ -92,11 +92,14 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         /* ES descriptors bind to this boot's real copied NAND. Individual ES
          * operations remain unsupported until their actual contracts exist. */
         if(!strcmp((const char*)path,"/dev/es") && ios->fs)device=6;
+        if(!strcmp((const char*)path,"/dev/net/kd/request") && ios->fs)device=7;
+        if(!strcmp((const char*)path,"/dev/net/kd/time") && ios->fs)device=8;
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
             return false;
         }
+        if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"IOS open device=%u path=%s\n",device,(const char*)path);
         if(read_be32(request+16)>3) {ios->result=-4;return true;}
         ios->result=-5;
         for(u32 n=0;n<24;n++)if(!ios->descriptors[n]) {
@@ -112,6 +115,94 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==3 && ios->di)
         return di_ioctl(ios,cpu,request);
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==8 && read_be32(request+12)==0x17) {
+        const u32 address=read_be32(request+16),output=read_be32(request+24);
+        const u8* input=ios_memory(cpu,address,&available);
+        ios->result=-4;
+        if(!address || (address&3) || read_be32(request+20)<8 || !input || available<8 ||
+           !output || (output&3) || read_be32(request+28)<4 ||
+           !ios_memory(cpu,output,&available) || available<4)return 1;
+        /* Synchronize the network service's RTC to the actual PPC-supplied
+         * counter. Universal UTC is not inferred from this counter. The
+         * persistent misc.bin update has no implemented contract yet. */
+        if(read_be32(input+4)!=0)return 0;
+        ios->kd_rtc=read_be32(input);ios->kd_rtc_cycles=cpu->cycles;ios->kd_rtc_set=true;
+        mem_write32_cia(cpu,output,0,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==1 && read_be32(request+12)==0x6002) {
+        /* STM_LEDMode is a setting, not a request to turn the LED on. The
+         * PPC ABI is also exercised by libogc STM_SetLedMode. Flash/pattern
+         * requests remain unsupported until their timing is implemented. */
+        const u8* input=ios_memory(cpu,read_be32(request+16),&available);
+        ios->result=-4;
+        if(read_be32(request+20)!=32 || !input || available<32 ||
+           read_be32(request+28)!=32 ||
+           !ios_memory(cpu,read_be32(request+24),&available) || available<32)return 1;
+        const u32 mode=read_be32(input);
+        if(mode>2)return 0;
+        ios->led_mode=mode;
+        if(!mode && ios->gpio_out)*ios->gpio_out&=~0x20u;
+        ios->result=0;return 1;
+    }
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs) {
+        const u32 operation=read_be32(request+12);
+        if(operation==0x16) {
+            ios->result=-1017;
+            if(read_be32(request+16)!=1 || read_be32(request+20)!=2)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<24 || read_be32(vectors+4)!=8 ||
+               read_be32(vectors+12)%8 || read_be32(vectors+20)!=4)return 1;
+            const u32 output=read_be32(vectors+16),limits=read_be32(vectors+8),size=read_be32(vectors+12);
+            const u8* input=ios_memory(cpu,read_be32(vectors),&available);
+            if(!input || available<8)return 1;
+            const u64 ticket_id=(u64)read_be32(input)<<32|read_be32(input+4);
+            if(!ios_memory(cpu,output,&available) || available<4 ||
+               (size && (!ios_memory(cpu,limits,&available) || available<size)))return 1;
+            /* An actual unrestricted ticket has no applicable usage limits.
+             * Never use this empty result to bypass a restricted ticket. */
+            if(!wii_es_unlimited_ticket(ios->fs,ticket_id,&ios->result))return 0;
+            if(!ios->result)mem_write32_cia(cpu,output,0,cpu->pc);
+            return 1;
+        }
+        if(operation==0x1b) {
+            ios->result=-1017;
+            if(read_be32(request+16)!=1 || read_be32(request+20)!=1)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<16 || read_be32(vectors+12)!=0xd8)return 1;
+            const u32 size=read_be32(vectors+4),output=read_be32(vectors+8);
+            const u8* ticket=size?ios_memory(cpu,read_be32(vectors),&available):NULL;
+            if(size && (size!=0x2a4 || !ticket || available<size))return 1;
+            if(!ios_memory(cpu,output,&available) || available<0xd8)return 1;
+            u8 view[0xd8];ios->result=wii_es_ticket_view(ios->fs,ticket,size,view);
+            if(!ios->result)for(u32 n=0;n<sizeof view;n++)mem_write8_cia(cpu,output+n,view[n],cpu->pc);
+            return 1;
+        }
+        if(operation==9 || operation==10 || operation==11 || operation==0x23) {
+            ios->result=-1017;
+            const u32 count=operation==0x23?3:1,outputs=operation==10?1:0;
+            if(read_be32(request+16)!=count || read_be32(request+20)!=outputs)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<(count+outputs)*8)return 1;
+            u32 args[3]={0};
+            for(u32 n=0;n<count;n++) {
+                if(read_be32(vectors+n*8+4)!=4)return 1;
+                const u8* data=ios_memory(cpu,read_be32(vectors+n*8),&available);
+                if(!data || available<4)return 1;args[n]=read_be32(data);
+            }
+            if(operation==9)ios->result=wii_es_content_open(ios->fs,args[0]);
+            if(operation==11)ios->result=wii_es_content_close(ios->fs,args[0]);
+            if(operation==0x23)ios->result=wii_es_content_seek(ios->fs,args[0],args[1],args[2]);
+            if(operation==10) {
+                const u32 output=read_be32(vectors+8),size=read_be32(vectors+12);
+                u8* data=size?ios_memory(cpu,output,&available):NULL;
+                if(size && (!data || available<size))return 1;
+                ios->result=wii_es_content_read(ios->fs,args[0],data,size);
+                if(ios->result>0)for(u32 n=0;n<(u32)ios->result;n++)
+                    mem_write8_cia(cpu,output+n,data[n],cpu->pc);
+            }
+            return 1;
+        }
+    }
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs && read_be32(request+12)==0x1d) {
         ios->result=-1017;
         if(read_be32(request+16)!=1 || read_be32(request+20)!=1)return 1;

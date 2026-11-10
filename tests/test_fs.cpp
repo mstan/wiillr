@@ -21,9 +21,15 @@ int main(int argc,char** argv) {
   fs::create_directories(root/"sys");fs::create_directories(root/"title/00010001/41424344/content");
   const uint8_t uid_record[]={0,1,0,1,0x41,0x42,0x43,0x44,0,0,0,0};
   std::ofstream(root/"sys/uid.sys",std::ios::binary).write(reinterpret_cast<const char*>(uid_record),12);
-  std::array<uint8_t,0x1e4> tmd{};tmd[1]=1;tmd[3]=1;
+  std::array<uint8_t,0x208> tmd{};tmd[1]=1;tmd[3]=1;
   std::memcpy(tmd.data()+0x18c,uid_record,8);
+  tmd[0x1df]=1;tmd[0x1e7]=1;tmd[0x1e9]=3;tmd[0x1eb]=1;tmd[0x1f3]=5;
   std::ofstream(root/"title/00010001/41424344/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(tmd.data()),tmd.size());
+  std::ofstream(root/"title/00010001/41424344/content/00000001.app",std::ios::binary)<<"title";
+  fs::create_directories(root/"ticket/00010001");
+  std::array<uint8_t,0x2a4> ticket{};ticket[1]=1;ticket[3]=1;
+  std::memcpy(ticket.data()+0x1dc,uid_record,8);ticket[0x1f1]=152;ticket[0x2a3]=0x7b;
+  std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   auto* nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
   uint64_t boot_title=0;CHECK(wii_fs_boot_title(nand,&boot_title) && boot_title==0x0001000141424344ull);
   std::array<uint8_t,74> params{};std::memcpy(params.data()+6,"/save",6);params[70]=3;params[71]=1;params[72]=0;
@@ -89,14 +95,55 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,message,7,0);mem_write32_cia(&cpu,message+8,0,0);mem_write32_cia(&cpu,message+12,0x20,0);
   mem_write32_cia(&cpu,message+16,0,0);mem_write32_cia(&cpu,0x1004,7,0);mem_write32_cia(&cpu,buffer,0x12345678,0);
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017 && mem_read32_cia(&cpu,buffer,0)==0x12345678);
+  // The original NAND loader requests real TMD-indexed content, then copies
+  // its bytes into executable RAM through ES read/seek/close transactions.
+  const auto es_request=[&](uint32_t op,uint32_t inputs,uint32_t outputs) {
+    mem_write32_cia(&cpu,message,7,0);mem_write32_cia(&cpu,message+8,0,0);
+    mem_write32_cia(&cpu,message+12,op,0);mem_write32_cia(&cpu,message+16,inputs,0);
+    mem_write32_cia(&cpu,message+20,outputs,0);mem_write32_cia(&cpu,message+24,0x1000,0);
+  };
+  mem_write32_cia(&cpu,0x1000,0,0);mem_write32_cia(&cpu,0x1004,0,0);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,0xd8,0);
+  es_request(0x1b,1,1);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(!mem_read32_cia(&cpu,buffer,0) && mem_read32_cia(&cpu,buffer+16,0)==0x10001);
+  CHECK(mem_read32_cia(&cpu,buffer+20,0)==0x41424344 && cpu.mem2[0x425]==152 && cpu.mem2[0x4d7]==0x7b);
+  // Supplied metadata uses the same transformation without changing its source.
+  std::array<uint8_t,0xd8> view{};
+  CHECK(!wii_es_ticket_view(nand,ticket.data(),ticket.size(),view.data()));
+  CHECK(!std::memcmp(view.data()+4,ticket.data()+0x1d0,0xd4));
+  CHECK(wii_es_unlimited_ticket(nand,0,&result) && !result);
+  CHECK(wii_es_unlimited_ticket(nand,1,&result) && result==-1028);
+  ticket[0x267]=1;
+  std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
+  CHECK(!wii_es_unlimited_ticket(nand,0,&result));
+  ticket[0x267]=0;
+  std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
+  ticket[0x1bc]=1;view.fill(0x55);
+  CHECK(wii_es_ticket_view(nand,ticket.data(),ticket.size(),view.data())==-1017 && view[0]==0x55);
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,4,0);mem_write32_cia(&cpu,0x1100,3,0);
+  es_request(9,1,0);CHECK(exchange());const uint32_t content=mem_read32_cia(&cpu,message+4,0);CHECK(content<16);
+  mem_write32_cia(&cpu,0x1100,content,0);mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,8,0);
+  es_request(10,1,1);CHECK(exchange() && mem_read32_cia(&cpu,message+4,0)==5 && !std::memcmp(cpu.mem2+0x400,"title",5));
+  mem_write32_cia(&cpu,0x1008,0x1104,0);mem_write32_cia(&cpu,0x100c,4,0);
+  mem_write32_cia(&cpu,0x1010,0x1108,0);mem_write32_cia(&cpu,0x1014,4,0);
+  mem_write32_cia(&cpu,0x1104,2,0);mem_write32_cia(&cpu,0x1108,0,0);
+  es_request(0x23,3,0);CHECK(exchange() && mem_read32_cia(&cpu,message+4,0)==2);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,8,0);
+  es_request(10,1,1);CHECK(exchange() && mem_read32_cia(&cpu,message+4,0)==3 && !std::memcmp(cpu.mem2+0x400,"tle",3));
+  es_request(11,1,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  es_request(10,1,1);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
+  mem_write32_cia(&cpu,0x1100,99,0);es_request(9,1,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
   cpu_free(&cpu);wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0x1001,1);CHECK(nand && wii_fs_open(nand,"/save",1)==-102);wii_fs_unmount(nand);
   // Only this exclusively created, flat disposable fixture is removed.
   CHECK(fs::remove(root/"save"));CHECK(fs::remove(root/"fst.bin"));
   CHECK(fs::remove(root/"title/00010001/41424344/content/title.tmd"));
+  CHECK(fs::remove(root/"title/00010001/41424344/content/00000001.app"));
   CHECK(fs::remove(root/"title/00010001/41424344/content"));CHECK(fs::remove(root/"title/00010001/41424344"));
   CHECK(fs::remove(root/"title/00010001"));CHECK(fs::remove(root/"title"));
   CHECK(fs::remove(root/"sys/uid.sys"));CHECK(fs::remove(root/"sys"));
+  CHECK(fs::remove(root/"ticket/00010001/41424344.tik"));CHECK(fs::remove(root/"ticket/00010001"));CHECK(fs::remove(root/"ticket"));
   CHECK(fs::remove(root/".wiillr-nand-profile"));CHECK(fs::remove(root));
   return 0;
 }

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/dol.h"
+#include "wiillr/boot.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -39,6 +40,17 @@ int main(void) {
     CHECK(!wii_dol_load(&cpu, image, 0x110, &entry));
     write_be32(image+0x48, 0x817ffff0);
     CHECK(!wii_dol_load(&cpu, image, sizeof image, &entry));
+    CHECK(cpu_alloc_mem2(&cpu,WII_MEM2_SIZE));
+    CHECK(wii_native_ios_boot_memory(&cpu,37));
+    CHECK(read_be32(cpu.ram+0x3140)==0x0025161f);
+    CHECK(read_be32(cpu.ram+0x3128)==0x935e0000);
+    CHECK(read_be32(cpu.ram+0x3148)==0x93600000);
+    CHECK(read_be32(cpu.ram+0x314c)==0x93620000);
+    CHECK(!wii_native_ios_boot_memory(&cpu,999));
+    CHECK(read_be32(cpu.ram+0x3140)==0x0025161f);
+    CHECK(wii_ios4_boot_memory(&cpu));
+    CHECK(read_be32(cpu.ram+0x3140)==0x00040003);
+    CHECK(read_be32(cpu.ram+0x3128)==0x933e0000);
     cpu_free(&cpu);
     return 0;
 }
