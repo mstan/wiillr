@@ -1,0 +1,2 @@
+# Optional local WAD preparation; the engine build does not require Python crypto.
+cryptography==50.0.2

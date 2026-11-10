@@ -81,7 +81,7 @@ def discover(args):
     before = {name: identity(path) for name,path in paths.items()}
     receipt = dict(inputs=before, title=metadata, command=command,
                    boot_profile='ios4-v3-elf-kernel-entry' if starlet else 'native-ios4-v3-memory-contract',
-                   execution='ARM-discovery-interpreter' if starlet else 'PPC-discovery-interpreter', accepted=False,
+                   execution='ARM-discovery-interpreter' if starlet else ('PPC-static-native' if args.ppc_mode=='static' else 'PPC-discovery-interpreter'), accepted=False,
                    boundary=('IOS ELF kernel entry; boot0/1/2 and PPC execution excluded' if starlet else
                              'NAND boot-content PPC entry; boot0/1/2 and IOS execution excluded'))
     if original_nand is not None:
@@ -109,6 +109,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--nand', type=Path, required=True)
     p.add_argument('--processor', choices=('ppc', 'starlet'), default='ppc')
+    p.add_argument('--ppc-mode', choices=('discovery','static'), default='discovery',
+                   help='Static executable uses a cycle budget and stops at its first native miss')
     p.add_argument('--title', default='0000000100000002')
     p.add_argument('--executable', type=Path, required=True)
     p.add_argument('--work-root', type=Path, required=True)

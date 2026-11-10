@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
-/* Bounded original-code discovery. This executable cannot qualify native CPU
- * acceptance. A build-selected native IOS development provider reports its
+/* Bounded original-code runner. Discovery cannot qualify native CPU acceptance;
+ * the separately built static PPC target stops on a miss. Native IOS reports its
  * identity and stops at operations it does not implement. */
 #include "wiillr/dol.h"
 #include "wiillr/machine.h"
@@ -8,6 +8,9 @@
 #include "wiillr/gx.h"
 #include "memory/memory.h"
 #include "cpu/interpreter.h"
+#if WIILLR_PPC_STATIC
+#include "wiillr/native.h"
+#endif
 #include "debug/rings.h"
 #include <errno.h>
 #include <stdio.h>
@@ -44,8 +47,12 @@ int main(int argc, char** argv) {
         gx_library=argv[argc-3];gx_data=argv[argc-2];gx_cache=argv[argc-1];argc-=4;
     }
     if (argc != 5 && argc != 7 && argc != 8 && argc != 10) {
+#if WIILLR_PPC_STATIC
+        fprintf(stderr,"usage: wiillr-native ORIGINAL-DOL MAX-CYCLES MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID] [--gx LIB DATA CACHE]\n");
+#else
         fprintf(stderr, "usage: wiillr-discover ORIGINAL-DOL MAX-STEPS MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID]\n"
                         "Discovery only; all guest instructions are interpreted. STOP-PC=0 disables.\n");
+#endif
         return 2;
     }
     char* end;
@@ -117,11 +124,29 @@ int main(int argc, char** argv) {
         if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
     }
     gcn_interpreter_set_cache_loop_batch_enabled(false);
+#if WIILLR_PPC_STATIC
+    wii_native_install();
+#endif
     u64 steps = 0, exceptions = 0;
-    while (steps < limit && !cpu.halted && (!stop || cpu.pc != stop)) {
-        gcn_interpreter_note_native_miss(&cpu);
+    while (
+#if WIILLR_PPC_STATIC
+           cpu.cycles < limit &&
+#else
+           steps < limit &&
+#endif
+           !cpu.halted && (!stop || cpu.pc != stop)) {
         u32 cia = cpu.pc;
+#if WIILLR_PPC_STATIC
+        cpu.cycle_deadline=cpu.cycles+64;
+        if(!wii_native_call(&cpu,cia)) {
+            gcn_interpreter_note_native_miss(&cpu);
+            fprintf(stderr,"static PPC miss pc=%08x cycles=%llu\n",cia,(unsigned long long)cpu.cycles);
+            cpu.halted=true;break;
+        }
+#else
+        gcn_interpreter_note_native_miss(&cpu);
         if (!gcn_interpreter_step(&cpu)) break;
+#endif
         ++steps;
         wii_machine_tick(&machine, &cpu);
         if(!wii_gx_tick(&gx)) {fprintf(stderr,"native GX failed\n");cpu.halted=true;}
@@ -185,10 +210,16 @@ int main(int argc, char** argv) {
         }
     }
     wii_gx_stop(&gx);
-    printf("{\"execution\":\"discovery-interpreter\",\"entry\":%u,\"pc\":%u,"
+#if WIILLR_PPC_STATIC
+    wii_native_summary();
+    const char* execution="static-native-PPC";
+#else
+    const char* execution="discovery-interpreter";
+#endif
+    printf("{\"execution\":\"%s\",\"entry\":%u,\"pc\":%u,"
            "\"steps\":%llu,\"interpreter_instructions\":%llu,\"unique_native_misses\":%llu,"
            "\"cycles\":%llu,\"halted\":%s,\"stop_reached\":%s,\"mem1_saved\":%s}\n",
-           entry, cpu.pc, (unsigned long long)steps,
+           execution, entry, cpu.pc, (unsigned long long)steps,
            (unsigned long long)gcn_interpreter_instruction_count(),
            (unsigned long long)gcn_interpreter_unique_miss_count(),
            (unsigned long long)cpu.cycles, cpu.halted ? "true":"false",

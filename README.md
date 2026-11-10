@@ -3,7 +3,9 @@
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
 with gcnllr. Initial targets are the original Startup Menu and Mega Man 9.
 
-Bring-up is in progress. No Wii boot or gameplay compatibility is claimed yet.
+Bring-up is in progress. The original Startup Menu reaches its Startup Disc
+prompt with live rendering in discovery and static PPC development builds.
+Input, audio delivery, title lifecycle and Mega Man 9 gameplay remain unqualified.
 Native acceptance requires zero interpreter execution and unresolved native
 misses. Development discovery and maintained LLE references remain separate
 from accepted native execution. HLE/LLE service selection happens at build time.
@@ -12,7 +14,11 @@ The CMake build consumes pinned shared PowerPC, machine/device and DSP packages.
 Its current products include the compiler, reference contract tools and a
 bounded Wii discovery executable. The discovery build interprets original
 guest code with explicit counters and content-identified misses; it is not an
-accepted native menu or game runtime. Initialize
+accepted native menu or game runtime. An optional `wiillr-native` target runs
+compiled, content-verified PPC pages and stops at the first native miss. It
+preserves physical, cached and uncached execution PCs; captured code is never
+used to initialize the machine. This alone does not qualify its IOS/DSP paths.
+Initialize
 dependencies with `git submodule update --init --recursive` before configuring.
 
 `tools/wii.py` verifies the NAND title's boot content against its TMD and runs
@@ -53,6 +59,12 @@ AOT catalogs remain separate builds. DSP ROMs/coefficient data must be supplied
 locally. Rendering, audio delivery, IOS services and title compatibility remain
 in progress.
 
+`tools/prepare_ppc.py` validates an original-title discovery's input, journal
+and code-page identities before using the shared Broadway compiler. Pass its
+private `generated` directory as `WIILLR_PPC_GENERATED_DIR` to build the native
+target, then select `--ppc-mode static` in `tools/wii.py`. That mode's bounded
+budget counts guest cycles; discovery counts interpreted instructions.
+
 `wiillr-starlet-discover` loads the original IOS4 ARM ELF at its kernel-entry
 boundary using the pinned ARM core. Its development bus covers big-endian
 MEM1/MEM2/SRAM, CP15 cache maintenance and ARMv5 section/page translation with
@@ -76,6 +88,13 @@ python -m unittest discover -s tests
 Inspection reports title identities, required IOS and content integrity. Parsing
 a TMD does not verify its signature; reading a WAD does not decrypt or validate
 its encrypted contents. These checks do not establish boot compatibility.
+
+`tools/install_wad.py` can prepare verified decrypted contents in a marked NAND
+copy using a separately supplied private common-key file. Its optional Python
+dependency is listed in `tools/requirements-inputs.txt`. It preserves existing
+native progress and original ticket bytes. Signatures remain unverified, and an
+explicit offline key-index override is recorded separately from the ticket's
+selector. Offline preparation does not establish native ES import or launch.
 
 Format references: [title metadata](https://wiibrew.org/wiki/Title_metadata),
 [WAD layout](https://wiibrew.org/wiki/WAD).
