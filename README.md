@@ -20,7 +20,12 @@ dependencies with `git submodule update --init --recursive` before configuring.
 original PPC entry code initializes the processor and installs its own vectors.
 Boot0/1/2 and IOS execution are outside this development boundary. Required
 unimplemented device/service operations stop execution. No successful IOS
-responses or captured machine initialization are substituted.
+responses or captured machine initialization are substituted in the default
+provider-free build. `WIILLR_IOS=native-development` selects an experimental
+native resource/IPC provider with explicit identity and operation accounting.
+It allocates and releases STM descriptors; unsupported service operations stop
+before acknowledgement. Original ARM execution and a functioning LLE service
+counterpart are not yet qualified for this native route.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 Wii clock selection preserves the existing GameCube defaults. The DSP engine is

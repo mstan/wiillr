@@ -81,7 +81,7 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     }
     if (physical >= 0x0d000000u && physical < 0x0d000040u && width == 4 && !(address & 3) &&
         wii_ipc_write(&m->ipc, physical - 0x0d000000u, (u32)value, cpu->cycles)) {
-        if (m->ipc.x & 1) {
+        if (!WIILLR_IOS_NATIVE && (m->ipc.x & 1)) {
             /* Discovery stops at the real service boundary until an IOS
              * implementation is attached. Never acknowledge or invent success. */
             fprintf(stderr, "IOS request awaiting provider pc=%08x message=%08x\n",
@@ -125,6 +125,7 @@ void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     memset(m, 0, sizeof *m);
     gcn_pi_init_model(&m->pi, true);
     wii_ipc_init(&m->ipc);
+    wii_ios_native_init(&m->ios);
     gcn_mi_init(&m->mi);
     gcn_vi_init_model(&m->vi, true);
     gcn_vi_set_irq(&m->vi, vi_interrupt, &m->pi);
@@ -159,6 +160,11 @@ void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
     gcn_vi_tick(cpu->cycles);
     gcn_ai_tick((u32)elapsed);
     gcn_di_tick(cpu, (u32)elapsed);
+    if(WIILLR_IOS_NATIVE && !wii_ios_native_tick(&m->ios,&m->ipc,cpu)) {
+        fprintf(stderr,"native IOS stopped at unsupported operation pc=%08x message=%08x\n",
+                cpu->pc,m->ipc.ppc_message);
+        cpu->halted=true;
+    }
     wii_ipc_tick(&m->ipc, cpu->cycles);
     gcn_pi_set_interrupt(&m->pi, 0x4000, wii_ipc_ppc_interrupt(&m->ipc));
     ppc_deliver_decrementer(cpu);

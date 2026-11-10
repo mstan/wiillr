@@ -4,6 +4,7 @@
 #include "cpu/cpu.h"
 #include "pi/pi.h"
 #include "wiillr/ipc.h"
+#include "wiillr/ios.h"
 #include "mi/mi.h"
 #include "vi/vi.h"
 #include "wiillr/dsp.h"
@@ -14,6 +15,7 @@
 typedef struct {
     GcnPi pi;
     WiiIpc ipc;
+    WiiIosNative ios;
     GcnMi mi;
     GcnVi vi;
     WiiDsp dsp;

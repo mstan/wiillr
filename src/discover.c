@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Bounded original-code discovery. This executable cannot qualify native CPU
- * acceptance and supplies no successful IOS/device results. */
+ * acceptance. A build-selected native IOS development provider reports its
+ * identity and stops at operations it does not implement. */
 #include "wiillr/dol.h"
 #include "wiillr/machine.h"
 #include "wiillr/boot.h"
@@ -107,6 +108,8 @@ int main(int argc, char** argv) {
         }
     }
     int saved = dump(argv[3], cpu.ram, cpu.ram_size);
+    printf("{\"ios_provider\":\"%s\",\"native_operations\":%llu,\"ARM_interpreter_instructions\":0}\n",
+           WIILLR_IOS_NATIVE ? "native-development":"none",(unsigned long long)machine.ios.operations);
     if (machine.ipc.x & 1) {
         u32 available;
         const u8* command=gcn_mem_resolve(&cpu,machine.ipc.ppc_message,&available);
