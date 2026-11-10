@@ -51,17 +51,22 @@ def main():
     (work/'temp').mkdir()
     (work/'pages').mkdir()
     for name,(data,_) in pages.items():(work/'pages'/name).write_bytes(data)
-    (work/'native-misses.jsonl').write_text(''.join(journals))
+    journal_path=work/'native-misses.jsonl'
+    # The overlay generator discards its first line when starting a tail read.
+    # Give it a blank boundary and include the complete combined capture.
+    journal_path.write_text('\n'+''.join(journals))
+    mib=1024*1024
+    journal_mib=(journal_path.stat().st_size+mib-1)//mib
     generator=ROOT/'external/gc-wii-core/tools/gen_overlay_module.py'
     env=dict(os.environ,TEMP=str(work/'temp'),TMP=str(work/'temp'),PYTHONDONTWRITEBYTECODE='1')
-    command=[sys.executable,'-B',str(generator),'--journal',str(work/'native-misses.jsonl'),
+    command=[sys.executable,'-B',str(generator),'--journal',str(journal_path),'--tail-mb',str(journal_mib),
              '--pages',str(work/'pages'),'--dolrecomp',str(compiler),'--output',str(work/'generated'),
              '--top-pages','0','--jobs','1','--cpu','broadway','--preserve-pc']
     with (work/'generate.log').open('w') as log:
         subprocess.run(command,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
     chunks=sorted((work/'generated/chunks').glob('*.c'))
     if len(chunks)!=len(pages):raise ValueError('Some original code variants were not compiled')
-    identity=dict(captures=captures,journal_sha256=sha(work/'native-misses.jsonl'),
+    identity=dict(captures=captures,journal_sha256=sha(journal_path),
         compiler=dict(path=str(compiler),sha256=sha(compiler)),
         generator_sha256=sha(generator),pages={name:v[1] for name,v in pages.items()},
         generated={str(path.relative_to(work)):sha(path) for path in sorted((work/'generated').glob('**/*')) if path.is_file()},
