@@ -250,6 +250,34 @@ int main(int argc,char** argv) {
   CHECK(wii_es_tmd_view(nand,0x0001000141424344ull,views.data(),views.size(),&tmd_view_size)==-1017 && views[0]==0x55);
   std::ofstream(root/"title/00010001/41424344/content/title.tmd",std::ios::binary).write(reinterpret_cast<const char*>(tmd.data()),tmd.size());
   CHECK(wii_es_unlimited_ticket(nand,1,&result) && result==-1028);
+  // System Menu asks about a channel's ticket while the menu is still active.
+  // Include two records so lookup must inspect every installed ticket record.
+  auto channel_ticket=ticket;
+  channel_ticket[0x1e0]=0x55;channel_ticket[0x1e1]=0x55;channel_ticket[0x1e2]=0x55;channel_ticket[0x1e3]=0x55;
+  channel_ticket[0x1d7]=2;
+  std::ofstream channel_file(root/"ticket/00010001/55555555.tik",std::ios::binary);
+  channel_file.write(reinterpret_cast<const char*>(channel_ticket.data()),channel_ticket.size());
+  channel_ticket[0x1d7]=1;
+  channel_file.write(reinterpret_cast<const char*>(channel_ticket.data()),channel_ticket.size());channel_file.close();
+  CHECK(wii_es_unlimited_ticket(nand,1,&result) && !result);
+  CHECK(wii_es_unlimited_ticket(nand,2,&result) && !result);
+  mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
+  mem_write32_cia(&cpu,0x1100,0,0);mem_write32_cia(&cpu,0x1104,1,0);
+  mem_write32_cia(&cpu,0x1008,0,0);mem_write32_cia(&cpu,0x100c,0,0);
+  mem_write32_cia(&cpu,0x1010,buffer,0);mem_write32_cia(&cpu,0x1014,4,0);
+  mem_write32_cia(&cpu,buffer,0xabcdef12,0);mem_write32_cia(&cpu,buffer+4,0x11223344,0);
+  es_request(0x16,1,2);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(!mem_read32_cia(&cpu,buffer,0) && mem_read32_cia(&cpu,buffer+4,0)==0x11223344);
+  mem_write32_cia(&cpu,0x1104,3,0);mem_write32_cia(&cpu,buffer,0xabcdef12,0);
+  es_request(0x16,1,2);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1028);
+  CHECK(mem_read32_cia(&cpu,buffer,0)==0xabcdef12);
+  channel_ticket[0x267]=1;
+  std::ofstream(root/"ticket/00010001/55555555.tik",std::ios::binary).write(reinterpret_cast<const char*>(channel_ticket.data()),channel_ticket.size());
+  CHECK(!wii_es_unlimited_ticket(nand,1,&result));
+  CHECK(wii_es_unlimited_ticket(nand,0,&result) && !result);
+  std::ofstream(root/"ticket/00010001/55555555.tik",std::ios::binary)<<"truncated";
+  CHECK(wii_es_unlimited_ticket(nand,1,&result) && result==-1017);
+  CHECK(fs::remove(root/"ticket/00010001/55555555.tik"));
   mem_write32_cia(&cpu,0x1000,0x1100,0);mem_write32_cia(&cpu,0x1004,8,0);
   mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x41424344,0);
   mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,4,0);

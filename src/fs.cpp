@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/fs.h"
 #include "FS.h"
+#include "NWC24Identity.h"
 #include <fstream>
 #include <cstdlib>
 #include <random>
+#include <sstream>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -115,6 +117,88 @@ extern "C" bool wii_fs_network_mac(WiiFs* s,uint8_t mac[6]) {
     }else if(size!=sizeof data || (data[0]&3)!=2)return false;
     std::memcpy(mac,data,sizeof data);return true;
   }catch(...){return false;}
+}
+extern "C" int32_t wii_fs_wc24_generate_id(WiiFs* s,uint64_t* id,uint32_t* stage) {
+  try {
+    if(!s || !id || !stage)return -3;
+    constexpr char config_path[]="/shared2/wc24/nwc24msg.cfg";
+    constexpr char backup_path[]="/shared2/wc24/nwc24msg.cbk";
+    check_path(s,config_path);check_path(s,backup_path);
+    std::array<uint8_t,1024> config{};
+    {
+      auto file=s->backend.OpenFile(12,12,config_path,nand::Mode::Read);
+      if(!file)return -16;
+      const auto info=file->GetStatus();
+      if(!info || info->size!=config.size())return -18;
+      const auto got=file->Read(config.data(),config.size());if(!got || *got!=config.size())return -18;
+    }
+    uint32_t checksum=0;for(unsigned n=0;n<1020;n+=4)checksum+=be32(config.data()+n);
+    if(be32(config.data())!=0x57634366 || checksum!=be32(config.data()+1020) ||
+       be32(config.data()+16)>31 || be32(config.data()+20)>2)return -14;
+    if(be32(config.data()+4)!=8)return -27;
+    const uint64_t previous_id=uint64_t(be32(config.data()+8))<<32|be32(config.data()+12);
+    const auto previous_stage=be32(config.data()+20);
+    if(previous_stage) {
+      if(!previous_id || previous_id>9999999999999999ull)return -14;
+      *id=previous_id;*stage=previous_stage;return previous_stage==1?-35:-36;
+    }
+    constexpr char settings_path[]="/title/00000001/00000002/data/setting.txt";
+    check_path(s,settings_path);std::array<uint8_t,256> settings{};
+    {
+      auto file=s->backend.OpenFile(12,12,settings_path,nand::Mode::Read);
+      if(!file)return -16;
+      const auto info=file->GetStatus();
+      if(!info || info->size!=settings.size())return -18;
+      const auto got=file->Read(settings.data(),settings.size());if(!got || *got!=settings.size())return -18;
+    }
+    std::string decoded;uint32_t key=0x73b5dbfa;
+    for(const auto byte:settings) {
+      if(!byte)break;const char c=char(byte^uint8_t(key));
+      if(c!='\r')decoded+=c;key=(key<<1)|(key>>31);
+    }
+    const auto value=[&](const char* name) {
+      std::string found,line;std::istringstream lines(decoded);unsigned count=0;
+      while(std::getline(lines,line))if(line.starts_with(std::string(name)+"=")) {
+        found=line.substr(std::strlen(name)+1);++count;
+      }
+      return count==1?found:std::string{};
+    };
+    const auto area=value("AREA"),model=value("MODEL");
+    constexpr std::pair<const char*,uint8_t> areas[]={{"JPN",0},{"USA",1},{"EUR",2},{"AUS",2},
+      {"BRA",1},{"TWN",3},{"ROC",3},{"KOR",4},{"HKG",5},{"ASI",5},{"LTN",1},{"SAF",2},{"CHN",6}};
+    uint8_t area_code=7;for(const auto& [name,code]:areas)if(area==name)area_code=code;
+    const uint8_t hardware=model.starts_with("RVL")?1:model.starts_with("RVD")?2:
+      (model.starts_with("RVT") || model.starts_with("RVV"))?0:7;
+    if(area_code==7 || hardware==7)return -1;
+    // A copied offline profile has its own virtual chip identity. This is not
+    // an imported console key/certificate or an authenticated network identity.
+    uint8_t chip_bytes[4];uint32_t chip_size=0;
+    if(!profile_read(s,".wiillr-console-id",chip_bytes,sizeof chip_bytes,&chip_size))return -18;
+    if(!chip_size) {
+      std::random_device random;uint32_t chip=0;
+      for(unsigned attempts=0;!chip && attempts<4;attempts++)chip=uint32_t(random());
+      if(!chip)return -19;
+      put32(chip_bytes,chip);
+      if(!profile_write(s,".wiillr-console-id",chip_bytes,sizeof chip_bytes))return -19;
+    }else if(chip_size!=sizeof chip_bytes || !be32(chip_bytes))return -14;
+    uint64_t generated=0;
+    const auto generated_status=wii_nwc24_make_id(&generated,be32(chip_bytes),uint16_t(be32(config.data()+16)),hardware,area_code);
+    if(generated_status)return generated_status;
+    put32(config.data()+8,uint32_t(generated>>32));put32(config.data()+12,uint32_t(generated));
+    put32(config.data()+16,(be32(config.data()+16)+1)&31);put32(config.data()+20,1);
+    checksum=0;for(unsigned n=0;n<1020;n+=4)checksum+=be32(config.data()+n);
+    put32(config.data()+1020,checksum);
+    const nand::Modes modes{nand::Mode::ReadWrite,nand::Mode::ReadWrite,nand::Mode::ReadWrite};
+    // Write the backup before the active configuration, as separate real NAND
+    // writes. A failed write is never reported as successful ID generation.
+    for(const char* path:{backup_path,config_path}) {
+      auto file=s->backend.CreateAndOpenFile(12,12,path,modes);
+      if(!file)return -16;
+      const auto wrote=file->Write(config.data(),config.size());
+      if(!wrote || *wrote!=config.size())return -19;
+    }
+    *id=generated;*stage=1;return 0;
+  }catch(const std::exception&){return -19;}
 }
 extern "C" int32_t wii_fs_network_config(WiiFs* s,uint8_t* data) {
   try {
@@ -343,11 +427,40 @@ extern "C" int32_t wii_es_stored_contents(WiiFs* s,uint64_t title,uint8_t* outpu
   }catch(const std::exception&){return -117;}
 }
 extern "C" bool wii_es_unlimited_ticket(WiiFs* s,uint64_t id,int32_t* status) {
-  std::array<uint8_t,0xd8> view{};
-  *status=wii_es_ticket_view(s,nullptr,0,view.data());if(*status)return true;
-  if((uint64_t(be32(view.data()+4))<<32|be32(view.data()+8))!=id){*status=-1028;return true;}
-  for(unsigned i=0;i<8;i++)if(be32(view.data()+0x98+i*8))return false;
-  *status=0;return true;
+  try {
+    if(!s || !status)return false;
+    // The menu queries installed channel tickets before launching them. Ticket
+    // IDs are independent of the active boot title, and one file can hold many.
+    check_path(s,"/ticket");
+    const auto groups=s->backend.ReadDirectory(0,0,"/ticket");
+    if(!groups){*status=result(groups.error());return true;}
+    const auto hex_name=[](const std::string& name) {
+      return name.size()==8 && std::ranges::all_of(name,[](unsigned char c){return std::isxdigit(c);});
+    };
+    bool found=false;
+    for(const auto& group:*groups) {
+      if(!hex_name(group))continue;
+      const std::string directory="/ticket/"+group;check_path(s,directory);
+      const auto files=s->backend.ReadDirectory(0,0,directory);
+      if(!files){*status=result(files.error());return true;}
+      for(const auto& name:*files) {
+        if(name.size()!=12 || name.substr(8)!=".tik" || !hex_name(name.substr(0,8)))continue;
+        const auto title=std::stoull(group+name.substr(0,8),nullptr,16);
+        uint32_t count=0;*status=wii_es_ticket_views(s,title,nullptr,0,&count);if(*status)return true;
+        std::vector<uint8_t> views(count*0xd8);
+        *status=wii_es_ticket_views(s,title,views.data(),count,&count);if(*status)return true;
+        for(uint32_t n=0;n<count;n++) {
+          const auto* view=views.data()+n*0xd8;
+          if((uint64_t(be32(view+4))<<32|be32(view+8))!=id)continue;
+          found=true;
+          // No usage counters apply only when the real ticket has no limits.
+          // Restricted tickets still require an implemented accounting service.
+          for(unsigned i=0;i<8;i++)if(be32(view+0x98+i*8))return false;
+        }
+      }
+    }
+    *status=found?0:-1028;return true;
+  }catch(const std::exception&){if(status)*status=-117;return true;}
 }
 extern "C" int32_t wii_fs_open(WiiFs* s,const char* path,uint32_t mode) {
   try {

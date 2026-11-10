@@ -16,3 +16,10 @@ close runs in release builds too. File data, metadata,
 directory ordering and IOS result semantics retain the upstream implementation.
 The wiillr adapter checks caller permissions and confines operations to a marked,
 copied NAND profile. C++23 is required for this optional development backend.
+
+NWC24Identity.cpp adapts only NWC24MakeUserID from
+https://github.com/dolphin-emu/dolphin/blob/70c5a6ad0e62ce32d922dd2478d465e9f0f84424/Source/Core/Core/IOS/Network/KD/NetKDRequest.cpp
+(GPL-2.0-or-later, copyright 2017 Dolphin Emulator Project). Config layout and
+checksum semantics are documented in NWC24Config.h/.cpp at the same revision.
+wiillr supplies an explicitly virtual persistent chip ID for offline profiles;
+this does not provision console certificates or register an online account.

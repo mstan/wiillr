@@ -208,8 +208,9 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
         return 1;
     }
-    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==1) {
-        // Suspending an unavailable WiiConnect24 scheduler reports disabled.
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 &&
+       (read_be32(request+12)==1 || read_be32(request+12)==3)) {
+        // Suspend/resume of an unavailable WC24 scheduler reports disabled.
         // There is no background network engine whose work can be suspended.
         ios->result=-4;
         const u32 output=read_be32(request+24),size=read_be32(request+28);
@@ -242,6 +243,21 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
          * acknowledging script execution or silently enabling network work. */
         const s32 result=read_be32(input)<=1 ? -39 : -3;
         mem_write32_cia(cpu,output,(u32)result,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==0x0f && ios->fs) {
+        const u32 output=read_be32(request+24);
+        ios->result=-4;
+        if(read_be32(request+20) || !output || (output&3) || read_be32(request+28)<32 ||
+           !ios_memory(cpu,output,&available) || available<32)return 1;
+        u64 id=0;u32 stage=0;
+        const s32 status=wii_fs_wc24_generate_id(ios->fs,&id,&stage);
+        mem_write32_cia(cpu,output,(u32)status,cpu->pc);
+        if(!status || status==-35 || status==-36) {
+            mem_write32_cia(cpu,output+4,(u32)(id>>32),cpu->pc);
+            mem_write32_cia(cpu,output+8,(u32)id,cpu->pc);
+            mem_write32_cia(cpu,output+12,stage,cpu->pc);
+        }
+        ios->result=0;return 1;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==8 && read_be32(request+12)==0x17) {
         const u32 address=read_be32(request+16),output=read_be32(request+24);
