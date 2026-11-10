@@ -39,6 +39,9 @@ operations still stop discovery. This development backend requires C++23 and
 retains its upstream GPL license in `third_party/dolphin-ios-fs`.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
+The GPIO AV encoder bus clocks real I2C transactions into a register bank;
+unaddressed devices NACK, and reads of unimplemented register state stop.
+Analog output conversion and register-driven presentation are not yet qualified.
 Wii clock selection preserves the existing GameCube defaults. The DSP engine is
 selected at build time with `WIILLR_DSP`; development interpretation and static
 AOT catalogs remain separate builds. DSP ROMs/coefficient data must be supplied

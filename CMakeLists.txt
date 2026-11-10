@@ -33,7 +33,7 @@ set_property(CACHE WIILLR_IOS PROPERTY STRINGS none native-development)
 if(NOT WIILLR_IOS MATCHES "^(none|native-development)$")
   message(FATAL_ERROR "Unknown IOS provider")
 endif()
-add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/ipc.c src/dsp.c src/ios.c
+add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/ipc.c src/dsp.c src/ios.c src/ave.c
   external/gc-wii-core/src/pi.c external/gc-wii-core/src/mi.c external/gc-wii-core/src/vi.c
   external/gc-wii-core/src/ai.c external/gc-wii-core/src/exi.c
   external/gc-wii-core/src/exi_cpu.c external/gc-wii-core/src/rtc.c
@@ -60,6 +60,9 @@ add_test(NAME wii_dol_launch COMMAND test_wii_dol)
 add_executable(test_wii_devices tests/test_devices.c)
 target_link_libraries(test_wii_devices PRIVATE wii_boot)
 add_test(NAME wii_pi_ipc COMMAND test_wii_devices)
+add_executable(test_wii_ave tests/test_ave.c)
+target_link_libraries(test_wii_ave PRIVATE wii_boot)
+add_test(NAME wii_ave_serial_bus COMMAND test_wii_ave)
 add_executable(test_wii_ios tests/test_ios.c)
 target_link_libraries(test_wii_ios PRIVATE wii_boot)
 add_test(NAME wii_native_ios_contract COMMAND test_wii_ios)

@@ -141,6 +141,9 @@ int main(int argc, char** argv) {
            (unsigned long long)exceptions,(unsigned long long)machine.fields,
            (unsigned long long)machine.mmio_reads,(unsigned long long)machine.mmio_writes,
            machine.unsupported_address);
+    printf("{\"ave_transactions\":%llu,\"ave_register_writes\":%llu,\"ave_failed\":%s}\n",
+           (unsigned long long)machine.ave.transactions,(unsigned long long)machine.ave.writes,
+           machine.ave.failed ? "true":"false");
     if (machine.dsp.engine) {
         GcnDspEngineStats stats=gcn_dsp_engine_stats(machine.dsp.engine);
         printf("{\"dsp_provider\":%u,\"native\":%llu,\"interpreter\":%llu,\"misses\":%llu,\"failed\":%u}\n",

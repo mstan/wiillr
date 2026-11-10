@@ -11,6 +11,9 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     const u32 gpio=physical&~0x00800000u;
     if(width==4 && gpio==0x0d0000c0u)return m->gpio_out;
     if(width==4 && gpio==0x0d0000c4u)return m->gpio_direction;
+    if(width==4 && gpio==0x0d0000c8u)
+        return (m->gpio_out&m->gpio_direction&0x0320u)|wii_ave_pins(&m->ave)|
+               (m->di.disc_present?0x80u:0);
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3))
         return gcn_si_read(&m->si, cpu, GCN_SI_BASE + physical - 0x0d006400u, width);
@@ -53,14 +56,18 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     ++m->mmio_writes;
     u32 physical = address & 0x3fffffffu;
     const u32 gpio=physical&~0x00800000u;
-    /* GPIO1B controls only PPC-owned pins. Configuration/latches are real
-     * state; input sampling remains unsupported until its peripheral exists.
+    /* GPIO1B controls only PPC-owned pins. The AV encoder sees actual clock,
+     * data and direction transitions, with a pulled-up released SDA line.
      * Ownership: fail0verflow/mini gpio.h GP_OWNER_PPC. */
     if(width==4 && gpio==0x0d0000c4u) {
-        m->gpio_direction=(m->gpio_direction&~0xc3a0u)|((u32)value&0xc3a0u);return;
+        m->gpio_direction=(m->gpio_direction&~0xc3a0u)|((u32)value&0xc3a0u);
+        if(wii_ave_gpio(&m->ave,m->gpio_out,m->gpio_direction))return;
+        fprintf(stderr,"unimplemented AVE read register=%02x\n",m->ave.index);cpu->halted=true;return;
     }
     if(width==4 && gpio==0x0d0000c0u && !(value&0x200u)) {
-        m->gpio_out=(m->gpio_out&~0xc3a0u)|((u32)value&0xc3a0u);return;
+        m->gpio_out=(m->gpio_out&~0xc3a0u)|((u32)value&0xc3a0u);
+        if(wii_ave_gpio(&m->ave,m->gpio_out,m->gpio_direction))return;
+        fprintf(stderr,"unimplemented AVE read register=%02x\n",m->ave.index);cpu->halted=true;return;
     }
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3)) {
@@ -136,6 +143,7 @@ static void si_interrupt(void* user, int asserted) {
 
 void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     memset(m, 0, sizeof *m);
+    wii_ave_init(&m->ave);
     gcn_pi_init_model(&m->pi, true);
     wii_ipc_init(&m->ipc);
     wii_ios_native_init(&m->ios);

@@ -5,6 +5,7 @@
 #include "pi/pi.h"
 #include "wiillr/ipc.h"
 #include "wiillr/ios.h"
+#include "wiillr/ave.h"
 #include "mi/mi.h"
 #include "vi/vi.h"
 #include "wiillr/dsp.h"
@@ -28,6 +29,7 @@ typedef struct {
     u64 mmio_reads, mmio_writes;
     u32 unsupported_address;
     u32 gpio_out,gpio_direction;
+    WiiAve ave;
 } WiiMachine;
 void wii_machine_init(WiiMachine* machine, CPUState* cpu);
 void wii_machine_tick(WiiMachine* machine, CPUState* cpu);
