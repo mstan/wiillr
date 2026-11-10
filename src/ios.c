@@ -129,6 +129,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/usb/oh1/57e/305"))device=9;
         if(!strcmp((const char*)path,"/dev/usb/kbd"))device=11;
         if(!strcmp((const char*)path,"/dev/net/ip/top"))device=12;
+        if(!strcmp((const char*)path,"/dev/sdio/slot0"))device=13;
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
@@ -157,6 +158,37 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         return di_ioctl(ios,cpu,request);
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==9 && ios->bluetooth)
         return wii_bluetooth_submit(ios->bluetooth,ios->message)?2:0;
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==13 &&
+       (read_be32(request+12)==0x0b || read_be32(request+12)==0x04)) {
+        /* The front slot has no media attached: no card status bits and no
+         * relative card address on reset. No image is opened or created. */
+        ios->result=-4;
+        const u32 output=read_be32(request+24),size=read_be32(request+28);
+        if(read_be32(request+20) || size<4 || !ios_memory(cpu,output,&available) || available<size)return 1;
+        mem_write32_cia(cpu,output,0,cpu->pc);
+        ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==13 && read_be32(request+12)==7) {
+        const u32 size=read_be32(request+20),output=read_be32(request+24),out_size=read_be32(request+28);
+        const u8* sd=ios_memory(cpu,read_be32(request+16),&available);
+        ios->result=-4;
+        if(!sd || size<36 || available<size || (out_size && (!ios_memory(cpu,output,&available) || available<out_size)))return 1;
+        const u32 command=read_be32(sd),event=read_be32(sd+12);
+        if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"SDIO command=%02x event=%u\n",command,event);
+        if(command==0x40) {
+            if(event!=1 && event!=2)return 1;
+            if(ios->sd_event_message){ios->result=-2;return 1;}
+            if(event==2){ios->result=2;return 1;} /* removal condition already true */
+            ios->sd_event_message=ios->message;ios->sd_event_fd=fd;
+            return 2; /* insertion wait: ACK now, complete only on an event or cancellation */
+        }
+        if(command==0x41) {
+            if(!ios->sd_event_message || ios->sd_event_fd!=fd)return 1;
+            ios->sd_event_cancelled=true;ios->result=0;return 1;
+        }
+        fprintf(stderr,"native IOS unsupported SDIO command=%08x\n",command);
+        return 0;
+    }
     if(fd<24 && ios->descriptors[fd]==11) {
         if(ios->command==6) {
             // The keyboard bus exists without an attached USB keyboard.
@@ -651,6 +683,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(fd<24 && ios->descriptors[fd]==9)return false; /* USB cancellation not implemented */
         if(ios->event_waiting && fd==ios->event_fd)return false;
         if(ios->di_waiting && fd==ios->di_fd)return false;
+        if(ios->sd_event_message && fd==ios->sd_event_fd)return false;
         ios->result=-4;
         if(fd<24 && ios->descriptors[fd]) {
             ios->result=ios->descriptors[fd]==5 ? wii_fs_close(ios->fs,ios->fs_handles[fd]):0;
@@ -706,6 +739,11 @@ bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
     if(ios->event_ready && !ipc->y) {
         reply(ios,ipc,cpu,ios->event_message,6,0);
         ios->event_ready=ios->event_waiting=false;
+        return true;
+    }
+    if(ios->sd_event_cancelled && !ipc->y) {
+        reply(ios,ipc,cpu,ios->sd_event_message,6,0x0c210000); /* EVENT_INVALID */
+        ios->sd_event_message=0;ios->sd_event_cancelled=false;
         return true;
     }
     if(!ios->phase) {

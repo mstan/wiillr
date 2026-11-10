@@ -211,6 +211,11 @@ void BluetoothEmuDevice::Update() {
     m_last_ticks=now;
     for(auto& remote:m_wiimotes) {
       if(remote->IsConnected()) {
+        // The guest can stop posting bulk reads while it changes scenes. Do
+        // not accumulate stale samples or advance a multi-packet HID read
+        // until there is room to deliver its next report. HCI events and
+        // solicited responses still drain ahead of the next sample.
+        if(!m_acl_endpoint || !m_event_queue.empty() || !m_acl_pool.IsEmpty())continue;
         auto& link=Link(GetConnectionHandle(remote->GetBD()));
         if(link.mode==2 && now-link.last_input<u64(link.sniff_interval)*455625u)continue;
         link.last_input=now;

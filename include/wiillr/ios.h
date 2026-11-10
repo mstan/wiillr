@@ -33,6 +33,8 @@ typedef struct {
     u32 fs_handles[24];
     u32 es_uids[24]; /* identity captured when each ES descriptor opens */
     u32 keyboard_messages[24]; /* pending event reads; no keyboard attached */
+    u32 sd_event_message,sd_event_fd; /* empty slot: pending insert notification */
+    bool sd_event_cancelled;
     WiiBluetooth* bluetooth;
     WiiHollywood* hollywood;
 } WiiIosNative;

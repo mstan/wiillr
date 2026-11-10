@@ -257,5 +257,50 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !ios.descriptors[0]);
+    /* The SD slot can be queried while physically empty. Both status and
+     * reset report no card; a short output cannot modify the buffer. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);
+    memcpy(cpu.ram+path,"/dev/sdio/slot0",sizeof "/dev/sdio/slot0");
+    mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);mem_write32_cia(&cpu,message+16,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && ios.descriptors[0]==13);
+    for(unsigned n=0;n<3;n++) {
+        ios.phase=0;wii_ipc_init(&ipc);
+        mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+8,0,0);
+        mem_write32_cia(&cpu,message+12,n==1 ? 0x04:0x0b,0);mem_write32_cia(&cpu,message+20,0,0);
+        mem_write32_cia(&cpu,message+24,0x10000400,0);mem_write32_cia(&cpu,message+28,n==2 ? 3:8,0);
+        mem_write32_cia(&cpu,0x10000400,0x11223344,0);mem_write32_cia(&cpu,0x10000404,0xabcdef01,0);
+        wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==(n==2 ? -4:0));
+        CHECK(mem_read32_cia(&cpu,0x10000400,0)==(n==2 ? 0x11223344:0) && mem_read32_cia(&cpu,0x10000404,0)==0xabcdef01);
+    }
+    ios.phase=0;wii_ipc_init(&ipc);
+    for(unsigned n=0;n<3;n++) {
+        const u32 request=message+64*n;
+        mem_write32_cia(&cpu,request,6,0);mem_write32_cia(&cpu,request+4,0x11223344,0);
+        mem_write32_cia(&cpu,request+8,0,0);mem_write32_cia(&cpu,request+12,7,0);
+        mem_write32_cia(&cpu,request+16,0x10000400,0);mem_write32_cia(&cpu,request+20,36,0);
+        mem_write32_cia(&cpu,request+24,0,0);mem_write32_cia(&cpu,request+28,0,0);
+        mem_write32_cia(&cpu,0x10000400,n==1 ? 0x41:0x40,0);
+        mem_write32_cia(&cpu,0x1000040c,n==2 ? 2:1,0);
+        wii_ipc_write(&ipc,0,request,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2);
+        wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=60000;
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+        if(!n) {
+            CHECK(!ipc.y && mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x11223344);
+            continue; /* no unsolicited insertion */
+        }
+        if(n==1) {
+            CHECK(ipc.y==1 && ipc.arm_message==message && mem_read32_cia(&cpu,message+4,0)==0x0c210000);
+            wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+            CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+        }
+        CHECK(ipc.y==1 && ipc.arm_message==request && mem_read32_cia(&cpu,request+4,0)==(n==1 ? 0:2));
+        wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    }
     cpu_free(&cpu);return 0;
 }
