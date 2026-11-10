@@ -264,6 +264,17 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
            !ios_memory(cpu,output,&available) || available<size)return 1;
         mem_write32_cia(cpu,output,(u32)-39,cpu->pc);ios->result=0;return 1;
     }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==0x1e) {
+        const u32 output=read_be32(request+24),size=read_be32(request+28);
+        ios->result=-4;
+        if(read_be32(request+20) || !output || (output&3) || size<16 ||
+           !ios_memory(cpu,output,&available) || available<size)return 1;
+        // An offline scheduler has no network permissions, active workers,
+        // completed jobs or worker error history. The snapshot is 256 bytes.
+        const u32 bytes=size<256 ? size:256;
+        for(u32 n=0;n<bytes;n++)mem_write8_cia(cpu,output+n,0,cpu->pc);
+        ios->result=0;return 1;
+    }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 &&
        (read_be32(request+12)>=1 && read_be32(request+12)<=3)) {
         // KD returns its nesting count, including locks held while the PPC

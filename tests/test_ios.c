@@ -150,6 +150,15 @@ int main(void) {
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && (s32)mem_read32_cia(&cpu,0x10000440,0)==-39);
     CHECK(mem_read32_cia(&cpu,0x10000444,0)==0xabcdef01);
+    for(unsigned n=0;n<2;n++) {
+        ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,0x1e,0);
+        mem_write32_cia(&cpu,message+28,n ? 260:15,0);
+        memset(cpu.mem2+0x440,0x55,260);
+        wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==(n ? 0:-4));
+        for(unsigned i=0;i<260;i++)CHECK(cpu.mem2[0x440+i]==(n && i<256 ? 0:0x55));
+    }
     /* KD's RTC synchronization retains the guest's actual counter and epoch;
      * requesting the unimplemented persistent update must fail before ACK. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=8;
