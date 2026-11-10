@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: MIT */
-/* IOS4 v3 launch-memory constants and layout, independently recorded in:
+/* IOS4 v3 / IOS37 v5663 / IOS80 v6944 launch-memory layout, recorded in:
  * dolphin-emu/dolphin Source/Core/Core/IOS/{IOS,VersionInfo}.cpp.
  * Values are boot-contract metadata, never captured execution state. The
- * original IOS4 ARM implementation remains an outstanding execution route. */
+ * original ARM kernel implementations remain separate execution routes. */
 #include "wiillr/boot.h"
 #include <string.h>
 
 bool wii_native_ios_boot_memory(CPUState* cpu,u32 major) {
-    if(major!=4 && major!=37)return false;
+    if(major!=4 && major!=37 && major!=80)return false;
     if (!cpu || !cpu->ram || cpu->ram_size != GC_MAIN_RAM_SIZE ||
         !cpu->mem2 || cpu->mem2_size != WII_MEM2_SIZE) return false;
     u32 values[] = {
@@ -17,10 +17,11 @@ bool wii_native_ios_boot_memory(CPUState* cpu,u32 major) {
         0x00040003,0x00081006,0xdeadbeef,0xdeadbeef,0xdeadbeef,0xdeadbeef,
         0x0000ff01,0xdeadbeef,0
     };
-    if(major==37) {
+    if(major==37 || major==80) {
         values[8]=values[13]=0x93600000;
         values[10]=values[12]=0x935e0000;
-        values[16]=0x0025161f;values[17]=0x00030110;
+        values[16]=major==37 ? 0x0025161f:0x00501b20;
+        values[17]=major==37 ? 0x00030110:0x00030310;
         values[18]=0x93600000;values[19]=0x93620000;
     }
     memset(cpu->ram,0,0x4000);

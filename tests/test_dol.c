@@ -48,6 +48,12 @@ int main(void) {
     CHECK(read_be32(cpu.ram+0x314c)==0x93620000);
     CHECK(!wii_native_ios_boot_memory(&cpu,999));
     CHECK(read_be32(cpu.ram+0x3140)==0x0025161f);
+    CHECK(wii_native_ios_boot_memory(&cpu,80));
+    CHECK(read_be32(cpu.ram+0x3140)==0x00501b20);
+    CHECK(read_be32(cpu.ram+0x3144)==0x00030310);
+    CHECK(read_be32(cpu.ram+0x3128)==0x935e0000);
+    CHECK(read_be32(cpu.ram+0x3148)==0x93600000);
+    CHECK(read_be32(cpu.ram+0x314c)==0x93620000);
     CHECK(wii_ios4_boot_memory(&cpu));
     CHECK(read_be32(cpu.ram+0x3140)==0x00040003);
     CHECK(read_be32(cpu.ram+0x3128)==0x933e0000);

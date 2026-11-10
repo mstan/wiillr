@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
     if(argc>=3 && !strcmp(argv[argc-2],"--ios-profile")) {
         if(!strcmp(argv[argc-1],"4"))ios_profile=4;
         else if(!strcmp(argv[argc-1],"37") && WIILLR_IOS_NATIVE)ios_profile=37;
+        else if(!strcmp(argv[argc-1],"80") && WIILLR_IOS_NATIVE)ios_profile=80;
         else return 2;
         argc-=2;
     }

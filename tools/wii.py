@@ -46,9 +46,14 @@ def discover(args):
     if metadata['ios']=='0000000100000004':
         ios_content,ios_tmd,ios=boot_content(args.nand.resolve(),metadata['ios'])
         if ios['version']!=3:raise ValueError('This boundary requires verified IOS4 v3 inputs')
-    elif metadata['ios']=='0000000100000025' and args.native_ios37 and not starlet:
-        ios_profile=37
-    else:raise ValueError('Unsupported requested IOS; IOS37 native development requires --native-ios37')
+    elif metadata['ios'] in ('0000000100000025','0000000100000050'):
+        ios_profile,revision={'0000000100000025':(37,5663),'0000000100000050':(80,6944)}[metadata['ios']]
+        if starlet:
+            ios_content,ios_tmd,ios=boot_content(content_root.resolve(),metadata['ios'])
+            if ios['version']!=revision:raise ValueError(f'This boundary requires verified IOS{ios_profile} v{revision} inputs')
+        elif not getattr(args,f'native_ios{ios_profile}'):
+            raise ValueError(f'Native IOS{ios_profile} development requires --native-ios{ios_profile}')
+    else:raise ValueError('Unsupported requested IOS')
     executable = args.executable.resolve(strict=True)
     work = args.work_root.resolve()
     # One invocation owns a fresh directory; previous evidence is never replaced.
@@ -84,7 +89,8 @@ def discover(args):
         data.mkdir(); cache.mkdir()
         command += ['--gx', str(paths['gx_library']), str(data), str(cache)]
         env['WIILLR_WINDOW']='1' if args.interactive else '0'
-        env['WIILLR_WINDOW_TITLE']=args.window_title or ('Wii Startup Menu' if args.title=='0000000100000002' else 'Wii')
+        menu_title='Wii Startup Menu' if metadata['version']==1 else 'Wii Menu'
+        env['WIILLR_WINDOW_TITLE']=args.window_title or (menu_title if args.title=='0000000100000002' else 'Wii')
         audio=args.audio_output or ('on' if args.interactive else 'off')
         env['GCN_AUDIO']='0' if audio=='off' else '1'
         env['GCN_AUDIO_MUTE']='1' if audio=='muted' else '0'
@@ -92,7 +98,7 @@ def discover(args):
     if ios_profile!=4:command+=['--ios-profile',str(ios_profile)]
     before = {name: identity(path) for name,path in paths.items()}
     receipt = dict(inputs=before, title=metadata, command=command,
-                   boot_profile='ios4-v3-elf-kernel-entry' if starlet else ('native-ios37-memory-contract-development' if ios_profile==37 else 'native-ios4-v3-memory-contract'),
+                   boot_profile=f'ios{ios_profile}-v{ios["version"]}-elf-kernel-entry' if starlet else (f'native-ios{ios_profile}-memory-contract-development' if ios_profile!=4 else 'native-ios4-v3-memory-contract'),
                    execution='ARM-discovery-interpreter' if starlet else {'static':'PPC-static-native','mixed-discovery':'PPC-native-with-discovery','discovery':'PPC-discovery-interpreter'}[args.ppc_mode], accepted=False,
                    boundary=('IOS ELF kernel entry; boot0/1/2 and PPC execution excluded' if starlet else
                              'NAND boot-content PPC entry; boot0/1/2 and IOS execution excluded'))
@@ -141,6 +147,8 @@ def main():
     p.add_argument('--audio-output',choices=('off','muted','on'),help='Actual host output policy; unattended default is off')
     p.add_argument('--native-ios37',action='store_true',
                    help='Explicit native IOS37 development boundary; no original IOS37 ARM execution')
+    p.add_argument('--native-ios80',action='store_true',
+                   help='Explicit native IOS80 development boundary; no original IOS80 ARM execution')
     args = p.parse_args()
     maximum = 1000000000 if args.processor == 'starlet' else (500000000000 if args.ppc_mode != 'discovery' else 5000000000)
     if not 0 < args.steps <= maximum or args.timeout <= 0:
