@@ -2,6 +2,7 @@
 #include "wiillr/fs.h"
 #include "FS.h"
 #include <fstream>
+#include <cstdlib>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -81,6 +82,7 @@ extern "C" bool wii_fs_boot_title(WiiFs* s,uint64_t* title) {
 }
 extern "C" int32_t wii_fs_open(WiiFs* s,const char* path,uint32_t mode) {
   try {
+    if(std::getenv("WIILLR_IOS_TRACE"))std::fprintf(stderr,"NAND open mode=%u path=%s\n",mode,path);
     check_path(s,path);if(mode<1 || mode>3)return -101;
     const auto metadata=s->backend.GetMetadata(s->uid,s->gid,path);
     if(!metadata)return result(metadata.error());

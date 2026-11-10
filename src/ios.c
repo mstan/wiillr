@@ -2,6 +2,7 @@
 #include "wiillr/ios.h"
 #include "memory/memory.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static u8* ios_memory(CPUState* cpu,u32 address,u32* available) {
@@ -79,6 +80,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     if(!request || available<32 || (ios->message&3))return false;
     ios->command=read_be32(request);
     const u32 fd=read_be32(request+8);
+    if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"IOS request command=%u fd=%u argument=%08x\n",ios->command,fd,read_be32(request+12));
     if(ios->command==1) {
         const u8* path=ios_memory(cpu,read_be32(request+12),&available);
         if(!path || !memchr(path,0,available<64 ? available:64))return false;
@@ -188,6 +190,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     return false;
 }
 static void reply(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu,u32 message,u32 command,s32 result) {
+    if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"IOS reply message=%08x command=%u result=%d\n",message,command,result);
     mem_write32_cia(cpu,message+4,(u32)result,cpu->pc);
     mem_write32_cia(cpu,message+8,command,cpu->pc);
     mem_write32_cia(cpu,message,8,cpu->pc);

@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
     char* end;
     errno = 0;
     u64 limit = strtoull(argv[2], &end, 0);
-    if (errno || *end || !limit || limit > 1000000000ull) return 2;
+    if (errno || *end || !limit || limit > 5000000000ull) return 2;
     errno = 0;
     unsigned long stop = strtoul(argv[4], &end, 0);
     if (errno || *end || stop > 0xfffffffful || (stop & 3)) return 2;

@@ -120,7 +120,7 @@ def main():
     p.add_argument('--nand-profile', type=Path, help='Create or reuse an isolated writable NAND copy')
     p.add_argument('--gx-library', type=Path, help='Wii-selected shared native GX service library')
     args = p.parse_args()
-    if not 0 < args.steps <= 1000000000 or args.timeout <= 0:
+    if not 0 < args.steps <= (1000000000 if args.processor == 'starlet' else 5000000000) or args.timeout <= 0:
         p.error('Positive bounded steps/timeout required')
     try:
         return discover(args)
