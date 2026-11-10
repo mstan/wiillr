@@ -301,6 +301,17 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
         mem_write32_cia(cpu,output,ios->kd_suspend_count,cpu->pc);ios->result=0;return 1;
     }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==1 && read_be32(request+12)==0x3002) {
+        // Releasing the hook completes its original request with no event.
+        // The mailbox delivers that completion before replying to this call.
+        ios->result=-6; /* IPC_ENOENT */
+        if(ios->event_waiting && !ios->event_ready) {
+            mem_write32_cia(cpu,ios->event_output,0,cpu->pc);
+            ios->event_ready=true;
+            ios->result=0;
+        }
+        return 1;
+    }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==1 && read_be32(request+12)==0x5001 && ios->hollywood) {
         ios->result=-4;
         const u32 input=read_be32(request+16),output=read_be32(request+24);

@@ -70,6 +70,33 @@ int main(void) {
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && !ios.event_waiting);
     CHECK(mem_read32_cia(&cpu,0x10000400,0)==0x20000 && mem_read32_cia(&cpu,message,0)==8);
     CHECK(mem_read32_cia(&cpu,message+8,0)==6 && ios.operations==2);
+    /* Release completes the pending hook before the release request. The
+     * same operation without an installed hook returns IPC_ENOENT. */
+    wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+8,0,0);
+    wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+    cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2 && ios.event_waiting);
+    wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    const u32 release=message+64;
+    ios.descriptors[1]=1;
+    for(unsigned n=0;n<2;n++) {
+        mem_write32_cia(&cpu,release,6,0);mem_write32_cia(&cpu,release+8,1,0);
+        mem_write32_cia(&cpu,release+12,0x3002,0);
+        wii_ipc_write(&ipc,0,release,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2);
+        wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=6000;
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+        if(!n) {
+            CHECK(ipc.y==1 && ipc.arm_message==message && !ios.event_waiting);
+            CHECK(!mem_read32_cia(&cpu,0x10000400,0) && !mem_read32_cia(&cpu,message+4,0));
+            CHECK(mem_read32_cia(&cpu,release,0)==6);
+            wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+            CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+        }
+        CHECK(ipc.y==1 && ipc.arm_message==release && (s32)mem_read32_cia(&cpu,release+4,0)==(n ? -6:0));
+        wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    }
     /* Slot illumination changes real service state. Disabling it clears the
      * existing GPIO light while preserving other pins and output sentinels. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);
