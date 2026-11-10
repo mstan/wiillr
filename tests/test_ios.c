@@ -133,6 +133,30 @@ int main(void) {
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y);
     CHECK(mem_read32_cia(&cpu,message+4,0)==0x11223344 && ios.kd_rtc==1234);
+    ios.phase=0;wii_ipc_init(&ipc);ios.kd_utc=12345;ios.kd_utc_cycles=cpu.cycles;ios.kd_utc_set=true;
+    ios.kd_rtc_cycles=cpu.cycles;cpu.cycles+=3*729000000ull;
+    mem_write32_cia(&cpu,message+12,0x18,0);mem_write32_cia(&cpu,message+20,0,0);mem_write32_cia(&cpu,message+28,16,0);
+    mem_write32_cia(&cpu,0x1000044c,0xabcdef01,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !mem_read32_cia(&cpu,0x10000440,0));
+    CHECK(!mem_read32_cia(&cpu,0x10000444,0) && mem_read32_cia(&cpu,0x10000448,0)==11111);
+    CHECK(mem_read32_cia(&cpu,0x1000044c,0)==0xabcdef01);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,0x14,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && mem_read32_cia(&cpu,0x10000448,0)==12348);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,0x15,0);
+    mem_write32_cia(&cpu,message+20,12,0);mem_write32_cia(&cpu,message+28,4,0);
+    mem_write32_cia(&cpu,0x10000400,1,0);mem_write32_cia(&cpu,0x10000404,5,0);mem_write32_cia(&cpu,0x10000408,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && ios.kd_utc==0x100000005ull && ios.kd_utc_cycles==cpu.cycles);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x10000408,1,0);mem_write32_cia(&cpu,message+4,0x12345678,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y && ios.kd_utc==0x100000005ull);
+    CHECK(mem_read32_cia(&cpu,message+4,0)==0x12345678);
     /* The offline NCD profile reports a disconnected link and bounds the
      * complete output vector. Other NCD operations remain unsupported. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=10;
@@ -165,5 +189,23 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y && !hollywood.video_regs[0]);
+    /* An empty keyboard bus accepts event reads asynchronously and leaves the
+     * caller's message/output untouched while no USB keyboard is attached. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);
+    memcpy(cpu.ram+path,"/dev/usb/kbd",sizeof "/dev/usb/kbd");
+    mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);mem_write32_cia(&cpu,message+16,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.descriptors[0]==11);
+    wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+4,0x12345678,0);mem_write32_cia(&cpu,message+8,0,0);
+    mem_write32_cia(&cpu,message+24,0x10000400,0);mem_write32_cia(&cpu,message+28,16,0);
+    mem_write32_cia(&cpu,0x10000400,0xabcdef01,0);
+    wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    cpu.cycles+=60000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ipc.y && ios.keyboard_messages[0]==message);
+    CHECK(mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x12345678);
+    CHECK(mem_read32_cia(&cpu,0x10000400,0)==0xabcdef01);
     cpu_free(&cpu);return 0;
 }

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 enum {
     ES_GET_STORED_CONTENT_COUNT=0x10,ES_GET_STORED_CONTENTS=0x11,
@@ -19,7 +20,16 @@ static u8* ios_memory(CPUState* cpu,u32 address,u32* available) {
     return gcn_mem_resolve(cpu,address,available);
 }
 
-void wii_ios_native_init(WiiIosNative* ios) {memset(ios,0,sizeof *ios);}
+void wii_ios_native_init(WiiIosNative* ios) {
+    memset(ios,0,sizeof *ios);
+    // Sample the host clock once. Subsequent native KD time advances only
+    // with retired Broadway cycles; a host pause also pauses this clock.
+    const time_t now=time(NULL);
+    if(now!=(time_t)-1) {
+        ios->kd_utc=(u64)now;ios->kd_utc_set=true;ios->kd_utc_cycles=UINT64_MAX;
+        if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"native IOS UTC seed=%llu epoch=unix clock=729000000\n",(unsigned long long)ios->kd_utc);
+    }
+}
 void wii_ios_native_destroy(WiiIosNative* ios){wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
 static void di_registers(WiiIosNative* ios,CPUState* cpu) {
     gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,
@@ -117,6 +127,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/net/kd/time") && ios->fs)device=8;
         if(!strcmp((const char*)path,"/dev/net/ncd/manage") && ios->fs)device=10;
         if(!strcmp((const char*)path,"/dev/usb/oh1/57e/305"))device=9;
+        if(!strcmp((const char*)path,"/dev/usb/kbd"))device=11;
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
@@ -145,6 +156,19 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         return di_ioctl(ios,cpu,request);
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==9 && ios->bluetooth)
         return wii_bluetooth_submit(ios->bluetooth,ios->message)?2:0;
+    if(fd<24 && ios->descriptors[fd]==11) {
+        if(ios->command==6) {
+            // The keyboard bus exists without an attached USB keyboard.
+            // A valid event read waits for a real connection/event; no empty
+            // event or successful completion may be fabricated.
+            ios->result=-4;
+            const u32 output=read_be32(request+24),size=read_be32(request+28);
+            if(size<16 || !ios_memory(cpu,output,&available) || available<size)return 1;
+            if(ios->keyboard_messages[fd]){ios->result=-2;return 1;}
+            ios->keyboard_messages[fd]=ios->message;return 2;
+        }
+        if(ios->command==3 || ios->command==5 || ios->command==7){ios->result=-4;return 1;}
+    }
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==7) {
         // This development profile has no attached network interface. Report
         // NCD's disconnected link, with a successful status query only.
@@ -168,6 +192,21 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         u8 mac[6];if(!wii_fs_network_mac(ios->fs,mac)){ios->result=-117;return 1;}
         for(u32 n=0;n<6;n++)mem_write8_cia(cpu,mac_output+n,mac[n],cpu->pc);
         mem_write32_cia(cpu,output,0,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==5 && ios->fs) {
+        ios->result=-4;
+        if(read_be32(request+16)!=0 || read_be32(request+20)!=2)return 1;
+        const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+        if(!vectors || available<16 || read_be32(vectors+4)!=WIILLR_NETWORK_CONFIG_SIZE || read_be32(vectors+12)<32)return 1;
+        const u32 output=read_be32(vectors),status=read_be32(vectors+8);
+        if(!ios_memory(cpu,output,&available) || available<WIILLR_NETWORK_CONFIG_SIZE ||
+           !ios_memory(cpu,status,&available) || available<read_be32(vectors+12))return 1;
+        u8 config[WIILLR_NETWORK_CONFIG_SIZE];ios->result=wii_fs_network_config(ios->fs,config);
+        if(!ios->result) {
+            for(u32 n=0;n<sizeof config;n++)mem_write8_cia(cpu,output+n,config[n],cpu->pc);
+            mem_write32_cia(cpu,status,0,cpu->pc);
+        }
+        return 1;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==1) {
         // Suspending an unavailable WiiConnect24 scheduler reports disabled.
@@ -217,6 +256,29 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(read_be32(input+4)!=0)return 0;
         ios->kd_rtc=read_be32(input);ios->kd_rtc_cycles=cpu->cycles;ios->kd_rtc_set=true;
         mem_write32_cia(cpu,output,0,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==8) {
+        const u32 operation=read_be32(request+12),output=read_be32(request+24),extent=read_be32(request+28);
+        if(operation==0x14 || operation==0x18) {
+            ios->result=-4;
+            if(read_be32(request+20) || !output || (output&3) || extent<12 ||
+               !ios_memory(cpu,output,&available) || available<extent || !ios->kd_utc_set ||
+               (operation==0x18 && !ios->kd_rtc_set) || cpu->cycles<ios->kd_utc_cycles ||
+               (operation==0x18 && cpu->cycles<ios->kd_rtc_cycles))return 1;
+            u64 value=ios->kd_utc+(cpu->cycles-ios->kd_utc_cycles)/729000000ull;
+            if(operation==0x18)value-=(u32)(ios->kd_rtc+(cpu->cycles-ios->kd_rtc_cycles)/729000000ull);
+            mem_write32_cia(cpu,output,0,cpu->pc);mem_write32_cia(cpu,output+4,(u32)(value>>32),cpu->pc);
+            mem_write32_cia(cpu,output+8,(u32)value,cpu->pc);ios->result=0;return 1;
+        }
+        if(operation==0x15) {
+            ios->result=-4;
+            const u8* input=ios_memory(cpu,read_be32(request+16),&available);
+            if(read_be32(request+20)<12 || !input || available<read_be32(request+20) || !output || (output&3) ||
+               extent<4 || !ios_memory(cpu,output,&available) || available<extent)return 1;
+            if(read_be32(input+8))return 0; /* persistent misc.bin update is not implemented */
+            ios->kd_utc=(u64)read_be32(input)<<32|read_be32(input+4);ios->kd_utc_cycles=cpu->cycles;ios->kd_utc_set=true;
+            mem_write32_cia(cpu,output,0,cpu->pc);ios->result=0;return 1;
+        }
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==1 && read_be32(request+12)==0x6002) {
         /* STM_LEDMode is a setting, not a request to turn the LED on. The
@@ -529,6 +591,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
     }
     if(ios->command==2) {
+        if(fd<24 && ios->keyboard_messages[fd])return false; /* cancellation not implemented */
         if(fd<24 && ios->descriptors[fd]==9)return false; /* USB cancellation not implemented */
         if(ios->event_waiting && fd==ios->event_fd)return false;
         if(ios->di_waiting && fd==ios->di_fd)return false;
@@ -566,6 +629,7 @@ bool wii_ios_native_stm_event(WiiIosNative* ios,CPUState* cpu,u32 event) {
     return true;
 }
 bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
+    if(ios->kd_utc_set && ios->kd_utc_cycles==UINT64_MAX)ios->kd_utc_cycles=cpu->cycles;
     if(ios->bluetooth && !ipc->y) {
         u32 message;s32 result;bool ready;
         if(!wii_bluetooth_poll(ios->bluetooth,&message,&result,&ready))return false;

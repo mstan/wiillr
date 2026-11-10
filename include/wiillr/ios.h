@@ -19,6 +19,8 @@ typedef struct {
     u32 kd_rtc;
     u64 kd_rtc_cycles;
     bool kd_rtc_set;
+    u64 kd_utc,kd_utc_cycles;
+    bool kd_utc_set;
     GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
     bool di_initialized;
     bool di_waiting;
@@ -29,6 +31,7 @@ typedef struct {
     WiiFs* fs; /* borrowed isolated NAND profile */
     u32 fs_handles[24];
     u32 es_uids[24]; /* identity captured when each ES descriptor opens */
+    u32 keyboard_messages[24]; /* pending event reads; no keyboard attached */
     WiiBluetooth* bluetooth;
     WiiHollywood* hollywood;
 } WiiIosNative;

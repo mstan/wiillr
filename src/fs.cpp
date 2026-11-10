@@ -62,7 +62,15 @@ extern "C" WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid) {
     if(magic!="wiillr-copied-nand-v1")return nullptr;
     for(auto part=p;!part.empty() && part!=part.root_path();part=part.parent_path())if(reparse(part))return nullptr;
     for(const auto& e:fs::recursive_directory_iterator(p))if(reparse(e.path()))return nullptr;
-    return new WiiFs(p,uid,gid);
+    auto mounted=std::make_unique<WiiFs>(p,uid,gid);
+    // IOS creates this public volatile staging directory at startup. Nintendo's
+    // NAND safe-write path stages files here before renaming them into place.
+    const nand::Modes temporary_modes{nand::Mode::ReadWrite,nand::Mode::ReadWrite,nand::Mode::ReadWrite};
+    const auto created=mounted->backend.CreateDirectory(0,0,"/tmp",0,temporary_modes);
+    if((created!=nand::ResultCode::Success && created!=nand::ResultCode::AlreadyExists) ||
+       !fs::is_directory(p/"tmp") ||
+       mounted->backend.SetMetadata(0,"/tmp",0,0,0,temporary_modes)!=nand::ResultCode::Success)return nullptr;
+    return mounted.release();
   } catch(const std::exception& e){std::fprintf(stderr,"NAND mount: %s\n",e.what());return nullptr;}
 }
 extern "C" void wii_fs_unmount(WiiFs* s){delete s;}
@@ -107,6 +115,26 @@ extern "C" bool wii_fs_network_mac(WiiFs* s,uint8_t mac[6]) {
     }else if(size!=sizeof data || (data[0]&3)!=2)return false;
     std::memcpy(mac,data,sizeof data);return true;
   }catch(...){return false;}
+}
+extern "C" int32_t wii_fs_network_config(WiiFs* s,uint8_t* data) {
+  try {
+    if(!s || !data)return -1017;
+    const std::string path="/shared2/sys/net/02/config.dat";check_path(s,path);
+    std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> bytes{};
+    const auto host=s->root/path.substr(1);
+    if(fs::exists(host)) {
+      File::IOFile file(host.generic_string(),"rb");
+      if(!file || file.GetSize()!=bytes.size() || !file.ReadArray(bytes.data(),bytes.size()))return -117;
+    }else {
+      // A new offline profile has no selected connection (IF_NONE). Never
+      // manufacture a successful connection test or replace existing settings.
+      const nand::Modes modes{nand::Mode::ReadWrite,nand::Mode::ReadWrite,nand::Mode::ReadWrite};
+      const auto created=s->backend.CreateFullPath(0,0,path,0,modes);if(created!=nand::ResultCode::Success)return result(created);
+      const auto file=s->backend.CreateAndOpenFile(0,0,path,modes);
+      if(!file || !file->Write(bytes.data(),bytes.size()))return -117;
+    }
+    std::memcpy(data,bytes.data(),bytes.size());return 0;
+  }catch(const std::exception&){return -117;}
 }
 extern "C" bool wii_fs_boot_title(WiiFs* s,uint64_t* title) {
   try {
@@ -445,6 +473,8 @@ extern "C" bool wii_fs_ioctl(WiiFs* s,int32_t fd,uint32_t command,const uint8_t*
     if(command==3 || command==5 || command==9) {
       if(ni<74 || !in)return true;
       const auto path=path_param(s,in+6,ni-6);
+      if(std::getenv("WIILLR_IOS_TRACE"))std::fprintf(stderr,"NAND attributes op=%u uid=%u gid=%u path=%s modes=%u/%u/%u\n",
+        command,s->uid,s->gid,path.c_str(),in[70],in[71],in[72]);
       if(in[70]>3 || in[71]>3 || in[72]>3)return true;
       const nand::Modes modes{nand::Mode(in[70]),nand::Mode(in[71]),nand::Mode(in[72])};
       if(command==3)*r=result(s->backend.CreateDirectory(s->uid,s->gid,path,in[73],modes));

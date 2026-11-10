@@ -35,6 +35,7 @@ int main(int argc,char** argv) {
   std::memcpy(ticket.data()+0x1dc,uid_record,8);ticket[0x1f1]=152;ticket[0x2a3]=0x7b;
   std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   auto* nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  CHECK(fs::is_directory(root/"tmp"));
   uint8_t mac[6]{},mac_copy[6]{};
   CHECK(wii_fs_network_mac(nand,mac) && (mac[0]&3)==2);
   CHECK(wii_fs_network_mac(nand,mac_copy) && !std::memcmp(mac,mac_copy,6));
@@ -130,6 +131,18 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,0x100c,5,0);mem_write32_cia(&cpu,buffer,0x11223344,0);
   es_request(8,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-4 && mem_read32_cia(&cpu,buffer,0)==0x11223344);
+  mem_write32_cia(&cpu,0x1000,0x10002000,0);mem_write32_cia(&cpu,0x1004,WIILLR_NETWORK_CONFIG_SIZE,0);
+  mem_write32_cia(&cpu,0x1008,buffer+32,0);mem_write32_cia(&cpu,0x100c,32,0);
+  mem_write32_cia(&cpu,buffer+32,0x11223344,0);mem_write32_cia(&cpu,buffer+36,0xabcdef01,0);
+  es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer+32,0));
+  CHECK(!cpu.mem2[0x2004] && !cpu.mem2[0x2008] && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
+  std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> network{};network[4]=1;network.back()=0x5a;
+  std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(network.data()),network.size());
+  es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
+  std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary)<<'x';
+  network.fill(0x55);CHECK(wii_fs_network_config(nand,network.data())==-117 && network.front()==0x55);
   // 0x18 is ticket deletion, not a metadata query, and remains unsupported.
   for(const auto operation:{0x18u}) {
     es_request(operation,1,0);mem_write32_cia(&cpu,message+4,0x11223344,0);
@@ -350,6 +363,10 @@ int main(int argc,char** argv) {
   es_request(0x21,1,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && wii_fs_uid(nand)==0x1001);
   CHECK(fs::file_size(root/"sys/uid.sys")==36);
   const auto own_save=wii_fs_open(nand,"/uid-test",1);CHECK(own_save>=0);CHECK(!wii_fs_close(nand,own_save));
+  params.fill(0);std::memcpy(params.data()+6,"/tmp/uid-safe",14);params[70]=3;
+  CHECK(wii_fs_ioctl(nand,-1,9,params.data(),params.size(),nullptr,0,&result) && !result);
+  const auto staged=wii_fs_open(nand,"/tmp/uid-safe",3);CHECK(staged>=0);
+  CHECK(wii_fs_write(nand,staged,progress,sizeof progress)==sizeof progress && !wii_fs_close(nand,staged));
   CHECK(wii_fs_boot_title(nand,&boot_title) && boot_title==0x0000000100000002ull);
   mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,0x800,0);mem_write32_cia(&cpu,message+16,0,0);
   CHECK(exchange() && ios.descriptors[1]==6 && ios.es_uids[1]==0x1001);
@@ -366,10 +383,13 @@ int main(int argc,char** argv) {
   // Only this exclusively created, flat disposable fixture is removed.
   CHECK(fs::remove(root/"uid-test"));
   CHECK(fs::remove(root/".wiillr-network-mac"));
+  CHECK(fs::remove(root/"shared2/sys/net/02/config.dat"));CHECK(fs::remove(root/"shared2/sys/net/02"));
+  CHECK(fs::remove(root/"shared2/sys/net"));CHECK(fs::remove(root/"shared2/sys"));CHECK(fs::remove(root/"shared2"));
   CHECK(fs::remove(root/"title/00000001/00000002/content/title.tmd"));CHECK(fs::remove(root/"title/00000001/00000002/content"));
   CHECK(fs::remove(root/"title/00000001/00000002"));CHECK(fs::remove(root/"title/00000001"));
   CHECK(fs::remove(root/"title/00010001/55555555/content/title.tmd"));CHECK(fs::remove(root/"title/00010001/55555555/content"));CHECK(fs::remove(root/"title/00010001/55555555"));
   CHECK(fs::remove(root/"save"));CHECK(fs::remove(root/"fst.bin"));
+  CHECK(fs::remove(root/"tmp/uid-safe"));CHECK(fs::remove(root/"tmp"));
   CHECK(fs::remove(root/"title/00010001/41424344/content/title.tmd"));
   CHECK(fs::remove(root/"title/00010001/41424344/content/00000001.app"));
   CHECK(fs::remove(root/"title/00010001/41424344/content"));CHECK(fs::remove(root/"title/00010001/41424344"));
