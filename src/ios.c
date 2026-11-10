@@ -14,6 +14,7 @@ static u8* ios_memory(CPUState* cpu,u32 address,u32* available) {
 }
 
 void wii_ios_native_init(WiiIosNative* ios) {memset(ios,0,sizeof *ios);}
+void wii_ios_native_destroy(WiiIosNative* ios){wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
 static void di_registers(WiiIosNative* ios,CPUState* cpu) {
     gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,
         GCN_DI_SR_TCINT|GCN_DI_SR_DEINT|GCN_DI_SR_TCINTMASK|GCN_DI_SR_DEINTMASK,4);
@@ -94,6 +95,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/es") && ios->fs)device=6;
         if(!strcmp((const char*)path,"/dev/net/kd/request") && ios->fs)device=7;
         if(!strcmp((const char*)path,"/dev/net/kd/time") && ios->fs)device=8;
+        if(!strcmp((const char*)path,"/dev/usb/oh1/57e/305"))device=9;
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
@@ -103,6 +105,9 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(read_be32(request+16)>3) {ios->result=-4;return true;}
         ios->result=-5;
         for(u32 n=0;n<24;n++)if(!ios->descriptors[n]) {
+            if(device==9 && !ios->bluetooth) {
+                ios->bluetooth=wii_bluetooth_create(cpu);if(!ios->bluetooth)return 0;
+            }
             if(device==5) {
                 const s32 opened=wii_fs_open(ios->fs,(const char*)path,read_be32(request+16));
                 if(opened<0) {ios->result=opened;return true;}
@@ -115,6 +120,21 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==3 && ios->di)
         return di_ioctl(ios,cpu,request);
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==9 && ios->bluetooth)
+        return wii_bluetooth_submit(ios->bluetooth,ios->message)?2:0;
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==1 && read_be32(request+12)==0x5001 && ios->hollywood) {
+        ios->result=-4;
+        const u32 input=read_be32(request+16),output=read_be32(request+24);
+        const u8* data=ios_memory(cpu,input,&available);
+        if(!input || (input&3) || read_be32(request+20)<32 || !data || available<32 ||
+           !output || (output&3) || read_be32(request+28)<32 ||
+           !ios_memory(cpu,output,&available) || available<32)return 1;
+        u32 set[3],keep[3],old[3],flags;
+        for(unsigned n=0;n<3;n++){set[n]=read_be32(data+n*4);keep[n]=read_be32(data+16+n*4);}
+        if(!wii_hollywood_video_update(ios->hollywood,set,keep,old,&flags))return 0;
+        for(unsigned n=0;n<3;n++)mem_write32_cia(cpu,output+n*4,old[n],cpu->pc);
+        mem_write32_cia(cpu,output+12,flags,cpu->pc);ios->result=0;return 1;
+    }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==8 && read_be32(request+12)==0x17) {
         const u32 address=read_be32(request+16),output=read_be32(request+24);
         const u8* input=ios_memory(cpu,address,&available);
@@ -229,6 +249,34 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         mem_write32_cia(cpu,output+4,(u32)title,cpu->pc);ios->result=0;return 1;
     }
     if(fd<24 && ios->fs && (ios->descriptors[fd]==4 || ios->descriptors[fd]==5)) {
+        if(ios->command==7 && ios->descriptors[fd]==4 && read_be32(request+12)==4) {
+            ios->result=-101;
+            const u32 count=read_be32(request+16);
+            if(count<1 || count>2 || read_be32(request+20)!=count)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<count*16 || read_be32(vectors+4)!=64)return 1;
+            const u8* path=ios_memory(cpu,read_be32(vectors),&available);
+            if(!path || available<64)return 1;
+            const u32 output=read_be32(vectors+count*8+(count-1)*8);
+            if(read_be32(vectors+count*8+(count-1)*8+4)!=4 ||
+               !ios_memory(cpu,output,&available) || available<4)return 1;
+            u32 maximum=0,names_address=0;u8* names=NULL;
+            if(count==2) {
+                if(read_be32(vectors+12)!=4)return 1;
+                const u8* limit=ios_memory(cpu,read_be32(vectors+8),&available);
+                if(!limit || available<4)return 1;maximum=read_be32(limit);
+                if(maximum>0xffffffffu/13 || read_be32(vectors+20)!=13*maximum)return 1;
+                names_address=read_be32(vectors+16);
+                names=ios_memory(cpu,names_address,&available);
+                if(!names || available<13*maximum)return 1;
+            }
+            u32 actual=0;ios->result=wii_fs_read_directory(ios->fs,path,names,maximum,&actual);
+            if(!ios->result) {
+                for(u32 n=0;names && n<13*actual;n++)mem_write8_cia(cpu,names_address+n,names[n],cpu->pc);
+                mem_write32_cia(cpu,output,actual,cpu->pc);
+            }
+            return 1;
+        }
         if(ios->command==6) {
             const u32 input=read_be32(request+16),ni=read_be32(request+20);
             const u32 output=read_be32(request+24),no=read_be32(request+28);
@@ -259,6 +307,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
     }
     if(ios->command==2) {
+        if(fd<24 && ios->descriptors[fd]==9)return false; /* USB cancellation not implemented */
         if(ios->event_waiting && fd==ios->event_fd)return false;
         if(ios->di_waiting && fd==ios->di_fd)return false;
         ios->result=-4;
@@ -295,6 +344,11 @@ bool wii_ios_native_stm_event(WiiIosNative* ios,CPUState* cpu,u32 event) {
     return true;
 }
 bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
+    if(ios->bluetooth && !ipc->y) {
+        u32 message;s32 result;bool ready;
+        if(!wii_bluetooth_poll(ios->bluetooth,&message,&result,&ready))return false;
+        if(ready){reply(ios,ipc,cpu,message,7,result);return true;}
+    }
     if(ios->di_waiting && ios->di_wait_kind==2 && !(ios->di->dicvr&GCN_DI_CVR_CVR) && !ipc->y) {
         reply(ios,ipc,cpu,ios->di_message,6,4);ios->di_waiting=false;return true;
     }

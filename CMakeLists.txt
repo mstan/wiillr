@@ -49,6 +49,16 @@ add_library(wii_fs STATIC src/fs.cpp third_party/dolphin-ios-fs/FileSystemCommon
 set_target_properties(wii_fs PROPERTIES CXX_STANDARD 23)
 target_include_directories(wii_fs PRIVATE third_party/dolphin-ios-fs PUBLIC include)
 target_link_libraries(wii_boot PUBLIC wii_fs)
+add_library(wii_bluetooth STATIC third_party/dolphin-bluetooth/BTEmuHCI.cpp
+  third_party/dolphin-bluetooth/Devices.cpp third_party/dolphin-bluetooth/Packets.cpp
+  third_party/dolphin-bluetooth/WiimoteDevice.cpp third_party/dolphin-bluetooth/WiimoteHIDAttr.cpp
+  third_party/dolphin-bluetooth/Transport.cpp)
+target_include_directories(wii_bluetooth PRIVATE third_party/dolphin-bluetooth PUBLIC include)
+target_link_libraries(wii_bluetooth PUBLIC gcn_runtime_core)
+target_link_libraries(wii_boot PUBLIC wii_bluetooth)
+add_executable(test_wii_bluetooth tests/test_bluetooth.cpp)
+target_link_libraries(test_wii_bluetooth PRIVATE wii_bluetooth)
+add_test(NAME wii_bluetooth_transport COMMAND test_wii_bluetooth)
 add_executable(test_wii_fs tests/test_fs.cpp)
 target_link_libraries(test_wii_fs PRIVATE wii_boot)
 add_test(NAME wii_nand_persistence COMMAND test_wii_fs "${CMAKE_CURRENT_BINARY_DIR}")

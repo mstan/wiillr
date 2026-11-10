@@ -5,6 +5,8 @@
 #include "wiillr/ipc.h"
 #include "di/di.h"
 #include "wiillr/fs.h"
+#include "wiillr/bluetooth.h"
+#include "wiillr/hollywood.h"
 typedef struct {
     u8 descriptors[24],phase;
     u32 message,command;
@@ -26,10 +28,13 @@ typedef struct {
     u32 di_output;
     WiiFs* fs; /* borrowed isolated NAND profile */
     u32 fs_handles[24];
+    WiiBluetooth* bluetooth;
+    WiiHollywood* hollywood;
 } WiiIosNative;
 /* Experimental native service boundary. Only implemented operations may be
  * acknowledged. False stops discovery with the original request intact. */
 void wii_ios_native_init(WiiIosNative*);
+void wii_ios_native_destroy(WiiIosNative*);
 bool wii_ios_native_tick(WiiIosNative*,WiiIpc*,CPUState*);
 bool wii_ios_native_stm_event(WiiIosNative*,CPUState*,u32 event);
 #endif

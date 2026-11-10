@@ -134,6 +134,22 @@ int main(int argc,char** argv) {
   es_request(10,1,1);CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
   mem_write32_cia(&cpu,0x1100,99,0);es_request(9,1,0);
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017);
+  // FS directory count and packed names come from actual NAND entries.
+  ios.descriptors[1]=4;
+  std::memset(cpu.ram+0x1800,0,64);std::memcpy(cpu.ram+0x1800,"/sys",5);
+  mem_write32_cia(&cpu,0x1000,0x1800,0);mem_write32_cia(&cpu,0x1004,64,0);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,4,0);
+  es_request(4,1,1);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer,0)==1);
+  mem_write32_cia(&cpu,0x1008,0x1840,0);mem_write32_cia(&cpu,0x100c,4,0);
+  mem_write32_cia(&cpu,0x1840,1,0);mem_write32_cia(&cpu,0x1010,buffer,0);
+  mem_write32_cia(&cpu,0x1014,13,0);mem_write32_cia(&cpu,0x1018,buffer+32,0);mem_write32_cia(&cpu,0x101c,4,0);
+  es_request(4,2,2);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer+32,0)==1);
+  CHECK(!std::memcmp(cpu.mem2+0x400,"uid.sys",8));
+  mem_write32_cia(&cpu,0x1014,12,0);mem_write32_cia(&cpu,buffer+32,0x11223344,0);
+  es_request(4,2,2);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-101 && mem_read32_cia(&cpu,buffer+32,0)==0x11223344);
   cpu_free(&cpu);wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0x1001,1);CHECK(nand && wii_fs_open(nand,"/save",1)==-102);wii_fs_unmount(nand);
   // Only this exclusively created, flat disposable fixture is removed.

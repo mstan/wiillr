@@ -196,6 +196,7 @@ void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     gcn_di_init_model(&m->di, true);
     m->ios.di=&m->di;
     m->ios.gpio_out=&m->gpio_out;
+    m->ios.hollywood=&m->hollywood;
     gcn_di_set_irq(&m->di, di_interrupt, &m->pi);
     gcn_si_init(&m->si);
     gcn_si_set_irq(&m->si, si_interrupt, &m->pi);

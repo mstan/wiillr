@@ -53,6 +53,12 @@ Usage-limit queries support unrestricted tickets and reject unimplemented
 restricted-ticket accounting. STM slot-illumination settings update the modeled
 GPIO state; network RTC synchronization retains the guest counter without
 inventing UTC or persistent clock data.
+The native Bluetooth transport adapts licensed Dolphin/RecompCore HCI and
+L2CAP code through explicit RAM and asynchronous IPC interfaces. Controller
+configuration supports readback/reset; pairing storage starts empty. Wii Remote
+report sources are not connected yet. Firmware uploads and unimplemented USB
+operations stop explicitly. Provenance and licenses are in
+`third_party/dolphin-bluetooth`.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 The GPIO AV encoder bus clocks real I2C transactions into a register bank;
@@ -76,6 +82,8 @@ target, then select `--ppc-mode static` in `tools/wii.py`. That mode's bounded
 budget counts guest cycles; discovery counts interpreted instructions.
 The separate `wiillr-native-discover` target permits counted interpreter misses
 for bring-up (`--ppc-mode mixed-discovery`). It cannot establish native acceptance.
+Repeat `--capture` during preparation to combine verified loader and later title
+code variants with matching title/profile identities.
 
 `wiillr-starlet-discover` loads the original IOS4 ARM ELF at its kernel-entry
 boundary using the pinned ARM core. Its development bus covers big-endian

@@ -124,6 +124,22 @@ extern "C" int32_t wii_fs_close(WiiFs* s,uint32_t fd){try{return result(s->backe
 extern "C" int32_t wii_fs_read(WiiFs* s,uint32_t fd,uint8_t* p,uint32_t n){try{return result(s->backend.ReadBytesFromFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_write(WiiFs* s,uint32_t fd,const uint8_t* p,uint32_t n){try{return result(s->backend.WriteBytesToFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_seek(WiiFs* s,uint32_t fd,uint32_t at,uint32_t mode){try{return result(s->backend.SeekFile(fd,at,nand::SeekMode(mode)));}catch(...){return -117;}}
+extern "C" int32_t wii_fs_read_directory(WiiFs* s,const uint8_t* input,uint8_t* names,uint32_t maximum,uint32_t* count) {
+  try {
+    const auto path=path_param(s,input,64);
+    if(std::getenv("WIILLR_IOS_TRACE"))std::fprintf(stderr,"NAND readdir path=%s maximum=%u listing=%u\n",path.c_str(),maximum,names!=nullptr);
+    auto entries=s->backend.ReadDirectory(s->uid,s->gid,path);if(!entries)return result(entries.error());
+    for(const auto& name:*entries)if(name.empty() || name.size()>12)return -101;
+    if(!names){*count=uint32_t(entries->size());return 0;}
+    if(maximum>UINT32_MAX/13)return -101;
+    *count=std::min(maximum,uint32_t(entries->size()));
+    for(uint32_t i=0;i<*count;i++) {
+      const auto& name=(*entries)[i];std::memset(names,0,13);
+      std::memcpy(names,name.data(),name.size());names+=name.size()+1;
+    }
+    return 0;
+  }catch(const std::invalid_argument&){return -101;}catch(const std::exception&){return -117;}
+}
 extern "C" int32_t wii_es_content_open(WiiFs* s,uint32_t index) {
   try {
     uint64_t title;if(index>0xffff || !wii_fs_boot_title(s,&title))return -1017;

@@ -24,6 +24,7 @@ int32_t wii_fs_close(WiiFs*,uint32_t fd);
 int32_t wii_fs_read(WiiFs*,uint32_t fd,uint8_t*,uint32_t size);
 int32_t wii_fs_write(WiiFs*,uint32_t fd,const uint8_t*,uint32_t size);
 int32_t wii_fs_seek(WiiFs*,uint32_t fd,uint32_t offset,uint32_t mode);
+int32_t wii_fs_read_directory(WiiFs*,const uint8_t* path,uint8_t* names,uint32_t maximum,uint32_t* count);
 /* False means unimplemented, requiring discovery to stop without an ACK. */
 bool wii_fs_ioctl(WiiFs*,int32_t fd,uint32_t command,const uint8_t* input,uint32_t input_size,
                   uint8_t* output,uint32_t output_size,int32_t* result);

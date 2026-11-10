@@ -207,6 +207,7 @@ int main(int argc, char** argv) {
         wii_dsp_stop(&machine.dsp);
     }
     wii_fs_unmount(machine.ios.fs);
+    wii_ios_native_destroy(&machine.ios);
     if(gx.api) {
         GcnllrNativeGxStatus status={0};gx.api->drain();gx.api->status(&status);
         printf("{\"gx_fifo_bytes\":%llu,\"gx_draws\":%llu,\"gx_display_copies\":%llu,\"gx_presents\":%llu,\"gx_failed\":%u}\n",

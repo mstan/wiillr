@@ -107,5 +107,20 @@ int main(void) {
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y);
     CHECK(mem_read32_cia(&cpu,message+4,0)==0x11223344 && ios.kd_rtc==1234);
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=1;
+    WiiHollywood hollywood;wii_hollywood_init(&hollywood);ios.hollywood=&hollywood;
+    hollywood.video_regs[0]=8;hollywood.video_regs[1]=0x12340000;hollywood.video_regs[2]=0x56780000;
+    mem_write32_cia(&cpu,message+12,0x5001,0);mem_write32_cia(&cpu,message+20,32,0);mem_write32_cia(&cpu,message+28,32,0);
+    for(unsigned n=0;n<8;n++)mem_write32_cia(&cpu,0x10000400+n*4,0,0);
+    mem_write32_cia(&cpu,0x10000414,0xffffffff,0);mem_write32_cia(&cpu,0x10000418,0xffff0000,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !hollywood.video_regs[0]);
+    CHECK(mem_read32_cia(&cpu,0x10000440,0)==8 && mem_read32_cia(&cpu,0x10000444,0)==0x12340000);
+    CHECK(mem_read32_cia(&cpu,0x10000448,0)==0x56780000 && mem_read32_cia(&cpu,0x1000044c,0)==5);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x10000400,0x80,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y && !hollywood.video_regs[0]);
     cpu_free(&cpu);return 0;
 }
