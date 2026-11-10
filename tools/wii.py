@@ -140,7 +140,7 @@ def main():
     p.add_argument('--native-ios37',action='store_true',
                    help='Explicit native IOS37 development boundary; no original IOS37 ARM execution')
     args = p.parse_args()
-    maximum = 1000000000 if args.processor == 'starlet' else (50000000000 if args.ppc_mode != 'discovery' else 5000000000)
+    maximum = 1000000000 if args.processor == 'starlet' else (500000000000 if args.ppc_mode != 'discovery' else 5000000000)
     if not 0 < args.steps <= maximum or args.timeout <= 0:
         p.error('Positive bounded steps/timeout required')
     try:

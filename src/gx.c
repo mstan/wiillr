@@ -93,10 +93,10 @@ bool wii_gx_tick(WiiGx* g) {
         if(pad.buttons&0x800)next.buttons|=0x400;
         if(pad.buttons&0x1000)next.buttons|=0x10;
         if(pad.buttons&0x10)next.buttons|=0x8000;
-        if(pad.stick_x<80 || (pad.buttons&1))next.buttons|=4;
-        if(pad.stick_x>176 || (pad.buttons&2))next.buttons|=8;
-        if(pad.stick_y>176 || (pad.buttons&8))next.buttons|=1;
-        if(pad.stick_y<80 || (pad.buttons&4))next.buttons|=2;
+        if(pad.stick_x<80 || (pad.buttons&1))next.buttons|=8;
+        if(pad.stick_x>176 || (pad.buttons&2))next.buttons|=4;
+        if(pad.stick_y>176 || (pad.buttons&8))next.buttons|=2;
+        if(pad.stick_y<80 || (pad.buttons&4))next.buttons|=1;
         int x=(int)next.pointer_x+((int)pad.substick_x-128)/16;
         int y=(int)next.pointer_y-((int)pad.substick_y-128)/16;
         next.pointer_x=(u16)(x<0?0:x>1023?1023:x);next.pointer_y=(u16)(y<0?0:y>767?767:y);
