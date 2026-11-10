@@ -175,6 +175,14 @@ int main(int argc, char** argv) {
         printf("{\"gx_fifo_bytes\":%llu,\"gx_draws\":%llu,\"gx_display_copies\":%llu,\"gx_presents\":%llu,\"gx_failed\":%u}\n",
             (unsigned long long)status.fifo_bytes,(unsigned long long)status.draws,
             (unsigned long long)status.display_copies,(unsigned long long)status.presents,status.failed);
+        if(gx.scanout_width && gx.scanout_height) {
+            const u32 size=gx.scanout_stride*(gx.scanout_height-1)+gx.scanout_width*2;
+            u32 available;const u8* pixels=gcn_mem_resolve(&cpu,gx.scanout_address,&available);
+            char capture[4096];const int n=snprintf(capture,sizeof capture,"%s/scanout.yuy2",gx_data);
+            const int captured=pixels && available>=size && n>0 && n<(int)sizeof capture && dump(capture,pixels,size);
+            printf("{\"scanout_address\":%u,\"width\":%u,\"height\":%u,\"stride\":%u,\"scanout_saved\":%s}\n",
+                gx.scanout_address,gx.scanout_width,gx.scanout_height,gx.scanout_stride,captured?"true":"false");
+        }
     }
     wii_gx_stop(&gx);
     printf("{\"execution\":\"discovery-interpreter\",\"entry\":%u,\"pc\":%u,"

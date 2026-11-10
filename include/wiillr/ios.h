@@ -14,6 +14,11 @@ typedef struct {
     bool event_waiting,event_ready;
     GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
     bool di_initialized;
+    bool di_waiting;
+    u8 di_wait_kind; /* 1: command completion, 2: actual cover closure */
+    u32 di_message,di_fd;
+    bool di_immediate;
+    u32 di_output;
     WiiFs* fs; /* borrowed isolated NAND profile */
     u32 fs_handles[24];
 } WiiIosNative;

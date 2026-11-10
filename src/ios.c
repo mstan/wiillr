@@ -4,6 +4,14 @@
 #include <stdio.h>
 #include <string.h>
 
+static u8* ios_memory(CPUState* cpu,u32 address,u32* available) {
+    const u32 physical=gcn_reservation_key(address);
+    if(!(physical<cpu->ram_size || (physical>=0x10000000u && physical-0x10000000u<cpu->mem2_size))) {
+        if(available)*available=0;return NULL;
+    }
+    return gcn_mem_resolve(cpu,address,available);
+}
+
 void wii_ios_native_init(WiiIosNative* ios) {memset(ios,0,sizeof *ios);}
 static void di_registers(WiiIosNative* ios,CPUState* cpu) {
     gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,
@@ -14,10 +22,30 @@ static int di_ioctl(WiiIosNative* ios,CPUState* cpu,const u8* request) {
     const u32 command=read_be32(request+12),input=read_be32(request+16),input_size=read_be32(request+20);
     const u32 output=read_be32(request+24),output_size=read_be32(request+28);
     u32 available;
-    const u8* packet=gcn_mem_resolve(cpu,input,&available);
+    const u8* packet=ios_memory(cpu,input,&available);
     if(input_size!=32 || !packet || available<32) {ios->result=32;return 1;}
     u32 value;
     switch(command) {
+    case 0x12:case 0x70:case 0xe0: {
+        if(ios->di_waiting || ios->di->cmd_pending)return 0;
+        const u32 need=command==0xe0?4:32;
+        if((command==0xe0 ? output_size<4 || (output&3):output_size!=32 || (output&31)) ||
+           !ios_memory(cpu,output,&available) || available<need ||
+           read_be32(packet)>>24!=command) {ios->result=32;return 1;}
+        di_registers(ios,cpu);
+        for(unsigned n=0;n<3;n++)gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0+4*n,read_be32(packet+4*n),4);
+        if(command==0x70)gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0,0xa8000040u,4);
+        gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_MAR,output&0x1fffffffu,4);
+        gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_LENGTH,32,4);
+        gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CR,GCN_DI_CR_TSTART|(command==0xe0?0:GCN_DI_CR_DMA),4);
+        ios->di_immediate=command==0xe0;ios->di_output=output;
+        ios->di_message=ios->message;ios->di_fd=read_be32(request+8);ios->di_waiting=true;ios->di_wait_kind=1;
+        return 2; /* IPC ACK now, reply after actual shared-device completion */
+    }
+    case 0x79:
+        if(ios->di_waiting || ios->di->cmd_pending)return 0;
+        ios->di_message=ios->message;ios->di_fd=read_be32(request+8);ios->di_waiting=true;ios->di_wait_kind=2;
+        return 2; /* stay pending while the shared drive's cover is open */
     case 0x7a:value=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_CVR,4);break;
     case 0x84:value=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_IMMBUF,4);break;
     case 0x88:value=ios->di->disc_present ? 2:1;break;
@@ -39,7 +67,7 @@ static int di_ioctl(WiiIosNative* ios,CPUState* cpu,const u8* request) {
     default:
         fprintf(stderr,"native IOS unsupported DI ioctl=%02x\n",command);return 0;
     }
-    if(output_size<4 || !gcn_mem_resolve(cpu,output,&available) || available<4) {
+    if(output_size<4 || !ios_memory(cpu,output,&available) || available<4) {
         ios->result=32;return 1;
     }
     mem_write32_cia(cpu,output,value,cpu->pc);ios->result=1;
@@ -47,12 +75,12 @@ static int di_ioctl(WiiIosNative* ios,CPUState* cpu,const u8* request) {
 }
 static int execute(WiiIosNative* ios,CPUState* cpu) {
     u32 available;
-    const u8* request=gcn_mem_resolve(cpu,ios->message,&available);
+    const u8* request=ios_memory(cpu,ios->message,&available);
     if(!request || available<32 || (ios->message&3))return false;
     ios->command=read_be32(request);
     const u32 fd=read_be32(request+8);
     if(ios->command==1) {
-        const u8* path=gcn_mem_resolve(cpu,read_be32(request+12),&available);
+        const u8* path=ios_memory(cpu,read_be32(request+12),&available);
         if(!path || !memchr(path,0,available<64 ? available:64))return false;
         u8 device=0;
         if(!strcmp((const char*)path,"/dev/stm/immediate"))device=1;
@@ -85,12 +113,12 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs && read_be32(request+12)==0x1d) {
         ios->result=-1017;
         if(read_be32(request+16)!=1 || read_be32(request+20)!=1)return 1;
-        const u8* vectors=gcn_mem_resolve(cpu,read_be32(request+24),&available);
+        const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
         if(!vectors || available<16 || read_be32(vectors+4)!=8 || read_be32(vectors+12)<29)return 1;
-        const u8* title=gcn_mem_resolve(cpu,read_be32(vectors),&available);
+        const u8* title=ios_memory(cpu,read_be32(vectors),&available);
         if(!title || available<8)return 1;
         const u32 high=read_be32(title),low=read_be32(title+4),output=read_be32(vectors+8);
-        if(!gcn_mem_resolve(cpu,output,&available) || available<29)return 1;
+        if(!ios_memory(cpu,output,&available) || available<29)return 1;
         char path[40];const int size=snprintf(path,sizeof path,"/title/%08x/%08x/data",high,low);
         for(int n=0;n<size;n++)mem_write8_cia(cpu,output+(u32)n,(u8)path[n],cpu->pc);
         ios->result=0;return 1;
@@ -98,10 +126,10 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs && read_be32(request+12)==0x20) {
         ios->result=-1017; /* ES_EINVAL */
         if(read_be32(request+16)!=0 || read_be32(request+20)!=1)return 1;
-        const u8* vector=gcn_mem_resolve(cpu,read_be32(request+24),&available);
+        const u8* vector=ios_memory(cpu,read_be32(request+24),&available);
         if(!vector || available<8 || read_be32(vector+4)!=8)return 1;
         const u32 output=read_be32(vector);
-        if(!gcn_mem_resolve(cpu,output,&available) || available<8)return 1;
+        if(!ios_memory(cpu,output,&available) || available<8)return 1;
         u64 title;
         if(!wii_fs_boot_title(ios->fs,&title))return 0;
         mem_write32_cia(cpu,output,(u32)(title>>32),cpu->pc);
@@ -112,8 +140,8 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
             const u32 input=read_be32(request+16),ni=read_be32(request+20);
             const u32 output=read_be32(request+24),no=read_be32(request+28);
             u32 in_available=0,out_available=0;
-            const u8* in=ni ? gcn_mem_resolve(cpu,input,&in_available):NULL;
-            u8* out=no ? gcn_mem_resolve(cpu,output,&out_available):NULL;
+            const u8* in=ni ? ios_memory(cpu,input,&in_available):NULL;
+            u8* out=no ? ios_memory(cpu,output,&out_available):NULL;
             if((ni && (!in || in_available<ni)) || (no && (!out || out_available<no))) {ios->result=-101;return 1;}
             if(!wii_fs_ioctl(ios->fs,ios->descriptors[fd]==5 ? (s32)ios->fs_handles[fd]:-1,
                 read_be32(request+12),in,ni,out,no,&ios->result))return 0;
@@ -125,7 +153,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
         if(ios->descriptors[fd]==5 && (ios->command==3 || ios->command==4)) {
             const u32 size=read_be32(request+16),address=read_be32(request+12);
-            u8* data=gcn_mem_resolve(cpu,address,&available);
+            u8* data=ios_memory(cpu,address,&available);
             if(size && (!data || available<size)) {ios->result=-101;return 1;}
             ios->result=ios->command==3 ? wii_fs_read(ios->fs,ios->fs_handles[fd],data,size):
                 wii_fs_write(ios->fs,ios->fs_handles[fd],data,size);
@@ -139,6 +167,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==2) {
         if(ios->event_waiting && fd==ios->event_fd)return false;
+        if(ios->di_waiting && fd==ios->di_fd)return false;
         ios->result=-4;
         if(fd<24 && ios->descriptors[fd]) {
             ios->result=ios->descriptors[fd]==5 ? wii_fs_close(ios->fs,ios->fs_handles[fd]):0;
@@ -149,7 +178,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==2 && read_be32(request+12)==0x1000) {
         if(ios->event_waiting) {ios->result=-2;return 1;}
         const u32 output=read_be32(request+24),size=read_be32(request+28);
-        if(size<4 || !gcn_mem_resolve(cpu,output,&available) || available<4) {ios->result=-4;return 1;}
+        if(size<4 || !ios_memory(cpu,output,&available) || available<4) {ios->result=-4;return 1;}
         ios->event_message=ios->message;ios->event_output=output;ios->event_fd=fd;
         ios->event_waiting=true;
         return 2; /* accepted asynchronous hook, no reply until a real event */
@@ -172,6 +201,18 @@ bool wii_ios_native_stm_event(WiiIosNative* ios,CPUState* cpu,u32 event) {
     return true;
 }
 bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
+    if(ios->di_waiting && ios->di_wait_kind==2 && !(ios->di->dicvr&GCN_DI_CVR_CVR) && !ipc->y) {
+        reply(ios,ipc,cpu,ios->di_message,6,4);ios->di_waiting=false;return true;
+    }
+    if(ios->di_waiting && ios->di_wait_kind==1 && !ios->di->cmd_pending && !ipc->y) {
+        const u32 status=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,4);
+        if(!(status&(GCN_DI_SR_TCINT|GCN_DI_SR_DEINT)))return false;
+        const s32 result=(status&GCN_DI_SR_DEINT)?2:1;
+        if(result==1 && ios->di_immediate)mem_write32_cia(cpu,ios->di_output,
+            gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_IMMBUF,4),cpu->pc);
+        di_registers(ios,cpu);reply(ios,ipc,cpu,ios->di_message,6,result);ios->di_waiting=false;
+        return true;
+    }
     if(ios->event_ready && !ipc->y) {
         reply(ios,ipc,cpu,ios->event_message,6,0);
         ios->event_ready=ios->event_waiting=false;

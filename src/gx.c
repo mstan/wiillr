@@ -13,8 +13,8 @@ static int resolve(void* user,u32 address,u32 size,GcnllrNativeGxMemory* range) 
     WiiGx* g=user;const u32 physical=address&0x1fffffffu;
     /* GPU clients may only resolve physical main RAM, never MMIO or locked L1. */
     if(!((physical<g->cpu->ram_size) || (physical>=0x10000000u && physical-0x10000000u<g->cpu->mem2_size)))return 0;
-    u32 available;u8* data=gcn_mem_resolve(g->cpu,physical,&available);
-    if(!data || available<size)return 0;
+    u32 available,original_available;u8* data=gcn_mem_resolve(g->cpu,physical,&available);
+    if(!data || available<size || gcn_mem_resolve(g->cpu,address,&original_available)!=data)return 0;
     *range=(GcnllrNativeGxMemory){data,physical,available};return 1;
 }
 static int locate(void* user,const void* pointer,u32 size,u32* physical) {
@@ -73,6 +73,7 @@ bool wii_gx_tick(WiiGx* g) {
             const u64 extent=(u64)(height-1)*stride+(u64)width*2;
             if(!width || !height || width>1024 || height>1024 || extent>0xffffffffu ||
                !resolve(g,address,(u32)extent,&range) || !g->api->present(range.bytes,width,height,stride))return false;
+            g->scanout_address=address;g->scanout_width=width;g->scanout_height=height;g->scanout_stride=stride;
         }
     }
     GcnllrNativeGxStatus status={0};g->api->status(&status);
