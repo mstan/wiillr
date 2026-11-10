@@ -30,6 +30,13 @@ counterpart are not yet qualified for this native route.
 The native disc resource borrows the shared device for register queries,
 interrupt controls and resets. It does not replace drive state with canned
 successful reads.
+With `--nand-profile`, the launcher creates or reuses a verified writable copy
+of the supplied NAND and checks that original files stay unchanged. Native FS
+operations use the adapted Dolphin host backend with persistent metadata,
+caller permissions and profile confinement. UID/GID come from the supplied
+UID table and boot TMD. Supported ES queries use that boot context; unimplemented
+operations still stop discovery. This development backend requires C++23 and
+retains its upstream GPL license in `third_party/dolphin-ios-fs`.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 Wii clock selection preserves the existing GameCube defaults. The DSP engine is

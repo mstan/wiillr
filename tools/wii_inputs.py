@@ -33,6 +33,7 @@ def title_metadata(data: bytes) -> dict:
     if count and boot not in {item['index'] for item in contents}:
         raise ValueError("Boot index is absent from content table")
     return dict(title_id=f"{title:016x}", ios=f"{ios:016x}", version=version,
+                group_id=struct.unpack_from(">H", data, base + 0x58)[0],
                 region=struct.unpack_from(">H", data, base + 0x5C)[0],
                 boot_index=boot, contents=contents, signature_verified=False)
 

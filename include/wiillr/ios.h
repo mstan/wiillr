@@ -4,6 +4,7 @@
 #include "cpu/cpu.h"
 #include "wiillr/ipc.h"
 #include "di/di.h"
+#include "wiillr/fs.h"
 typedef struct {
     u8 descriptors[24],phase;
     u32 message,command;
@@ -13,6 +14,8 @@ typedef struct {
     bool event_waiting,event_ready;
     GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
     bool di_initialized;
+    WiiFs* fs; /* borrowed isolated NAND profile */
+    u32 fs_handles[24];
 } WiiIosNative;
 /* Experimental native service boundary. Only implemented operations may be
  * acknowledged. False stops discovery with the original request intact. */

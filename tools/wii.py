@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 
 from wii_inputs import title_metadata
+import nand_profile
 
 
 def identity(path):
@@ -63,18 +64,29 @@ def discover(args):
             raise ValueError('Invalid DSP ROM/coefficient extent')
         paths.update(dsp_rom=args.dsp_rom, dsp_coef=args.dsp_coef)
         command += [str(args.dsp_rom.resolve()), str(args.dsp_coef.resolve())]
+    original_nand = None
+    if args.nand_profile:
+        if starlet:
+            raise ValueError('A native filesystem profile belongs to PPC discovery')
+        original_nand, uid = nand_profile.prepare(args.nand, args.nand_profile, args.title)
+        command += [str(args.nand_profile.absolute()), str(uid), str(metadata['group_id'])]
     before = {name: identity(path) for name,path in paths.items()}
     receipt = dict(inputs=before, title=metadata, command=command,
                    boot_profile='ios4-v3-elf-kernel-entry' if starlet else 'native-ios4-v3-memory-contract',
                    execution='ARM-discovery-interpreter' if starlet else 'PPC-discovery-interpreter', accepted=False,
                    boundary=('IOS ELF kernel entry; boot0/1/2 and PPC execution excluded' if starlet else
                              'NAND boot-content PPC entry; boot0/1/2 and IOS execution excluded'))
+    if original_nand is not None:
+        receipt['writable_nand_profile'] = str(args.nand_profile.absolute())
+        receipt['original_nand_hashes'] = original_nand
     (work / 'run.json').write_text(json.dumps(receipt, indent=2) + '\n')
     with (work / 'host.log').open('xb') as log:
         result = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT,
                                 timeout=args.timeout,
                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     after = {name: identity(path) for name,path in paths.items()}
+    if original_nand is not None and nand_profile.snapshot(args.nand) != original_nand:
+        raise ValueError('Original NAND inputs changed during execution')
     if before != after:
         raise ValueError('Discovery inputs changed during execution')
     receipt.update(exit_code=result.returncode, log=identity(work / 'host.log'))
@@ -97,6 +109,7 @@ def main():
     p.add_argument('--timeout', type=int, default=120)
     p.add_argument('--dsp-rom', type=Path)
     p.add_argument('--dsp-coef', type=Path)
+    p.add_argument('--nand-profile', type=Path, help='Create or reuse an isolated writable NAND copy')
     args = p.parse_args()
     if not 0 < args.steps <= 1000000000 or args.timeout <= 0:
         p.error('Positive bounded steps/timeout required')

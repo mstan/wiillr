@@ -58,6 +58,11 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/stm/immediate"))device=1;
         if(!strcmp((const char*)path,"/dev/stm/eventhook"))device=2;
         if(!strcmp((const char*)path,"/dev/di") && ios->di)device=3;
+        if(!strcmp((const char*)path,"/dev/fs") && ios->fs)device=4;
+        /* ES descriptors bind to this boot's real copied NAND. Individual ES
+         * operations remain unsupported until their actual contracts exist. */
+        if(!strcmp((const char*)path,"/dev/es") && ios->fs)device=6;
+        if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
             return false;
@@ -65,6 +70,11 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(read_be32(request+16)>3) {ios->result=-4;return true;}
         ios->result=-5;
         for(u32 n=0;n<24;n++)if(!ios->descriptors[n]) {
+            if(device==5) {
+                const s32 opened=wii_fs_open(ios->fs,(const char*)path,read_be32(request+16));
+                if(opened<0) {ios->result=opened;return true;}
+                ios->fs_handles[n]=(u32)opened;
+            }
             if(device==3 && !ios->di_initialized) {di_registers(ios,cpu);ios->di_initialized=true;}
             ios->descriptors[n]=device;ios->result=(s32)n;break;
         }
@@ -72,10 +82,68 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==3 && ios->di)
         return di_ioctl(ios,cpu,request);
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs && read_be32(request+12)==0x1d) {
+        ios->result=-1017;
+        if(read_be32(request+16)!=1 || read_be32(request+20)!=1)return 1;
+        const u8* vectors=gcn_mem_resolve(cpu,read_be32(request+24),&available);
+        if(!vectors || available<16 || read_be32(vectors+4)!=8 || read_be32(vectors+12)<29)return 1;
+        const u8* title=gcn_mem_resolve(cpu,read_be32(vectors),&available);
+        if(!title || available<8)return 1;
+        const u32 high=read_be32(title),low=read_be32(title+4),output=read_be32(vectors+8);
+        if(!gcn_mem_resolve(cpu,output,&available) || available<29)return 1;
+        char path[40];const int size=snprintf(path,sizeof path,"/title/%08x/%08x/data",high,low);
+        for(int n=0;n<size;n++)mem_write8_cia(cpu,output+(u32)n,(u8)path[n],cpu->pc);
+        ios->result=0;return 1;
+    }
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs && read_be32(request+12)==0x20) {
+        ios->result=-1017; /* ES_EINVAL */
+        if(read_be32(request+16)!=0 || read_be32(request+20)!=1)return 1;
+        const u8* vector=gcn_mem_resolve(cpu,read_be32(request+24),&available);
+        if(!vector || available<8 || read_be32(vector+4)!=8)return 1;
+        const u32 output=read_be32(vector);
+        if(!gcn_mem_resolve(cpu,output,&available) || available<8)return 1;
+        u64 title;
+        if(!wii_fs_boot_title(ios->fs,&title))return 0;
+        mem_write32_cia(cpu,output,(u32)(title>>32),cpu->pc);
+        mem_write32_cia(cpu,output+4,(u32)title,cpu->pc);ios->result=0;return 1;
+    }
+    if(fd<24 && ios->fs && (ios->descriptors[fd]==4 || ios->descriptors[fd]==5)) {
+        if(ios->command==6) {
+            const u32 input=read_be32(request+16),ni=read_be32(request+20);
+            const u32 output=read_be32(request+24),no=read_be32(request+28);
+            u32 in_available=0,out_available=0;
+            const u8* in=ni ? gcn_mem_resolve(cpu,input,&in_available):NULL;
+            u8* out=no ? gcn_mem_resolve(cpu,output,&out_available):NULL;
+            if((ni && (!in || in_available<ni)) || (no && (!out || out_available<no))) {ios->result=-101;return 1;}
+            if(!wii_fs_ioctl(ios->fs,ios->descriptors[fd]==5 ? (s32)ios->fs_handles[fd]:-1,
+                read_be32(request+12),in,ni,out,no,&ios->result))return 0;
+            /* Publish ARM-originated writes through the CPU bus so executable
+             * caches and reservations observe the same changes as PPC stores.
+             * Implemented FS ioctls write at most74 bytes. */
+            if(!ios->result)for(u32 n=0;n<no && n<74;n++)mem_write8_cia(cpu,output+n,out[n],cpu->pc);
+            return 1;
+        }
+        if(ios->descriptors[fd]==5 && (ios->command==3 || ios->command==4)) {
+            const u32 size=read_be32(request+16),address=read_be32(request+12);
+            u8* data=gcn_mem_resolve(cpu,address,&available);
+            if(size && (!data || available<size)) {ios->result=-101;return 1;}
+            ios->result=ios->command==3 ? wii_fs_read(ios->fs,ios->fs_handles[fd],data,size):
+                wii_fs_write(ios->fs,ios->fs_handles[fd],data,size);
+            if(ios->command==3 && ios->result>0)
+                for(u32 n=0;n<(u32)ios->result;n++)mem_write8_cia(cpu,address+n,data[n],cpu->pc);
+            return 1;
+        }
+        if(ios->descriptors[fd]==5 && ios->command==5) {
+            ios->result=wii_fs_seek(ios->fs,ios->fs_handles[fd],read_be32(request+12),read_be32(request+16));return 1;
+        }
+    }
     if(ios->command==2) {
         if(ios->event_waiting && fd==ios->event_fd)return false;
         ios->result=-4;
-        if(fd<24 && ios->descriptors[fd]) {ios->descriptors[fd]=0;ios->result=0;}
+        if(fd<24 && ios->descriptors[fd]) {
+            ios->result=ios->descriptors[fd]==5 ? wii_fs_close(ios->fs,ios->fs_handles[fd]):0;
+            if(!ios->result)ios->descriptors[fd]=0;
+        }
         return true;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==2 && read_be32(request+12)==0x1000) {

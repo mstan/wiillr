@@ -38,8 +38,8 @@ static int dump(const char* path, const void* bytes, size_t size) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 5 && argc != 7) {
-        fprintf(stderr, "usage: wiillr-discover ORIGINAL-DOL MAX-STEPS MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF]\n"
+    if (argc != 5 && argc != 7 && argc != 8 && argc != 10) {
+        fprintf(stderr, "usage: wiillr-discover ORIGINAL-DOL MAX-STEPS MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID]\n"
                         "Discovery only; all guest instructions are interpreted. STOP-PC=0 disables.\n");
         return 2;
     }
@@ -79,15 +79,27 @@ int main(int argc, char** argv) {
     cpu.spr[287] = PPC_BROADWAY_PVR;
     WiiMachine machine;
     wii_machine_init(&machine, &cpu);
+    if(argc==8 || argc==10) {
+        errno=0;unsigned long uid=strtoul(argv[argc-2],&end,10);
+        if(errno || *end || uid>0xfffffffful) {cpu_free(&cpu);return 2;}
+        errno=0;unsigned long gid=strtoul(argv[argc-1],&end,10);
+        if(errno || *end || gid>0xfffful) {cpu_free(&cpu);return 2;}
+#if WIILLR_IOS_NATIVE
+        machine.ios.fs=wii_fs_mount(argv[argc-3],(u32)uid,(u16)gid);
+        if(!machine.ios.fs) {fprintf(stderr,"invalid copied NAND profile\n");cpu_free(&cpu);return 2;}
+#else
+        fprintf(stderr,"filesystem needs the build-selected native IOS provider\n");cpu_free(&cpu);return 2;
+#endif
+    }
     u8 irom[8192], coef[4096];
-    if (argc == 7) {
+    if (argc == 7 || argc==10) {
         FILE* rom=fopen(argv[5], "rb");
         FILE* co=fopen(argv[6], "rb");
         bool loaded=rom && co && fread(irom,1,sizeof irom,rom)==sizeof irom &&
             fread(coef,1,sizeof coef,co)==sizeof coef;
         if (rom) fclose(rom);
         if (co) fclose(co);
-        if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {cpu_free(&cpu);return 2;}
+        if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
     }
     gcn_interpreter_set_cache_loop_batch_enabled(false);
     u64 steps = 0, exceptions = 0;
@@ -136,6 +148,7 @@ int main(int argc, char** argv) {
                (unsigned long long)stats.interpreter_instructions,(unsigned long long)stats.misses,stats.failed);
         wii_dsp_stop(&machine.dsp);
     }
+    wii_fs_unmount(machine.ios.fs);
     printf("{\"execution\":\"discovery-interpreter\",\"entry\":%u,\"pc\":%u,"
            "\"steps\":%llu,\"interpreter_instructions\":%llu,\"unique_native_misses\":%llu,"
            "\"cycles\":%llu,\"halted\":%s,\"stop_reached\":%s,\"mem1_saved\":%s}\n",

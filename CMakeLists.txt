@@ -38,6 +38,14 @@ add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/ipc.c src/dsp
   external/gc-wii-core/src/ai.c external/gc-wii-core/src/exi.c
   external/gc-wii-core/src/exi_cpu.c external/gc-wii-core/src/rtc.c
   external/gc-wii-core/src/memcard.c external/gc-wii-core/src/di.c external/gc-wii-core/src/si.c)
+add_library(wii_fs STATIC src/fs.cpp third_party/dolphin-ios-fs/FileSystemCommon.cpp
+  third_party/dolphin-ios-fs/FS.cpp third_party/dolphin-ios-fs/File.cpp third_party/dolphin-ios-fs/port.cpp)
+set_target_properties(wii_fs PROPERTIES CXX_STANDARD 23)
+target_include_directories(wii_fs PRIVATE third_party/dolphin-ios-fs PUBLIC include)
+target_link_libraries(wii_boot PUBLIC wii_fs)
+add_executable(test_wii_fs tests/test_fs.cpp)
+target_link_libraries(test_wii_fs PRIVATE wii_boot)
+add_test(NAME wii_nand_persistence COMMAND test_wii_fs "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(wii_boot PRIVATE GCNLLR_VI_DEVICE_ONLY=1)
 target_compile_definitions(wii_boot PUBLIC WIILLR_IOS_NATIVE=$<STREQUAL:${WIILLR_IOS},native-development>)
 target_include_directories(wii_boot PUBLIC include)

@@ -1,0 +1,132 @@
+/* SPDX-License-Identifier: MIT */
+#include "wiillr/fs.h"
+#include "FS.h"
+#include <fstream>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#undef CreateFile
+#undef CreateDirectory
+#endif
+namespace fs=std::filesystem;
+namespace nand=IOS::HLE::FS;
+struct WiiFs {
+  fs::path root;
+  nand::HostFileSystem backend;
+  uint32_t uid;
+  uint16_t gid;
+  WiiFs(const fs::path& p,uint32_t u,uint16_t g):root(p),backend(p.generic_string()),uid(u),gid(g){}
+};
+static int32_t result(nand::ResultCode code){return code==nand::ResultCode::Success?0:-100-int32_t(code);}
+template<class T> static int32_t result(const nand::Result<T>& r){return r?int32_t(*r):result(r.error());}
+static bool reparse(const fs::path& p) {
+#ifdef _WIN32
+  const DWORD a=GetFileAttributesW(p.c_str());
+  return a!=INVALID_FILE_ATTRIBUTES && (a&FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+  return fs::is_symlink(fs::symlink_status(p));
+#endif
+}
+static void check_path(WiiFs* s,const std::string& path) {
+  if(!nand::IsValidPath(path))throw std::invalid_argument("invalid NAND path");
+  if(path=="/")return;
+  fs::path host=s->root;
+  for(const auto& component:SplitString(path.substr(1),'/')) {
+    if(component.empty() || component=="." || component==".." || component.back()=='.' || component.back()==' ' ||
+       component.size()>nand::MaxFilenameLength)throw std::invalid_argument("invalid NAND component");
+    std::string stem=component.substr(0,component.find('.'));
+    std::ranges::transform(stem,stem.begin(),[](unsigned char c){return char(std::toupper(c));});
+    if(stem=="CON" || stem=="PRN" || stem=="AUX" || stem=="NUL" ||
+       (stem.size()==4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem[3]>='1' && stem[3]<='9'))
+      throw std::invalid_argument("reserved host component");
+    host/=Common::EscapePath(component);
+    if(reparse(host))throw std::invalid_argument("NAND reparse point");
+  }
+}
+static std::string path_param(WiiFs* s,const uint8_t* p,size_t n) {
+  if(!p || n<64 || !std::memchr(p,0,64))throw std::invalid_argument("invalid path buffer");
+  std::string path(reinterpret_cast<const char*>(p));check_path(s,path);return path;
+}
+static uint32_t be32(const uint8_t* p){return uint32_t(p[0])<<24|uint32_t(p[1])<<16|uint32_t(p[2])<<8|p[3];}
+static void put32(uint8_t* p,uint32_t v){for(int i=3;i>=0;--i){p[i]=uint8_t(v);v>>=8;}}
+extern "C" WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid) {
+  try {
+    const fs::path p=fs::absolute(profile);
+    if(!fs::is_directory(p) || reparse(p))return nullptr;
+    std::ifstream marker(p/".wiillr-nand-profile");std::string magic;std::getline(marker,magic);
+    if(magic!="wiillr-copied-nand-v1")return nullptr;
+    for(auto part=p;!part.empty() && part!=part.root_path();part=part.parent_path())if(reparse(part))return nullptr;
+    for(const auto& e:fs::recursive_directory_iterator(p))if(reparse(e.path()))return nullptr;
+    return new WiiFs(p,uid,gid);
+  } catch(const std::exception& e){std::fprintf(stderr,"NAND mount: %s\n",e.what());return nullptr;}
+}
+extern "C" void wii_fs_unmount(WiiFs* s){delete s;}
+extern "C" bool wii_fs_boot_title(WiiFs* s,uint64_t* title) {
+  try {
+    File::IOFile users((s->root/"sys/uid.sys").generic_string(),"rb");
+    if(!users || users.GetSize()%12 || users.GetSize()>0x100000)return false;
+    uint8_t record[12];uint64_t found=0;unsigned matches=0;
+    while(users.ReadArray(record,12))if(be32(record+8)==s->uid) {found=uint64_t(be32(record))<<32|be32(record+4);++matches;}
+    if(matches!=1)return false;
+    char path[80];std::snprintf(path,sizeof path,"/title/%08x/%08x/content/title.tmd",uint32_t(found>>32),uint32_t(found));
+    check_path(s,path);
+    File::IOFile tmd(s->root.generic_string()+path,"rb");
+    uint8_t signature[4],header[0xa4];if(!tmd || !tmd.ReadArray(signature,4))return false;
+    const uint32_t kind=be32(signature),base=kind==0x10000?0x240:kind==0x10001?0x140:kind==0x10002?0x80:0;
+    if(!base || !tmd.Seek(base,File::SeekOrigin::Begin) || !tmd.ReadArray(header,sizeof header))return false;
+    const uint64_t tmd_title=uint64_t(be32(header+0x4c))<<32|be32(header+0x50);
+    if(found!=tmd_title || uint16_t(header[0x58]<<8|header[0x59])!=s->gid)return false;
+    *title=found;return true;
+  }catch(...){return false;}
+}
+extern "C" int32_t wii_fs_open(WiiFs* s,const char* path,uint32_t mode) {
+  try {
+    check_path(s,path);if(mode<1 || mode>3)return -101;
+    const auto metadata=s->backend.GetMetadata(s->uid,s->gid,path);
+    if(!metadata)return result(metadata.error());
+    const auto allowed=s->uid==0?3:uint8_t(metadata->uid==s->uid?metadata->modes.owner:metadata->gid==s->gid?metadata->modes.group:metadata->modes.other);
+    if((allowed&mode)!=mode)return -102;
+    auto opened=s->backend.OpenFile(s->uid,s->gid,path,nand::Mode(mode));
+    return opened?int32_t(opened->Release()):result(opened.error());
+  }catch(const std::invalid_argument&){return -101;}catch(const std::exception&){return -117;}
+}
+extern "C" int32_t wii_fs_close(WiiFs* s,uint32_t fd){try{return result(s->backend.Close(fd));}catch(...){return -117;}}
+extern "C" int32_t wii_fs_read(WiiFs* s,uint32_t fd,uint8_t* p,uint32_t n){try{return result(s->backend.ReadBytesFromFile(fd,p,n));}catch(...){return -117;}}
+extern "C" int32_t wii_fs_write(WiiFs* s,uint32_t fd,const uint8_t* p,uint32_t n){try{return result(s->backend.WriteBytesToFile(fd,p,n));}catch(...){return -117;}}
+extern "C" int32_t wii_fs_seek(WiiFs* s,uint32_t fd,uint32_t at,uint32_t mode){try{return result(s->backend.SeekFile(fd,at,nand::SeekMode(mode)));}catch(...){return -117;}}
+extern "C" bool wii_fs_ioctl(WiiFs* s,int32_t fd,uint32_t command,const uint8_t* in,uint32_t ni,uint8_t* out,uint32_t no,int32_t* r) {
+  *r=-101;
+  try {
+    if(command==11) {
+      if(fd<0 || no<8 || !out)return true;
+      auto status=s->backend.GetFileStatus(uint32_t(fd));if(!status){*r=result(status.error());return true;}
+      put32(out,status->size);put32(out+4,status->offset);*r=0;return true;
+    }
+    if(fd>=0)return false;
+    if(command==2) {
+      if(no<28 || !out)return true;
+      auto stats=s->backend.GetNandStats();if(!stats){*r=result(stats.error());return true;}
+      const uint32_t values[]={stats->cluster_size,stats->free_clusters,stats->used_clusters,stats->bad_clusters,stats->reserved_clusters,stats->free_inodes,stats->used_inodes};
+      for(unsigned i=0;i<7;++i)put32(out+4*i,values[i]);*r=0;return true;
+    }
+    if(command==3 || command==5 || command==9) {
+      if(ni<74 || !in)return true;
+      const auto path=path_param(s,in+6,ni-6);
+      if(in[70]>3 || in[71]>3 || in[72]>3)return true;
+      const nand::Modes modes{nand::Mode(in[70]),nand::Mode(in[71]),nand::Mode(in[72])};
+      if(command==3)*r=result(s->backend.CreateDirectory(s->uid,s->gid,path,in[73],modes));
+      if(command==9)*r=result(s->backend.CreateFile(s->uid,s->gid,path,in[73],modes));
+      if(command==5)*r=result(s->backend.SetMetadata(s->uid,path,be32(in),uint16_t(in[4]<<8|in[5]),in[73],modes));
+      return true;
+    }
+    if(command==6) {
+      if(no<74 || !out)return true;const auto path=path_param(s,in,ni);
+      auto m=s->backend.GetMetadata(s->uid,s->gid,path);if(!m){*r=result(m.error());return true;}
+      std::memset(out,0,74);put32(out,m->uid);out[4]=uint8_t(m->gid>>8);out[5]=uint8_t(m->gid);
+      out[70]=uint8_t(m->modes.owner);out[71]=uint8_t(m->modes.group);out[72]=uint8_t(m->modes.other);out[73]=m->attribute;*r=0;return true;
+    }
+    if(command==7){*r=result(s->backend.Delete(s->uid,s->gid,path_param(s,in,ni)));return true;}
+    if(command==8){if(ni<128)return true;auto a=path_param(s,in,ni);auto b=path_param(s,in+64,ni-64);*r=result(s->backend.Rename(s->uid,s->gid,a,b));return true;}
+    return false;
+  } catch(const std::invalid_argument&){return true;}catch(const std::exception& e){std::fprintf(stderr,"NAND operation: %s\n",e.what());*r=-117;return true;}
+}
