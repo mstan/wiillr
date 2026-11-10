@@ -4,3 +4,6 @@
 [submodule "external/gc-wii-core"]
 	path = external/gc-wii-core
 	url = git@github.com:mstan/gc-wii-core.git
+[submodule "external/arm-recomp-core"]
+	path = external/arm-recomp-core
+	url = git@github.com:mstan/arm-recomp-core.git

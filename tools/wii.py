@@ -50,9 +50,13 @@ def discover(args):
                GCN_INTERP_BLOB_DIR=str(work / 'pages'))
     if os.name == 'nt':
         env['PATH'] = r'C:\msys64\mingw64\bin' + os.pathsep + env.get('PATH', '')
-    command = [str(executable), str(content), str(args.steps), str(work / 'mem1.bin'), hex(args.stop_pc)]
+    starlet = args.processor == 'starlet'
+    command = ([str(executable), str(ios_content), str(args.steps)] if starlet else
+               [str(executable), str(content), str(args.steps), str(work / 'mem1.bin'), hex(args.stop_pc)])
     if bool(args.dsp_rom) != bool(args.dsp_coef):
         raise ValueError('Supply both DSP ROM and coefficient files')
+    if starlet and (args.dsp_rom or args.stop_pc):
+        raise ValueError('DSP ROM/stop-PC options belong to PPC discovery')
     paths = dict(executable=executable, content=content, tmd=tmd, ios_content=ios_content, ios_tmd=ios_tmd)
     if args.dsp_rom:
         if args.dsp_rom.stat().st_size != 8192 or args.dsp_coef.stat().st_size != 4096:
@@ -60,9 +64,11 @@ def discover(args):
         paths.update(dsp_rom=args.dsp_rom, dsp_coef=args.dsp_coef)
         command += [str(args.dsp_rom.resolve()), str(args.dsp_coef.resolve())]
     before = {name: identity(path) for name,path in paths.items()}
-    receipt = dict(inputs=before, title=metadata, command=command, boot_profile='native-ios4-v3-memory-contract',
-                   execution='discovery-interpreter', accepted=False,
-                   boundary='NAND boot-content PPC entry; boot0/1/2 and IOS execution excluded')
+    receipt = dict(inputs=before, title=metadata, command=command,
+                   boot_profile='ios4-v3-elf-kernel-entry' if starlet else 'native-ios4-v3-memory-contract',
+                   execution='ARM-discovery-interpreter' if starlet else 'PPC-discovery-interpreter', accepted=False,
+                   boundary=('IOS ELF kernel entry; boot0/1/2 and PPC execution excluded' if starlet else
+                             'NAND boot-content PPC entry; boot0/1/2 and IOS execution excluded'))
     (work / 'run.json').write_text(json.dumps(receipt, indent=2) + '\n')
     with (work / 'host.log').open('xb') as log:
         result = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -82,6 +88,7 @@ def discover(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--nand', type=Path, required=True)
+    p.add_argument('--processor', choices=('ppc', 'starlet'), default='ppc')
     p.add_argument('--title', default='0000000100000002')
     p.add_argument('--executable', type=Path, required=True)
     p.add_argument('--work-root', type=Path, required=True)

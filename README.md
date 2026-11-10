@@ -29,6 +29,14 @@ AOT catalogs remain separate builds. DSP ROMs/coefficient data must be supplied
 locally. Rendering, audio delivery, IOS services and title compatibility remain
 in progress.
 
+`wiillr-starlet-discover` loads the original IOS4 ARM ELF at its kernel-entry
+boundary using the pinned ARM core. Its development bus covers big-endian
+MEM1/MEM2/SRAM, CP15 cache maintenance and ARMv5 section/page translation with
+domain/access checks. PPC execution is excluded from this isolated route;
+programmed PPC protection bounds still need enforcement in a combined machine.
+Unimplemented hardware and exception routing stop discovery. It does not
+establish a working IOS service provider or accepted static ARM execution.
+
 ## Inspect private inputs
 
 Supply firmware, NAND, keys and title content locally. `private/` is excluded
