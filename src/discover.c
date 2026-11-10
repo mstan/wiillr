@@ -41,7 +41,31 @@ static int dump(const char* path, const void* bytes, size_t size) {
     return ok;
 }
 
+typedef struct {u64 at;WiiBluetoothInput input;} InputEvent;
+static int load_inputs(InputEvent* events,unsigned capacity) {
+    const char* path=getenv("WIILLR_INPUT_SCRIPT");if(!path)return 0;
+    FILE* file=fopen(path,"rb");if(!file)return -1;
+    unsigned count=0;char line[192];bool valid=true;
+    while(fgets(line,sizeof line,file)) {
+        if(line[0]=='#' || line[0]=='\n' || line[0]=='\r')continue;
+        unsigned long long at;unsigned buttons,present=1,pairing=0;char extra;
+        const int fields=sscanf(line,"%llu %x %u %u %c",&at,&buttons,&present,&pairing,&extra);
+        if((fields<2 || fields>4) || count==capacity || present>1 || pairing>1 || (buttons&~0x9f1fu) ||
+           (count && at<events[count-1].at)){valid=false;break;}
+        events[count++]=(InputEvent){at,{(u16)buttons,{512,512,616},512,384,false,present!=0,pairing!=0}};
+    }
+    if(ferror(file))valid=false;fclose(file);return valid?(int)count:-1;
+}
 int main(int argc, char** argv) {
+    InputEvent inputs[1024];const int input_count=load_inputs(inputs,1024);
+    if(input_count<0){fprintf(stderr,"invalid virtual remote input script\n");return 2;}
+    u64 sync_at=0;bool sync_pending=false;
+    const char* sync_text=getenv("WIILLR_SYNC_CYCLES");
+    if(sync_text) {
+        char* tail;errno=0;sync_at=strtoull(sync_text,&tail,10);
+        if(errno || !*sync_text || *tail){fprintf(stderr,"invalid Sync-button cycle\n");return 2;}
+        sync_pending=true;
+    }
     u32 ios_profile=4;
     if(argc>=3 && !strcmp(argv[argc-2],"--ios-profile")) {
         if(!strcmp(argv[argc-1],"4"))ios_profile=4;
@@ -65,7 +89,7 @@ int main(int argc, char** argv) {
     char* end;
     errno = 0;
     u64 limit = strtoull(argv[2], &end, 0);
-    if (errno || *end || !limit || limit > 5000000000ull) return 2;
+    if (errno || *end || !limit || limit > 50000000000ull) return 2;
     errno = 0;
     unsigned long stop = strtoul(argv[4], &end, 0);
     if (errno || *end || stop > 0xfffffffful || (stop & 3)) return 2;
@@ -135,7 +159,8 @@ int main(int argc, char** argv) {
 #if WIILLR_PPC_STATIC
     wii_native_install();
 #endif
-    u64 steps = 0, exceptions = 0;
+    u64 steps = 0, exceptions = 0;unsigned input_next=0;bool input_pending=false;
+    WiiBluetoothInput input_state={0};
     while (
 #if WIILLR_PPC_STATIC
            cpu.cycles < limit &&
@@ -144,6 +169,20 @@ int main(int argc, char** argv) {
 #endif
            !cpu.halted && (!stop || cpu.pc != stop)) {
         u32 cia = cpu.pc;
+        if(sync_pending && cpu.cycles>=sync_at && machine.ios.bluetooth) {
+            if(!wii_bluetooth_press_sync(machine.ios.bluetooth)){cpu.halted=true;break;}
+            fprintf(stderr,"console Sync button cycles=%llu\n",(unsigned long long)cpu.cycles);
+            sync_pending=false;
+        }
+        while(input_next<(unsigned)input_count && inputs[input_next].at<=cpu.cycles) {
+            input_state=inputs[input_next++].input;input_pending=true;
+        }
+        if(input_pending && machine.ios.bluetooth) {
+            if(!wii_bluetooth_set_input(machine.ios.bluetooth,&input_state)){cpu.halted=true;break;}
+            fprintf(stderr,"virtual remote input cycles=%llu buttons=%04x present=%u\n",
+                    (unsigned long long)cpu.cycles,input_state.buttons,input_state.present);
+            input_pending=false;
+        }
 #if WIILLR_PPC_STATIC
         cpu.cycle_deadline=cpu.cycles+64;
         if(!wii_native_call(&cpu,cia)) {
@@ -197,6 +236,12 @@ int main(int argc, char** argv) {
     printf("{\"ave_transactions\":%llu,\"ave_register_writes\":%llu,\"ave_failed\":%s}\n",
            (unsigned long long)machine.ave.transactions,(unsigned long long)machine.ave.writes,
            machine.ave.failed ? "true":"false");
+    printf("{\"ppc_msr\":%u,\"ppc_lr\":%u,\"pi_cause\":%u,\"pi_mask\":%u,\"pe_token_pending\":%d,\"pe_finish_pending\":%d,\"gp_staged\":%u,\"cp_distance\":%u,\"vi_control\":%u,\"vi_irq\":%d,\"vi_halfline\":%u,\"vi_di\":[%u,%u,%u,%u]}\n",
+           cpu.msr,cpu.lr,machine.pi.reg[0],machine.pi.reg[1],machine.pe.signal_token_interrupt,
+           machine.pe.signal_finish_interrupt,machine.gp.count,gcn_cp_fifo_rw_distance(&machine.cp),
+           machine.vi.reg[GCN_VI_DCR>>1],machine.vi.irq_level,machine.vi.half_line_count,
+           (u32)machine.vi.reg[0x18]<<16|machine.vi.reg[0x19],(u32)machine.vi.reg[0x1a]<<16|machine.vi.reg[0x1b],
+           (u32)machine.vi.reg[0x1c]<<16|machine.vi.reg[0x1d],(u32)machine.vi.reg[0x1e]<<16|machine.vi.reg[0x1f]);
     printf("{\"audio_dma_frames\":%llu,\"audio_dma_nonzero_bytes\":%llu,\"audio_output\":\"unattached\"}\n",
            (unsigned long long)machine.dsp.audio_frames,(unsigned long long)machine.dsp.audio_nonzero_bytes);
     if (machine.dsp.engine) {
@@ -206,8 +251,8 @@ int main(int argc, char** argv) {
                (unsigned long long)stats.interpreter_instructions,(unsigned long long)stats.misses,stats.failed);
         wii_dsp_stop(&machine.dsp);
     }
-    wii_fs_unmount(machine.ios.fs);
     wii_ios_native_destroy(&machine.ios);
+    wii_fs_unmount(machine.ios.fs);
     if(gx.api) {
         GcnllrNativeGxStatus status={0};gx.api->drain();gx.api->status(&status);
         printf("{\"gx_fifo_bytes\":%llu,\"gx_draws\":%llu,\"gx_display_copies\":%llu,\"gx_presents\":%llu,\"gx_failed\":%u}\n",

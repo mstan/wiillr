@@ -4,6 +4,7 @@
 #include "port.h"
 #include "hci.h"
 #include "WiimoteDevice.h"
+#include "Remote.h"
 namespace IOS::HLE {
 struct SQueuedEvent
 {
@@ -24,18 +25,29 @@ class BluetoothEmuDevice final
 public:
   static constexpr int ACL_PKT_SIZE=339,ACL_PKT_NUM=10,SCO_PKT_SIZE=64,SCO_PKT_NUM=0;
   enum USBEndpoint {HCI_CTRL=0,HCI_EVENT=0x81,ACL_DATA_IN=0x82,ACL_DATA_OUT=2};
-  explicit BluetoothEmuDevice(CPUState* cpu);
+  explicit BluetoothEmuDevice(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store=nullptr);
+  void SetInput(const WiiBluetoothInput&);
+  void PressSync();
   System& GetSystem() {return m_system;}
   EmulationKernel& GetEmulationKernel() {return m_kernel;}
   void Submit(u32 message);
   bool Poll(u32* message,s32* result);
-  bool SensorBarEnabled() const {return false;}
+  bool SensorBarEnabled() const {return gpio_out && (*gpio_out&0x100u);}
   void ResetController();
   void ValidateCommand(const USB::V0CtrlMessage&);
-  bool ReadConfiguration(u16 opcode);
+  bool ReadConfiguration(u16 opcode,u32 parameters);
   std::map<u16,std::vector<u8>> controller_config;
+  struct LinkSettings {u16 policy=0,packet_type=0,supervision_timeout=0x7d00,sniff_interval=0;u8 mode=0,auth_pending=0;bool authenticated=false;u64 last_input=0;};
+  std::map<u16,LinkSettings> link_settings;
+  LinkSettings& Link(u16 handle);
+  std::map<bdaddr_t,WiimoteDevice::LinkKeyType> stored_keys;
+  WiiBluetoothStore store{};
+  void LoadPairings();
+  void SavePairings();
   System m_system;
   EmulationKernel m_kernel{m_system};
+  const u32* gpio_out;
+  std::unique_ptr<WiimoteCommon::NativeRemote> input_source;
 
   ~BluetoothEmuDevice();
 
@@ -119,7 +131,7 @@ private:
   bool SendEventReadRemoteFeatures(u16 connection_handle);
   bool SendEventRoleChange(bdaddr_t bd, bool master);
   bool SendEventNumberOfCompletedPackets();
-  bool SendEventAuthenticationCompleted(u16 connection_handle);
+  bool SendEventAuthenticationCompleted(u16 connection_handle,u8 status);
   bool SendEventModeChange(u16 connection_handle, u8 mode, u16 value);
   bool SendEventDisconnect(u16 connection_handle, u8 reason);
   bool SendEventRequestLinkKey(const bdaddr_t& bd);
@@ -140,11 +152,13 @@ private:
   void CommandReadRemoteVerInfo(u32 input_address);
   void CommandReadRemoteFeatures(u32 input_address);
   void CommandAuthenticationRequested(u32 input_address);
+  void CommandPinReply(u32 input_address,bool negative);
   void CommandInquiry(u32 input_address);
   void CommandDisconnect(u32 input_address);
   void CommandLinkKeyNegRep(u32 input_address);
   void CommandLinkKeyRep(u32 input_address);
   void CommandDeleteStoredLinkKey(u32 input_address);
+  void CommandWriteStoredLinkKey(u32 input_address);
   void CommandChangeConPacketType(u32 input_address);
 
   // OGF 0x02 - Link policy commands and return parameters

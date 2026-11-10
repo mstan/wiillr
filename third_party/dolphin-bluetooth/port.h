@@ -39,7 +39,10 @@ inline u16 swap16(const void* p){const auto* b=static_cast<const u8*>(p);return 
 inline u32 swap32(const void* p){const auto* b=static_cast<const u8*>(p);return u32(b[0])<<24|u32(b[1])<<16|u32(b[2])<<8|b[3];}
 }
 namespace WiimoteCommon {struct ButtonData {u16 hex=0;static constexpr u16 BUTTON_MASK=0x9f1f;};}
-namespace WiimoteEmu {struct DesiredWiimoteState {WiimoteCommon::ButtonData buttons;};}
+namespace WiimoteEmu {struct DesiredWiimoteState {
+  WiimoteCommon::ButtonData buttons;std::array<u16,3> accel{512,512,616};
+  u16 pointer_x=512,pointer_y=384;bool pointing=false;
+};}
 namespace WiimoteCommon {
 constexpr u8 HID_TYPE_HANDSHAKE=0,HID_TYPE_SET_REPORT=5,HID_TYPE_DATA=10;
 constexpr u8 HID_HANDSHAKE_SUCCESS=0,HID_PARAM_INPUT=1,HID_PARAM_OUTPUT=2;

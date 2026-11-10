@@ -7,6 +7,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <random>
 
 
 #include "port.h"
@@ -176,7 +177,7 @@ bool BluetoothEmuDevice::SendEventDisconnect(u16 connection_handle, u8 reason)
   return true;
 }
 
-bool BluetoothEmuDevice::SendEventAuthenticationCompleted(u16 connection_handle)
+bool BluetoothEmuDevice::SendEventAuthenticationCompleted(u16 connection_handle,u8 status)
 {
   WiimoteDevice* wiimote = AccessWiimote(connection_handle);
   if (wiimote == nullptr)
@@ -188,7 +189,7 @@ bool BluetoothEmuDevice::SendEventAuthenticationCompleted(u16 connection_handle)
       (SHCIEventAuthenticationCompleted*)event.buffer;
   event_authentication_completed->EventType = HCI_EVENT_AUTH_COMPL;
   event_authentication_completed->PayloadLength = sizeof(SHCIEventAuthenticationCompleted) - 2;
-  event_authentication_completed->EventStatus = 0;
+  event_authentication_completed->EventStatus = status;
   event_authentication_completed->Connection_Handle = connection_handle;
 
   DEBUG_LOG_FMT(IOS_WIIMOTE, "Event: SendEventAuthenticationCompleted");
@@ -693,13 +694,19 @@ void BluetoothEmuDevice::ExecuteHCICommandMessage(const USB::V0CtrlMessage& ctrl
   case HCI_CMD_LINK_KEY_REP:
     CommandLinkKeyRep(input_address);
     break;
+  case HCI_CMD_PIN_CODE_REP:case HCI_CMD_PIN_CODE_NEG_REP:
+    CommandPinReply(input_address,msg.Opcode==HCI_CMD_PIN_CODE_NEG_REP);
+    break;
 
   case HCI_CMD_DELETE_STORED_LINK_KEY:
     CommandDeleteStoredLinkKey(input_address);
     break;
+  case HCI_CMD_WRITE_STORED_LINK_KEY:
+    CommandWriteStoredLinkKey(input_address);
+    break;
 
   default:
-    if(!ReadConfiguration(msg.Opcode))throw std::runtime_error("Unsupported Bluetooth HCI opcode");
+    if(!ReadConfiguration(msg.Opcode,input_address))throw std::runtime_error("Unsupported Bluetooth HCI opcode");
     break;
   }
 
@@ -840,6 +847,10 @@ void BluetoothEmuDevice::CommandLinkKeyRep(u32 input_address)
 
   hci_link_key_rep_cp key_rep;
   memory.CopyFromEmu(&key_rep, input_address, sizeof(key_rep));
+  auto* remote=AccessWiimote(key_rep.bdaddr);
+  if(!remote)throw std::runtime_error("Unknown Bluetooth key reply address");
+  auto& link=Link(GetConnectionHandle(key_rep.bdaddr));
+  if(link.auth_pending!=1)throw std::runtime_error("Unexpected Bluetooth link-key reply");
 
   INFO_LOG_FMT(IOS_WIIMOTE, "Command: HCI_CMD_LINK_KEY_REP");
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  bd: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", key_rep.bdaddr[0],
@@ -851,6 +862,9 @@ void BluetoothEmuDevice::CommandLinkKeyRep(u32 input_address)
   reply.bdaddr = key_rep.bdaddr;
 
   SendEventCommandComplete(HCI_CMD_LINK_KEY_REP, &reply, sizeof(hci_link_key_rep_rp));
+  link.auth_pending=0;
+  link.authenticated=remote->HasLinkKey() && std::equal(std::begin(key_rep.key),std::end(key_rep.key),remote->GetLinkKey().begin());
+  SendEventAuthenticationCompleted(GetConnectionHandle(key_rep.bdaddr),link.authenticated?0:5);
 }
 
 void BluetoothEmuDevice::CommandLinkKeyNegRep(u32 input_address)
@@ -860,6 +874,10 @@ void BluetoothEmuDevice::CommandLinkKeyNegRep(u32 input_address)
 
   hci_link_key_neg_rep_cp key_neg;
   memory.CopyFromEmu(&key_neg, input_address, sizeof(key_neg));
+  auto* remote=AccessWiimote(key_neg.bdaddr);
+  if(!remote)throw std::runtime_error("Unknown Bluetooth key reply address");
+  auto& link=Link(GetConnectionHandle(key_neg.bdaddr));
+  if(link.auth_pending!=1)throw std::runtime_error("Unexpected Bluetooth negative-key reply");
 
   INFO_LOG_FMT(IOS_WIIMOTE, "Command: HCI_CMD_LINK_KEY_NEG_REP");
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  bd: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", key_neg.bdaddr[0],
@@ -871,6 +889,12 @@ void BluetoothEmuDevice::CommandLinkKeyNegRep(u32 input_address)
   reply.bdaddr = key_neg.bdaddr;
 
   SendEventCommandComplete(HCI_CMD_LINK_KEY_NEG_REP, &reply, sizeof(hci_link_key_neg_rep_rp));
+  if(!remote->IsPairing()) {
+    link.auth_pending=0;SendEventAuthenticationCompleted(GetConnectionHandle(key_neg.bdaddr),6);return;
+  }
+  link.auth_pending=2;
+  SQueuedEvent event(8,GetConnectionHandle(key_neg.bdaddr));event.buffer[0]=HCI_EVENT_PIN_CODE_REQ;event.buffer[1]=6;
+  std::copy(key_neg.bdaddr.begin(),key_neg.bdaddr.end(),event.buffer+2);AddEventToQueue(event);
 }
 
 void BluetoothEmuDevice::CommandChangeConPacketType(u32 input_address)
@@ -880,6 +904,7 @@ void BluetoothEmuDevice::CommandChangeConPacketType(u32 input_address)
 
   hci_change_con_pkt_type_cp change_packet_type;
   memory.CopyFromEmu(&change_packet_type, input_address, sizeof(change_packet_type));
+  Link(change_packet_type.con_handle).packet_type=change_packet_type.pkt_type;
 
   // ntd stack sets packet type 0xcc18, which is HCI_PKT_DH5 | HCI_PKT_DM5 | HCI_PKT_DH1 |
   // HCI_PKT_DM1
@@ -899,12 +924,39 @@ void BluetoothEmuDevice::CommandAuthenticationRequested(u32 input_address)
 
   hci_auth_req_cp auth_req;
   memory.CopyFromEmu(&auth_req, input_address, sizeof(auth_req));
+  auto& link=Link(auth_req.con_handle);
+  if(link.auth_pending)throw std::runtime_error("Overlapping Bluetooth authentication");
 
   INFO_LOG_FMT(IOS_WIIMOTE, "Command: HCI_CMD_AUTH_REQ");
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  ConnectionHandle: {:#06x}", auth_req.con_handle);
 
   SendEventCommandStatus(HCI_CMD_AUTH_REQ);
-  SendEventAuthenticationCompleted(auth_req.con_handle);
+  link.authenticated=false;link.auth_pending=1;
+  SendEventRequestLinkKey(AccessWiimote(auth_req.con_handle)->GetBD());
+}
+
+void BluetoothEmuDevice::CommandPinReply(u32 address,bool negative)
+{
+  hci_pin_code_rep_cp pin{};
+  m_system.memory.CopyFromEmu(&pin,address,negative?6:sizeof pin);
+  auto* remote=AccessWiimote(pin.bdaddr);
+  if(!remote)throw std::runtime_error("Unknown Bluetooth PIN address");
+  const u16 handle=GetConnectionHandle(pin.bdaddr);auto& link=Link(handle);
+  if(link.auth_pending!=2)throw std::runtime_error("Unexpected Bluetooth PIN reply");
+  const hci_pin_code_rep_rp reply{0,pin.bdaddr};
+  SendEventCommandComplete(negative?HCI_CMD_PIN_CODE_NEG_REP:HCI_CMD_PIN_CODE_REP,&reply,sizeof reply);
+  link.auth_pending=0;
+  const bool valid=!negative && remote->IsPairing() && pin.pin_size==6 &&
+    std::equal(m_controller_bd.begin(),m_controller_bd.end(),pin.pin);
+  if(!valid){SendEventAuthenticationCompleted(handle,5);return;}
+  // Native virtual endpoints exchange a fresh remote unit key only after
+  // matching the console-address PIN. This models pairing, not BCM radio crypto.
+  WiimoteDevice::LinkKeyType key{};std::random_device entropy;
+  for(auto& byte:key)byte=u8(entropy());remote->SetLinkKey(key);SavePairings();
+  SQueuedEvent event(25,handle);event.buffer[0]=HCI_EVENT_LINK_KEY_NOTIFICATION;event.buffer[1]=23;
+  std::copy(pin.bdaddr.begin(),pin.bdaddr.end(),event.buffer+2);std::copy(key.begin(),key.end(),event.buffer+8);
+  event.buffer[24]=HCI_LINK_KEY_TYPE_REMOTE_UNIT_KEY;AddEventToQueue(event);
+  link.authenticated=true;SendEventAuthenticationCompleted(handle,0);
 }
 
 void BluetoothEmuDevice::CommandRemoteNameReq(u32 input_address)
@@ -979,6 +1031,12 @@ void BluetoothEmuDevice::CommandSniffMode(u32 input_address)
 
   hci_sniff_mode_cp sniff_mode;
   memory.CopyFromEmu(&sniff_mode, input_address, sizeof(sniff_mode));
+  auto& link=Link(sniff_mode.con_handle);
+  if(!(link.policy&4) || sniff_mode.min_interval<2 || sniff_mode.min_interval>sniff_mode.max_interval ||
+     !sniff_mode.attempt)throw std::runtime_error("Invalid Bluetooth sniff-mode request");
+  const u16 interval=sniff_mode.max_interval&~1u;
+  if(interval<sniff_mode.min_interval)throw std::runtime_error("Invalid Bluetooth sniff interval");
+  link.mode=2;link.sniff_interval=interval;
 
   INFO_LOG_FMT(IOS_WIIMOTE, "Command: HCI_CMD_SNIFF_MODE");
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  ConnectionHandle: {:#06x}", sniff_mode.con_handle);
@@ -988,7 +1046,7 @@ void BluetoothEmuDevice::CommandSniffMode(u32 input_address)
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  timeout: {} msec", sniff_mode.timeout * 1.25);
 
   SendEventCommandStatus(HCI_CMD_SNIFF_MODE);
-  SendEventModeChange(sniff_mode.con_handle, 0x02, sniff_mode.max_interval);  // 0x02 - sniff mode
+  SendEventModeChange(sniff_mode.con_handle, 0x02, interval);
 }
 
 void BluetoothEmuDevice::CommandWriteLinkPolicy(u32 input_address)
@@ -998,12 +1056,15 @@ void BluetoothEmuDevice::CommandWriteLinkPolicy(u32 input_address)
 
   hci_write_link_policy_settings_cp link_policy;
   memory.CopyFromEmu(&link_policy, input_address, sizeof(link_policy));
+  if(link_policy.settings&~0x000fu)throw std::runtime_error("Unknown Bluetooth link policy");
+  Link(link_policy.con_handle).policy=link_policy.settings;
 
   INFO_LOG_FMT(IOS_WIIMOTE, "Command: HCI_CMD_WRITE_LINK_POLICY_SETTINGS");
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  ConnectionHandle: {:#06x}", link_policy.con_handle);
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  Policy: {:#06x}", link_policy.settings);
 
-  SendEventCommandStatus(HCI_CMD_WRITE_LINK_POLICY_SETTINGS);
+  const hci_write_link_policy_settings_rp reply{0,link_policy.con_handle};
+  SendEventCommandComplete(HCI_CMD_WRITE_LINK_POLICY_SETTINGS,&reply,sizeof reply);
 }
 
 void BluetoothEmuDevice::CommandReset(u32 input_address)
@@ -1055,9 +1116,17 @@ void BluetoothEmuDevice::CommandReadStoredLinkKey(u32 input_address)
   reply.status = 0x00;
   reply.num_keys_read = 0;
   reply.max_num_keys = 255;
-
-  // This virtual controller starts with an empty real pairing-key store.
-  // A remote's synthetic identity does not establish a stored pairing.
+  if(read_stored_link_key.read_all>1)throw std::runtime_error("Invalid Bluetooth stored-key selector");
+  std::vector<u8> selected;
+  for(const auto& [bd,key]:stored_keys)if(read_stored_link_key.read_all || bd==read_stored_link_key.bdaddr) {
+    selected.insert(selected.end(),bd.begin(),bd.end());selected.insert(selected.end(),key.begin(),key.end());
+    ++reply.num_keys_read;
+  }
+  if(reply.num_keys_read) {
+    SQueuedEvent event(u32(selected.size()+3),0);event.buffer[0]=HCI_EVENT_RETURN_LINK_KEYS;
+    event.buffer[1]=u8(selected.size()+1);event.buffer[2]=u8(reply.num_keys_read);
+    std::copy(selected.begin(),selected.end(),event.buffer+3);AddEventToQueue(event);
+  }
 
   INFO_LOG_FMT(IOS_WIIMOTE, "Command: HCI_CMD_READ_STORED_LINK_KEY:");
   DEBUG_LOG_FMT(IOS_WIIMOTE, "input:");
@@ -1089,17 +1158,32 @@ void BluetoothEmuDevice::CommandDeleteStoredLinkKey(u32 input_address)
                 delete_stored_link_key.bdaddr[4], delete_stored_link_key.bdaddr[5]);
   DEBUG_LOG_FMT(IOS_WIIMOTE, "  delete_all: {:#x}", delete_stored_link_key.delete_all);
 
-  // No keys have been installed in this controller's store.
-
   hci_delete_stored_link_key_rp reply;
   reply.status = 0x00;
-  reply.num_keys_deleted = 0;
+  if(delete_stored_link_key.delete_all>1)throw std::runtime_error("Invalid Bluetooth delete-key selector");
+  reply.num_keys_deleted=delete_stored_link_key.delete_all?u16(stored_keys.size()):u16(stored_keys.count(delete_stored_link_key.bdaddr));
+  if(delete_stored_link_key.delete_all)stored_keys.clear();else stored_keys.erase(delete_stored_link_key.bdaddr);
+  SavePairings();
 
   SendEventCommandComplete(HCI_CMD_DELETE_STORED_LINK_KEY, &reply,
                            sizeof(hci_delete_stored_link_key_rp));
 
   ERROR_LOG_FMT(IOS_WIIMOTE, "HCI: CommandDeleteStoredLinkKey... Probably the security for linking "
                              "has failed. Could be a problem with loading the SCONF");
+}
+
+void BluetoothEmuDevice::CommandWriteStoredLinkKey(u32 address)
+{
+  const u8 count=m_system.memory.Read_U8(address);
+  std::map<bdaddr_t,WiimoteDevice::LinkKeyType> update;
+  for(unsigned n=0;n<count;n++) {
+    hci_link_key_rep_cp record{};m_system.memory.CopyFromEmu(&record,address+1+22*n,sizeof record);
+    if(!AccessWiimote(record.bdaddr) || update.contains(record.bdaddr))throw std::runtime_error("Unsupported Bluetooth stored-key address");
+    WiimoteDevice::LinkKeyType key{};std::copy_n(record.key,16,key.begin());update[record.bdaddr]=key;
+  }
+  for(const auto& [bd,key]:update)stored_keys[bd]=key;SavePairings();
+  const hci_write_stored_link_key_rp reply{0,count};
+  SendEventCommandComplete(HCI_CMD_WRITE_STORED_LINK_KEY,&reply,sizeof reply);
 }
 
 void BluetoothEmuDevice::CommandWriteLocalName(u32 input_address)
@@ -1209,6 +1293,9 @@ void BluetoothEmuDevice::CommandWriteLinkSupervisionTimeout(u32 input_address)
 
   hci_write_link_supervision_timeout_cp supervision;
   memory.CopyFromEmu(&supervision, input_address, sizeof(supervision));
+  // A present virtual radio peer answers link probes. Removing the source
+  // disconnects the link; retain its selected supervision timeout for reads.
+  Link(supervision.con_handle).supervision_timeout=supervision.timeout;
 
   // timeout of 0 means timing out is disabled
   INFO_LOG_FMT(IOS_WIIMOTE, "Command: HCI_CMD_WRITE_LINK_SUPERVISION_TIMEOUT");

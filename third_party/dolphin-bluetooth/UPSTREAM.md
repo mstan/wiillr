@@ -11,12 +11,23 @@ binary is subject to these licenses. Original wiillr interfaces remain MIT.
 Adaptations remove Dolphin global machine, UI, input, netplay, movie and save-state
 dependencies. Memory and asynchronous replies use explicit consumer interfaces.
 Only implemented commands are admitted; unknown and vendor firmware operations
-stop execution. Reset clears modeled connections and queues. No SYSCONF is
+stop execution. Reset clears modeled connections and queues while preserving
+outstanding USB receive transfers. No SYSCONF is
 generated or overwritten by constructing the device. Controller report generation
 is a separate interface. This is source reuse, not a Dolphin executable launch.
 The native controller advertises firmware revision0 rather than claiming to run
 the donor's obsolete Broadcom ROM0x40a7. Broadcom firmware uploads are unsupported;
-the native provider owns the controller behavior. Stored pairing keys start empty.
+the native provider owns the controller behavior. Pairing storage starts empty,
+then preserves keys installed through actual guest commands in the consumer's
+isolated profile. Reset retains them. Wrong PINs and mismatched link keys fail
+authentication. Native virtual endpoints agree a fresh remote unit key after
+checking the console-address PIN; Broadcom radio cryptography is not executed.
+
+`Remote.cpp`/`Remote.h` adapt the base report, EEPROM, calibration and I2C behavior
+from the same donor's `Core/HW/WiimoteEmu/EmuSubroutines.cpp` and input-report
+implementation. They retain Dolphin's GPL notices. The bounded source implements
+buttons, acceleration, extended infrared and reports 0x30/0x31/0x33. Unsupported
+extensions NACK; speaker audio and other report modes stop explicitly.
 
 Unmodified donor file SHA-256 identities:
 - `hci.h`: `7eb577e0b615e99fcfedbccb93988a92543ae3019c7cd45713ddd23918c0266b`

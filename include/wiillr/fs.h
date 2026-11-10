@@ -11,6 +11,9 @@ typedef struct WiiFs WiiFs;
 WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid);
 void wii_fs_unmount(WiiFs*);
 bool wii_fs_boot_title(WiiFs*,uint64_t* title);
+/* Native Bluetooth module EEPROM, stored beside the copied NAND marker. */
+bool wii_fs_bt_read(void*,uint8_t*,uint32_t capacity,uint32_t* size);
+bool wii_fs_bt_write(void*,const uint8_t*,uint32_t size);
 /* Metadata view only; does not authenticate or import a ticket. */
 int32_t wii_es_ticket_view(WiiFs*,const uint8_t* ticket,uint32_t size,uint8_t* view);
 /* False rejects restricted tickets until real usage accounting is available. */

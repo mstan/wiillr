@@ -55,10 +55,18 @@ GPIO state; network RTC synchronization retains the guest counter without
 inventing UTC or persistent clock data.
 The native Bluetooth transport adapts licensed Dolphin/RecompCore HCI and
 L2CAP code through explicit RAM and asynchronous IPC interfaces. Controller
-configuration supports readback/reset; pairing storage starts empty. Wii Remote
-report sources are not connected yet. Firmware uploads and unimplemented USB
+configuration supports readback/reset. A virtual base Wii Remote supplies buttons,
+acceleration and infrared reports through the actual HID channels. Console Sync
+and remote pairing use guest discovery, PIN exchange and persistent controller
+key storage beside the copied NAND; an existing SYSCONF is not overwritten.
+The native virtual endpoints model unit-key agreement rather than Broadcom radio
+cryptography. Only report modes 0x30, 0x31 and 0x33 are implemented; extensions
+NACK and speaker playback remains unsupported. Firmware uploads and unimplemented USB
 operations stop explicitly. Provenance and licenses are in
 `third_party/dolphin-bluetooth`.
+For bounded development input, `WIILLR_INPUT_SCRIPT` names sorted lines containing
+`guest-cycle button-mask-hex [present [pairing]]`; `WIILLR_SYNC_CYCLES` schedules
+one console Sync press. These feed device input without changing guest flags.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 The GPIO AV encoder bus clocks real I2C transactions into a register bank;

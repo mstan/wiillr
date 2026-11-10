@@ -63,6 +63,29 @@ extern "C" WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid) {
   } catch(const std::exception& e){std::fprintf(stderr,"NAND mount: %s\n",e.what());return nullptr;}
 }
 extern "C" void wii_fs_unmount(WiiFs* s){delete s;}
+extern "C" bool wii_fs_bt_read(void* user,uint8_t* data,uint32_t capacity,uint32_t* size) {
+  try {
+    const auto path=static_cast<WiiFs*>(user)->root/".wiillr-bluetooth";
+    if(reparse(path))return false;
+    if(!fs::exists(path)){*size=0;return true;}
+    const auto bytes=fs::file_size(path);if(bytes>capacity || bytes>512)return false;
+    std::ifstream file(path,std::ios::binary);file.read(reinterpret_cast<char*>(data),bytes);
+    if(!file)return false;*size=uint32_t(bytes);return true;
+  }catch(...){return false;}
+}
+extern "C" bool wii_fs_bt_write(void* user,const uint8_t* data,uint32_t size) {
+  try {
+    const auto path=static_cast<WiiFs*>(user)->root/".wiillr-bluetooth";
+    const auto temporary=static_cast<WiiFs*>(user)->root/".wiillr-bluetooth.tmp";
+    if(size>512 || reparse(path) || reparse(temporary) || fs::exists(temporary))return false;
+    {std::ofstream file(temporary,std::ios::binary);file.write(reinterpret_cast<const char*>(data),size);file.close();if(!file)return false;}
+#ifdef _WIN32
+    return MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
+#else
+    fs::rename(temporary,path);return true;
+#endif
+  }catch(...){return false;}
+}
 extern "C" bool wii_fs_boot_title(WiiFs* s,uint64_t* title) {
   try {
     File::IOFile users((s->root/"sys/uid.sys").generic_string(),"rb");

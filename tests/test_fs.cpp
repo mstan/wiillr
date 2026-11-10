@@ -31,6 +31,11 @@ int main(int argc,char** argv) {
   std::memcpy(ticket.data()+0x1dc,uid_record,8);ticket[0x1f1]=152;ticket[0x2a3]=0x7b;
   std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   auto* nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  uint8_t bt_data[64]{};uint32_t bt_size=99;
+  CHECK(wii_fs_bt_read(nand,bt_data,sizeof bt_data,&bt_size) && !bt_size);
+  const uint8_t bt_fixture[]={0x57,0x49,0x49,0x42,0x54,0,1,2,3};
+  CHECK(wii_fs_bt_write(nand,bt_fixture,sizeof bt_fixture));
+  CHECK(wii_fs_bt_write(nand,bt_fixture,sizeof bt_fixture)); // atomic replacement
   uint64_t boot_title=0;CHECK(wii_fs_boot_title(nand,&boot_title) && boot_title==0x0001000141424344ull);
   std::array<uint8_t,74> params{};std::memcpy(params.data()+6,"/save",6);params[70]=3;params[71]=1;params[72]=0;
   int32_t result=-99;
@@ -51,6 +56,8 @@ int main(int argc,char** argv) {
   CHECK(!wii_fs_close(nand,fd) && wii_fs_close(nand,fd)==-101);
   wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  CHECK(wii_fs_bt_read(nand,bt_data,sizeof bt_data,&bt_size) && bt_size==sizeof bt_fixture && !std::memcmp(bt_data,bt_fixture,bt_size));
+  CHECK(!wii_fs_bt_read(nand,bt_data,1,&bt_size));
   const int restored=wii_fs_open(nand,"/save",1);CHECK(restored>=0);
   CHECK(wii_fs_read(nand,restored,readback,8)==sizeof progress && !std::memcmp(progress,readback,sizeof progress));
   uint8_t name[64]{};std::memcpy(name,"/save",6);std::memset(params.data(),0xff,params.size());
@@ -160,6 +167,6 @@ int main(int argc,char** argv) {
   CHECK(fs::remove(root/"title/00010001"));CHECK(fs::remove(root/"title"));
   CHECK(fs::remove(root/"sys/uid.sys"));CHECK(fs::remove(root/"sys"));
   CHECK(fs::remove(root/"ticket/00010001/41424344.tik"));CHECK(fs::remove(root/"ticket/00010001"));CHECK(fs::remove(root/"ticket"));
-  CHECK(fs::remove(root/".wiillr-nand-profile"));CHECK(fs::remove(root));
+  CHECK(fs::remove(root/".wiillr-bluetooth"));CHECK(fs::remove(root/".wiillr-nand-profile"));CHECK(fs::remove(root));
   return 0;
 }

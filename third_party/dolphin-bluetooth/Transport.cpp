@@ -8,14 +8,64 @@ namespace IOS::HLE {
 SQueuedEvent::SQueuedEvent(u32 n,u16 handle):size(n),connection_handle(handle) {
   if(n>sizeof buffer)throw std::runtime_error("Bluetooth event overflow");
 }
-BluetoothEmuDevice::BluetoothEmuDevice(CPUState* cpu):m_system(cpu) {
+BluetoothEmuDevice::BluetoothEmuDevice(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* backend):m_system(cpu),gpio_out(gpio) {
+  if(backend)store=*backend;
   for(u8 n=0;n<MAX_BBMOTES;n++)
     m_wiimotes[n]=std::make_unique<WiimoteDevice>(this,bdaddr_t{0x11,0x02,0x19,0x79,0,n},n);
   ResetController();
+  LoadPairings();
 }
 BluetoothEmuDevice::~BluetoothEmuDevice()=default;
+void BluetoothEmuDevice::LoadPairings() {
+  if(!store.load)return;
+  std::array<u8,512> bytes{};u32 size=0;
+  if(!store.load(store.user,bytes.data(),u32(bytes.size()),&size))throw std::runtime_error("Bluetooth EEPROM read failed");
+  if(!size)return;
+  if(size<9 || std::memcmp(bytes.data(),"WIIBT001",8) || bytes[8]>MAX_BBMOTES || size!=9u+39u*bytes[8])
+    throw std::runtime_error("Invalid Bluetooth EEPROM");
+  std::map<bdaddr_t,bool> seen;
+  for(unsigned n=0;n<bytes[8];n++) {
+    const auto* record=bytes.data()+9+39*n;bdaddr_t bd{};std::copy_n(record,6,bd.begin());
+    auto* remote=AccessWiimote(bd);
+    if(!remote || seen.contains(bd) || !record[6] || (record[6]&~3))throw std::runtime_error("Invalid Bluetooth pairing record");
+    seen[bd]=true;WiimoteDevice::LinkKeyType key{};
+    if(record[6]&1){std::copy_n(record+7,16,key.begin());remote->SetLinkKey(key);}
+    if(record[6]&2){std::copy_n(record+23,16,key.begin());stored_keys[bd]=key;}
+  }
+}
+void BluetoothEmuDevice::SavePairings() {
+  if(!store.save)return;
+  std::vector<u8> bytes{'W','I','I','B','T','0','0','1',0};
+  for(const auto& remote:m_wiimotes) {
+    const auto at=stored_keys.find(remote->GetBD());
+    if(!remote->HasLinkKey() && at==stored_keys.end())continue;
+    ++bytes[8];const auto offset=bytes.size();bytes.resize(offset+39);
+    std::copy(remote->GetBD().begin(),remote->GetBD().end(),bytes.begin()+offset);
+    bytes[offset+6]=(remote->HasLinkKey()?1:0)|(at!=stored_keys.end()?2:0);
+    if(remote->HasLinkKey())std::copy(remote->GetLinkKey().begin(),remote->GetLinkKey().end(),bytes.begin()+offset+7);
+    if(at!=stored_keys.end())std::copy(at->second.begin(),at->second.end(),bytes.begin()+offset+23);
+  }
+  if(!store.save(store.user,bytes.data(),u32(bytes.size())))throw std::runtime_error("Bluetooth EEPROM write failed");
+}
+void BluetoothEmuDevice::SetInput(const WiiBluetoothInput& input) {
+  if(input.buttons&~WiimoteCommon::ButtonData::BUTTON_MASK || input.pointer_x>1023 || input.pointer_y>767 ||
+     std::ranges::any_of(input.accel,[](u16 v){return v>1023;}))throw std::runtime_error("Invalid virtual remote input");
+  if(!input_source && input.present)input_source=std::make_unique<WiimoteCommon::NativeRemote>();
+  if(input_source)input_source->SetInput(input);
+  auto* current=m_wiimotes[0].get();
+  current->SetPairing(input.pairing);
+  if(input.present && !current->IsSourceValid())current->SetSource(input_source.get());
+  if(!input.present && current->IsSourceValid())current->SetSource(nullptr);
+}
+void BluetoothEmuDevice::PressSync() {
+  SQueuedEvent event(3,0);
+  event.buffer[0]=0xff;event.buffer[1]=1;event.buffer[2]=8;
+  AddEventToQueue(event);
+}
 void BluetoothEmuDevice::ResetController() {
-  m_scan_enable=0;m_event_queue.clear();m_acl_pool.Clear();m_acl_endpoint.reset();
+  // HCI reset does not cancel pending USB endpoint transfers. In particular,
+  // the first ACL receive is submitted before reset by the original SDK.
+  m_scan_enable=0;m_event_queue.clear();m_acl_pool.Clear();link_settings.clear();
   std::fill(std::begin(m_packet_count),std::end(m_packet_count),0);
   for(auto& remote:m_wiimotes)remote->Reset();
   controller_config={{HCI_CMD_WRITE_UNIT_CLASS,{0,0,0}},
@@ -24,7 +74,15 @@ void BluetoothEmuDevice::ResetController() {
     {HCI_CMD_WRITE_SCAN_ENABLE,{0}},{HCI_CMD_WRITE_INQUIRY_MODE,{0}},
     {HCI_CMD_WRITE_PAGE_SCAN_TYPE,{0}},{HCI_CMD_WRITE_INQUIRY_SCAN_TYPE,{0}}};
 }
-bool BluetoothEmuDevice::ReadConfiguration(u16 opcode) {
+bool BluetoothEmuDevice::ReadConfiguration(u16 opcode,u32 parameters) {
+  if(opcode==HCI_CMD_READ_LINK_POLICY_SETTINGS || opcode==HCI_CMD_READ_LINK_SUPERVISION_TIMEOUT) {
+    const auto* input=m_system.memory.GetPointerForRange(parameters,2);
+    const u16 handle=u16(input[0]|input[1]<<8);
+    const auto& link=Link(handle);
+    const u16 value=opcode==HCI_CMD_READ_LINK_POLICY_SETTINGS?link.policy:link.supervision_timeout;
+    const u8 reply[]={0,u8(handle),u8(handle>>8),u8(value),u8(value>>8)};
+    SendEventCommandComplete(opcode,reply,sizeof reply);return true;
+  }
   const std::map<u16,u16> reads={{0x0c23,HCI_CMD_WRITE_UNIT_CLASS},{0x0c14,HCI_CMD_WRITE_LOCAL_NAME},
     {0x0c09,HCI_CMD_WRITE_PIN_TYPE},{0x0c17,HCI_CMD_WRITE_PAGE_TIMEOUT},{0x0c19,HCI_CMD_WRITE_SCAN_ENABLE},
     {0x0c42,HCI_CMD_WRITE_INQUIRY_SCAN_TYPE},{0x0c44,HCI_CMD_WRITE_INQUIRY_MODE},{0x0c46,HCI_CMD_WRITE_PAGE_SCAN_TYPE}};
@@ -56,12 +114,41 @@ void BluetoothEmuDevice::ValidateCommand(const USB::V0CtrlMessage& command) {
     if(!((parameters==1 && data[3]==0) || (parameters==2 && data[3]==1 && data[4]==0)))
       throw std::runtime_error("Unimplemented HCI event filter");break;
   case HCI_CMD_READ_STORED_LINK_KEY:case HCI_CMD_DELETE_STORED_LINK_KEY:parameters=7;break;
+  case HCI_CMD_ACCEPT_CON:parameters=7;break;
+  case HCI_CMD_INQUIRY:
+    parameters=5;
+    if(command.length!=8 || data[3]>0x3f || data[4]!=0x8b || data[5]!=0x9e || !data[6] || data[6]>0x30)
+      throw std::runtime_error("Unsupported Bluetooth inquiry");break;
+  case HCI_CMD_INQUIRY_CANCEL:break;
+  case HCI_CMD_CREATE_CON:parameters=13;break;
+  case HCI_CMD_REMOTE_NAME_REQ:parameters=10;break;
+  case HCI_CMD_DISCONNECT:parameters=3;break;
+  case HCI_CMD_READ_REMOTE_FEATURES:case HCI_CMD_READ_REMOTE_VER_INFO:case HCI_CMD_READ_CLOCK_OFFSET:parameters=2;break;
+  case HCI_CMD_CHANGE_CON_PACKET_TYPE:parameters=4;break;
+  case HCI_CMD_WRITE_LINK_POLICY_SETTINGS:parameters=4;break;
+  case HCI_CMD_READ_LINK_POLICY_SETTINGS:parameters=2;break;
+  case HCI_CMD_WRITE_LINK_SUPERVISION_TIMEOUT:parameters=4;break;
+  case HCI_CMD_READ_LINK_SUPERVISION_TIMEOUT:parameters=2;break;
+  case HCI_CMD_AUTH_REQ:parameters=2;break;
+  case HCI_CMD_LINK_KEY_REP:parameters=22;break;
+  case HCI_CMD_LINK_KEY_NEG_REP:case HCI_CMD_PIN_CODE_NEG_REP:parameters=6;break;
+  case HCI_CMD_PIN_CODE_REP:parameters=23;break;
+  case HCI_CMD_WRITE_STORED_LINK_KEY:
+    if(command.length<4 || !data[3] || data[3]>MAX_BBMOTES)throw std::runtime_error("Invalid Bluetooth stored-key count");
+    parameters=1+22*data[3];break;
+  case HCI_CMD_SNIFF_MODE:parameters=10;break;
   case 0x0c23:case 0x0c14:case 0x0c09:case 0x0c17:case 0x0c19:case 0x0c42:case 0x0c44:case 0x0c46:break;
   default:throw std::runtime_error("Unimplemented Bluetooth HCI command");
   }
   if(data[2]!=parameters)throw std::runtime_error("Wrong HCI parameter length");
   if((opcode&0xfc00)==0x0c00 && parameters && opcode!=HCI_CMD_READ_STORED_LINK_KEY && opcode!=HCI_CMD_DELETE_STORED_LINK_KEY)
     controller_config[opcode]=std::vector<u8>(data+3,data+command.length);
+}
+BluetoothEmuDevice::LinkSettings& BluetoothEmuDevice::Link(u16 handle) {
+  auto* remote=AccessWiimote(handle);
+  if(!remote || handle!=0x100+remote->GetNumber() || !remote->IsConnected())
+    throw std::runtime_error("Unknown Bluetooth connection handle");
+  return link_settings[handle];
 }
 void BluetoothEmuDevice::Submit(u32 message) {
   auto& mem=m_system.memory;
@@ -123,6 +210,11 @@ void BluetoothEmuDevice::Update() {
   if(now-m_last_ticks>=729000000u/Wiimote::UPDATE_FREQ) {
     m_last_ticks=now;
     for(auto& remote:m_wiimotes) {
+      if(remote->IsConnected()) {
+        auto& link=Link(GetConnectionHandle(remote->GetBD()));
+        if(link.mode==2 && now-link.last_input<u64(link.sniff_interval)*455625u)continue;
+        link.last_input=now;
+      }
       WiimoteEmu::DesiredWiimoteState state;
       const auto next=remote->PrepareInput(&state);remote->UpdateInput(next,state);
     }
@@ -136,11 +228,19 @@ bool BluetoothEmuDevice::Poll(u32* message,s32* result) {
   *message=completion.message;*result=completion.result;return true;
 }
 }
-struct WiiBluetooth {explicit WiiBluetooth(CPUState* cpu):device(cpu){} IOS::HLE::BluetoothEmuDevice device;};
-extern "C" WiiBluetooth* wii_bluetooth_create(CPUState* cpu) {
-  try{return new WiiBluetooth(cpu);}catch(const std::exception& e){std::fprintf(stderr,"Bluetooth init: %s\n",e.what());return nullptr;}
+struct WiiBluetooth {WiiBluetooth(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store):device(cpu,gpio,store){} IOS::HLE::BluetoothEmuDevice device;};
+extern "C" WiiBluetooth* wii_bluetooth_create(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store) {
+  try{return new WiiBluetooth(cpu,gpio,store);}catch(const std::exception& e){std::fprintf(stderr,"Bluetooth init: %s\n",e.what());return nullptr;}
 }
 extern "C" void wii_bluetooth_destroy(WiiBluetooth* bt){delete bt;}
+extern "C" bool wii_bluetooth_set_input(WiiBluetooth* bt,const WiiBluetoothInput* input) {
+  try{if(!bt || !input)return false;bt->device.SetInput(*input);return true;}
+  catch(const std::exception& e){std::fprintf(stderr,"Bluetooth input: %s\n",e.what());return false;}
+}
+extern "C" bool wii_bluetooth_press_sync(WiiBluetooth* bt) {
+  try{if(!bt)return false;bt->device.PressSync();return true;}
+  catch(const std::exception& e){std::fprintf(stderr,"Bluetooth Sync: %s\n",e.what());return false;}
+}
 extern "C" bool wii_bluetooth_submit(WiiBluetooth* bt,u32 message) {
   try{bt->device.Submit(message);return true;}catch(const std::exception& e){std::fprintf(stderr,"Bluetooth stopped: %s\n",e.what());return false;}
 }

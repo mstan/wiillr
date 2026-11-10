@@ -49,7 +49,6 @@ WiimoteDevice::WiimoteDevice(BluetoothEmuDevice* host, bdaddr_t bd, unsigned int
 {
   INFO_LOG_FMT(IOS_WIIMOTE, "Wiimote: #{} Constructed", GetNumber());
 
-  m_link_key.fill(0xa0 + GetNumber());
   m_class = {0x00, 0x04, 0x48};
   m_features = {0xBC, 0x02, 0x04, 0x38, 0x08, 0x00, 0x00, 0x00};
   m_lmp_version = 0x2;
@@ -100,7 +99,7 @@ bool WiimoteDevice::IsInquiryScanEnabled() const
 {
   // Our Wii Remote is conveniently discoverable as long as it's enabled and doesn't have a
   // baseband connection.
-  return !IsConnected() && IsSourceValid();
+  return m_pairing && !IsConnected() && IsSourceValid();
 }
 
 bool WiimoteDevice::IsPageScanEnabled() const
@@ -259,8 +258,14 @@ void WiimoteDevice::SetSource(WiimoteCommon::HIDWiimote* hid_source)
   {
     m_hid_source->SetInterruptCallback(
         std::bind_front(&WiimoteDevice::InterruptDataInputCallback, this));
-    Activate(true);
+    if(!m_pairing)Activate(true);
   }
+}
+
+void WiimoteDevice::SetPairing(bool pairing)
+{
+  m_pairing=pairing;
+  if(pairing && !IsConnected())SetBasebandState(BasebandState::Inactive);
 }
 
 void WiimoteDevice::Reset()
@@ -349,7 +354,7 @@ void WiimoteDevice::UpdateInput(NextUpdateInputCall next_call,
   switch (next_call)
   {
   case NextUpdateInputCall::Activate:
-    if (wiimote_state.buttons.hex & WiimoteCommon::ButtonData::BUTTON_MASK)
+    if (!m_pairing && (wiimote_state.buttons.hex & WiimoteCommon::ButtonData::BUTTON_MASK))
       Activate(true);
     break;
   case NextUpdateInputCall::Update:
@@ -363,6 +368,7 @@ void WiimoteDevice::UpdateInput(NextUpdateInputCall next_call,
 // This function receives L2CAP commands from the CPU
 void WiimoteDevice::ExecuteL2capCmd(u8* ptr, u32 size)
 {
+  if(size<sizeof(l2cap_hdr_t))throw std::runtime_error("Truncated L2CAP packet");
   l2cap_hdr_t* header = (l2cap_hdr_t*)ptr;
   u8* data = ptr + sizeof(l2cap_hdr_t);
   const u32 data_size = size - sizeof(l2cap_hdr_t);
@@ -371,8 +377,7 @@ void WiimoteDevice::ExecuteL2capCmd(u8* ptr, u32 size)
 
   if (header->length != data_size)
   {
-    INFO_LOG_FMT(IOS_WIIMOTE, "Faulty packet. It is dropped.");
-    return;
+    throw std::runtime_error("Invalid L2CAP packet length");
   }
 
   if (header->dcid == L2CAP_SIGNAL_CID)
@@ -389,6 +394,8 @@ void WiimoteDevice::ExecuteL2capCmd(u8* ptr, u32 size)
   }
 
   const SChannel& channel = itr->second;
+  if((channel.psm==L2CAP_PSM_HID_CNTL || channel.psm==L2CAP_PSM_HID_INTR) && !data_size)
+    throw std::runtime_error("Truncated HID packet");
   switch (channel.psm)
   {
   case L2CAP_PSM_SDP:
@@ -447,6 +454,10 @@ void WiimoteDevice::SignalChannel(u8* data, u32 size)
   while (size >= sizeof(l2cap_cmd_hdr_t))
   {
     l2cap_cmd_hdr_t* cmd_hdr = (l2cap_cmd_hdr_t*)data;
+    if(cmd_hdr->length>size-sizeof(l2cap_cmd_hdr_t))throw std::runtime_error("Truncated L2CAP command");
+    const u32 minimum=cmd_hdr->code==L2CAP_CONNECT_RSP?8:
+      (cmd_hdr->code==L2CAP_CONFIG_RSP?6:4);
+    if(cmd_hdr->length<minimum)throw std::runtime_error("Short L2CAP signal");
     data += sizeof(l2cap_cmd_hdr_t);
     size = size - sizeof(l2cap_cmd_hdr_t) - cmd_hdr->length;
 
@@ -484,6 +495,7 @@ void WiimoteDevice::SignalChannel(u8* data, u32 size)
 
     data += cmd_hdr->length;
   }
+  if(size)throw std::runtime_error("Truncated L2CAP signal header");
 }
 
 void WiimoteDevice::ReceiveConnectionReq(u8 ident, u8* data, u32 size)
@@ -536,6 +548,9 @@ void WiimoteDevice::ReceiveConnectionResponse(u8 ident, u8* data, u32 size)
   l2cap_con_rsp_cp* rsp = (l2cap_con_rsp_cp*)data;
 
   DEBUG_ASSERT(size == sizeof(l2cap_con_rsp_cp));
+  if(std::getenv("WIILLR_IOS_TRACE"))
+    std::fprintf(stderr,"L2CAP connection response cid=%04x remote=%04x result=%04x status=%04x\n",
+                 rsp->scid,rsp->dcid,rsp->result,rsp->status);
 
   DEBUG_LOG_FMT(IOS_WIIMOTE, "[L2CAP] ReceiveConnectionResponse");
   DEBUG_LOG_FMT(IOS_WIIMOTE, "    DCID: {:#06x}", rsp->dcid);
@@ -585,8 +600,11 @@ void WiimoteDevice::ReceiveConfigurationReq(u8 ident, u8* data, u32 size)
   // Read configuration options.
   while (offset < size)
   {
+    if(size-offset<sizeof(l2cap_cfg_opt_t))throw std::runtime_error("Truncated L2CAP option");
     l2cap_cfg_opt_t* options = (l2cap_cfg_opt_t*)&data[offset];
     offset += sizeof(l2cap_cfg_opt_t);
+    if(options->length>size-offset || resp_len+sizeof(l2cap_cfg_opt_t)+options->length>sizeof temp_buffer)
+      throw std::runtime_error("Invalid L2CAP option length");
 
     switch (options->type)
     {

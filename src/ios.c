@@ -106,7 +106,8 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         ios->result=-5;
         for(u32 n=0;n<24;n++)if(!ios->descriptors[n]) {
             if(device==9 && !ios->bluetooth) {
-                ios->bluetooth=wii_bluetooth_create(cpu);if(!ios->bluetooth)return 0;
+                const WiiBluetoothStore store={ios->fs,wii_fs_bt_read,wii_fs_bt_write};
+                ios->bluetooth=wii_bluetooth_create(cpu,ios->gpio_out,ios->fs?&store:NULL);if(!ios->bluetooth)return 0;
             }
             if(device==5) {
                 const s32 opened=wii_fs_open(ios->fs,(const char*)path,read_be32(request+16));

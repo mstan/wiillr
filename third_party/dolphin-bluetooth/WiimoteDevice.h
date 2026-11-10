@@ -76,6 +76,7 @@ public:
 
   // nullptr may be passed to disable the remote.
   void SetSource(WiimoteCommon::HIDWiimote*);
+  void SetPairing(bool);
 
   const bdaddr_t& GetBD() const { return m_bd; }
   const char* GetName() const { return m_name.c_str(); }
@@ -86,6 +87,9 @@ public:
   const ClassType& GetClass() const { return m_class; }
   const FeaturesType& GetFeatures() const { return m_features; }
   const LinkKeyType& GetLinkKey() const { return m_link_key; }
+  bool HasLinkKey() const {return m_has_link_key;}
+  bool IsPairing() const {return m_pairing;}
+  void SetLinkKey(const LinkKeyType& key) {m_link_key=key;m_has_link_key=true;}
 
 private:
   enum class BasebandState
@@ -126,6 +130,7 @@ private:
 
   BluetoothEmuDevice* m_host;
   WiimoteCommon::HIDWiimote* m_hid_source = nullptr;
+  bool m_pairing = false;
 
   // State to save:
   BasebandState m_baseband_state = BasebandState::Inactive;
@@ -135,7 +140,8 @@ private:
   FeaturesType m_features;
   u8 m_lmp_version;
   u16 m_lmp_subversion;
-  LinkKeyType m_link_key;
+  LinkKeyType m_link_key{};
+  bool m_has_link_key=false;
   std::string m_name;
   ChannelMap m_channels;
   u8 m_connection_request_counter = 0;

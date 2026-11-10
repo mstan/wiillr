@@ -8,7 +8,7 @@
 int main() {
   CPUState cpu;CHECK(cpu_init(&cpu) && cpu_alloc_mem2(&cpu,0x4000000));
   cpu.spr[287]=PPC_BROADWAY_PVR;
-  auto* bt=wii_bluetooth_create(&cpu);CHECK(bt);
+  auto* bt=wii_bluetooth_create(&cpu,nullptr,nullptr);CHECK(bt);
   auto put=[&](u32 p,u32 v){mem_write32_cia(&cpu,p,v,0);};
   const u32 event=0x10000200,control=0x10000300;
   auto vector=[&](u32 base,u32 n,u32 address,u32 size){put(base+n*8,address);put(base+n*8+4,size);};
@@ -16,6 +16,10 @@ int main() {
   vector(0x1000,0,0x1100,1);vector(0x1000,1,0x1102,2);vector(0x1000,2,0x10001000,64);
   cpu.ram[0x1100]=0x81;cpu.ram[0x1103]=64;
   CHECK(wii_bluetooth_submit(bt,event));
+  const u32 acl=0x10000600;
+  put(acl,7);put(acl+12,1);put(acl+16,2);put(acl+20,1);put(acl+24,0x1600);
+  vector(0x1600,0,0x1700,1);vector(0x1600,1,0x1702,2);vector(0x1600,2,0x10002000,64);
+  cpu.ram[0x1700]=0x82;cpu.ram[0x1703]=64;CHECK(wii_bluetooth_submit(bt,acl));
   u32 message=0;s32 result=0;bool ready=true;
   CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && !ready);
   put(control,7);put(control+12,0);put(control+16,6);put(control+20,1);put(control+24,0x1200);
@@ -30,6 +34,9 @@ int main() {
   const u8 expected[]={0x0e,4,1,3,12,0};
   CHECK(!std::memcmp(cpu.mem2+0x1000,expected,sizeof expected));
   CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && ready && message==control && result==3);
+  // Reset preserves the original outstanding ACL transfer. Binding a second
+  // one must still be rejected (the old reset erroneously discarded it).
+  CHECK(!wii_bluetooth_submit(bt,acl));
   CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && !ready);
   // Unknown opcodes cannot create a success event or modify the request.
   cpu.ram[0x1400]=0xff;cpu.ram[0x1401]=0xff;put(control+4,0x12345678);
@@ -59,6 +66,11 @@ int main() {
   CHECK(!cpu.mem2[0x1007] && !cpu.mem2[0x1008]); // explicit native firmware revision0
   CHECK(command(0x0c0d,{0,0,0,0,0,0,1}));
   CHECK(!cpu.mem2[0x1008] && !cpu.mem2[0x1009]); // no fabricated stored pairings
+  CHECK(wii_bluetooth_submit(bt,event));CHECK(wii_bluetooth_press_sync(bt));
+  CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && !ready);
+  cpu.cycles+=6000;
+  CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && ready && message==event && result==3);
+  const u8 sync_event[]={0xff,1,8};CHECK(!std::memcmp(cpu.mem2+0x1000,sync_event,3));
   vector(0x1000,2,0x13fffffe,64);
   CHECK(!wii_bluetooth_submit(bt,event));
   wii_bluetooth_destroy(bt);cpu_free(&cpu);return 0;
