@@ -66,6 +66,8 @@ def discover(args):
     if starlet and (args.dsp_rom or args.stop_pc):
         raise ValueError('DSP ROM/stop-PC options belong to PPC discovery')
     paths = dict(executable=executable, content=content, tmd=tmd)
+    if env.get('WIILLR_INPUT_SCRIPT'):
+        paths['input_script']=Path(env['WIILLR_INPUT_SCRIPT']).resolve(strict=True)
     if ios_content:paths.update(ios_content=ios_content,ios_tmd=ios_tmd)
     if args.dsp_rom:
         if args.dsp_rom.stat().st_size != 8192 or args.dsp_coef.stat().st_size != 4096:

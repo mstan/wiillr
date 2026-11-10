@@ -42,6 +42,10 @@ struct WiiControl {
     u_long enabled=1;if(ioctlsocket(socket,FIONBIO,&enabled))throw std::runtime_error("nonblocking socket");
 #else
     if(fcntl(socket,F_SETFL,O_NONBLOCK)<0)throw std::runtime_error("nonblocking socket");
+#ifdef SO_NOSIGPIPE
+    const int enabled=1;
+    if(setsockopt(socket,SOL_SOCKET,SO_NOSIGPIPE,&enabled,sizeof enabled)<0)throw std::runtime_error("socket SIGPIPE suppression");
+#endif
 #endif
   }
   static bool would_block() {
@@ -54,8 +58,10 @@ struct WiiControl {
   static int transmit(SOCKET socket,const char* data,int size) {
 #ifdef _WIN32
     return send(socket,data,size,0);
-#else
+#elif defined(MSG_NOSIGNAL)
     return send(socket,data,size,MSG_NOSIGNAL);
+#else
+    return send(socket,data,size,0);
 #endif
   }
   void disconnect(){closesocket(client);client=INVALID_SOCKET;rx.clear();tx.clear();sent=0;}
@@ -159,7 +165,7 @@ extern "C" WiiControl* wii_control_start(CPUState* cpu,WiiMachine* machine,WiiGx
     WSADATA data;if(WSAStartup(MAKEWORD(2,2),&data))throw std::runtime_error("Winsock");
 #endif
     control->listener=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);if(control->listener==INVALID_SOCKET)throw std::runtime_error("socket");
-    sockaddr_in address{};address.sin_family=AF_INET;address.sin_port=htons(u_short(port));address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    sockaddr_in address{};address.sin_family=AF_INET;address.sin_port=htons(u16(port));address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
     if(bind(control->listener,reinterpret_cast<sockaddr*>(&address),sizeof address)==SOCKET_ERROR || listen(control->listener,1)==SOCKET_ERROR)throw std::runtime_error("listen");
     WiiControl::nonblocking(control->listener);control->cpu=cpu;control->machine=machine;control->gx=gx;control->input=input;control->input_pending=pending;
     control->paused=std::getenv("WIILLR_CONTROL_PAUSED") && std::string(std::getenv("WIILLR_CONTROL_PAUSED"))=="1";
