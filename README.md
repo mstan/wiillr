@@ -23,7 +23,8 @@ unimplemented device/service operations stop execution. No successful IOS
 responses or captured machine initialization are substituted in the default
 provider-free build. `WIILLR_IOS=native-development` selects an experimental
 native resource/IPC provider with explicit identity and operation accounting.
-It allocates and releases STM descriptors; unsupported service operations stop
+It allocates/releases STM descriptors and holds event-hook requests until a
+modeled hardware event occurs; unsupported service operations stop
 before acknowledgement. Original ARM execution and a functioning LLE service
 counterpart are not yet qualified for this native route.
 

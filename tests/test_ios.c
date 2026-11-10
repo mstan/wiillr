@@ -47,5 +47,28 @@ int main(void) {
     wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
     cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-4);
+    /* Open the asynchronous resource through the same real request ABI. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);
+    memcpy(cpu.ram+path,"/dev/stm/eventhook",sizeof "/dev/stm/eventhook");
+    mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);
+    mem_write32_cia(&cpu,message+16,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+    wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+4,0x12345678,0);
+    mem_write32_cia(&cpu,message+8,0,0);mem_write32_cia(&cpu,message+12,0x1000,0);
+    mem_write32_cia(&cpu,message+24,0x10000400,0);mem_write32_cia(&cpu,message+28,4,0);
+    wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+    cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+    wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=60000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ipc.y && ios.event_waiting);
+    CHECK(mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x12345678);
+    CHECK(!wii_ios_native_stm_event(&ios,&cpu,1));
+    CHECK(wii_ios_native_stm_event(&ios,&cpu,0x20000));
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && !ios.event_waiting);
+    CHECK(mem_read32_cia(&cpu,0x10000400,0)==0x20000 && mem_read32_cia(&cpu,message,0)==8);
+    CHECK(mem_read32_cia(&cpu,message+8,0)==6 && ios.operations==2);
     cpu_free(&cpu);return 0;
 }

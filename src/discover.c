@@ -108,8 +108,9 @@ int main(int argc, char** argv) {
         }
     }
     int saved = dump(argv[3], cpu.ram, cpu.ram_size);
-    printf("{\"ios_provider\":\"%s\",\"native_operations\":%llu,\"ARM_interpreter_instructions\":0}\n",
-           WIILLR_IOS_NATIVE ? "native-development":"none",(unsigned long long)machine.ios.operations);
+    printf("{\"ios_provider\":\"%s\",\"native_operations\":%llu,\"ARM_interpreter_instructions\":0,\"stm_event_waiting\":%s}\n",
+           WIILLR_IOS_NATIVE ? "native-development":"none",(unsigned long long)machine.ios.operations,
+           machine.ios.event_waiting ? "true":"false");
     if (machine.ipc.x & 1) {
         u32 available;
         const u8* command=gcn_mem_resolve(&cpu,machine.ipc.ppc_message,&available);

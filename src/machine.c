@@ -8,6 +8,9 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     WiiMachine* m = cpu->external_user_data;
     ++m->mmio_reads;
     u32 physical = address & 0x3fffffffu;
+    const u32 gpio=physical&~0x00800000u;
+    if(width==4 && gpio==0x0d0000c0u)return m->gpio_out;
+    if(width==4 && gpio==0x0d0000c4u)return m->gpio_direction;
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3))
         return gcn_si_read(&m->si, cpu, GCN_SI_BASE + physical - 0x0d006400u, width);
@@ -49,6 +52,16 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     WiiMachine* m = cpu->external_user_data;
     ++m->mmio_writes;
     u32 physical = address & 0x3fffffffu;
+    const u32 gpio=physical&~0x00800000u;
+    /* GPIO1B controls only PPC-owned pins. Configuration/latches are real
+     * state; input sampling remains unsupported until its peripheral exists.
+     * Ownership: fail0verflow/mini gpio.h GP_OWNER_PPC. */
+    if(width==4 && gpio==0x0d0000c4u) {
+        m->gpio_direction=(m->gpio_direction&~0xc3a0u)|((u32)value&0xc3a0u);return;
+    }
+    if(width==4 && gpio==0x0d0000c0u && !(value&0x200u)) {
+        m->gpio_out=(m->gpio_out&~0xc3a0u)|((u32)value&0xc3a0u);return;
+    }
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3)) {
         gcn_si_write(&m->si, cpu, GCN_SI_BASE + physical - 0x0d006400u, (u32)value, width);

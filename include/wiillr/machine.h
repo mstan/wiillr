@@ -27,6 +27,7 @@ typedef struct {
     u32 tb_phase;
     u64 mmio_reads, mmio_writes;
     u32 unsupported_address;
+    u32 gpio_out,gpio_direction;
 } WiiMachine;
 void wii_machine_init(WiiMachine* machine, CPUState* cpu);
 void wii_machine_tick(WiiMachine* machine, CPUState* cpu);
