@@ -9,6 +9,7 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     ++m->mmio_reads;
     u32 physical = address & 0x3fffffffu;
     const u32 gpio=physical&~0x00800000u;
+    if(width==4 && gpio==0x0d000018u)return m->vi_config;
     if(width==4 && gpio==0x0d0000c0u)return m->gpio_out;
     if(width==4 && gpio==0x0d0000c4u)return m->gpio_direction;
     if(width==4 && gpio==0x0d0000c8u)
@@ -56,6 +57,9 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     ++m->mmio_writes;
     u32 physical = address & 0x3fffffffu;
     const u32 gpio=physical&~0x00800000u;
+    /* HW_VI1CFG: preserve the documented region-select latch. Other bits have
+     * no implemented contract and must not disappear into a no-op write. */
+    if(width==4 && gpio==0x0d000018u && !(value&~0x20000ull)) {m->vi_config=(u32)value;return;}
     /* GPIO1B controls only PPC-owned pins. The AV encoder sees actual clock,
      * data and direction transitions, with a pulled-up released SDA line.
      * Ownership: fail0verflow/mini gpio.h GP_OWNER_PPC. */

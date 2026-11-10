@@ -82,6 +82,10 @@ int main(void) {
     CHECK(wii_ipc_read(&ipc, 0x08, &value) && value == 0x1000);
     CHECK(wii_ipc_ppc_interrupt(&ipc));
     CHECK(!wii_ipc_read(&ipc, 0x10, &value));
+    mem_write32_cia(&cpu,0xcd800018,0x20000,0);
+    CHECK(mem_read32_cia(&cpu,0x0d000018,0)==0x20000 && m.vi_config==0x20000);
+    mem_write32_cia(&cpu,0x0d000018,0,0);CHECK(!mem_read32_cia(&cpu,0xcd800018,0));
+    mem_write32_cia(&cpu,0xcd800018,1,0);CHECK(cpu.halted && m.unsupported_address==0xcd800018);
     cpu_free(&cpu);
     return 0;
 }

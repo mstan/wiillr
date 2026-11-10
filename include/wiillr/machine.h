@@ -30,6 +30,7 @@ typedef struct {
     u32 unsupported_address;
     u32 gpio_out,gpio_direction;
     WiiAve ave;
+    u32 vi_config; /* HW_VI1CFG bit17: region/VISEL selection latch */
 } WiiMachine;
 void wii_machine_init(WiiMachine* machine, CPUState* cpu);
 void wii_machine_tick(WiiMachine* machine, CPUState* cpu);
