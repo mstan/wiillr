@@ -81,7 +81,12 @@ def discover(args):
         data, cache = work / 'gx-data', work / 'gx-cache'
         data.mkdir(); cache.mkdir()
         command += ['--gx', str(paths['gx_library']), str(data), str(cache)]
-        env.update(SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0', SDL_AUDIODRIVER='dummy', GCN_AUDIO='0')
+        env['WIILLR_WINDOW']='1' if args.interactive else '0'
+        env['WIILLR_WINDOW_TITLE']=args.window_title or ('Wii Startup Menu' if args.title=='0000000100000002' else 'Wii')
+        audio=args.audio_output or ('on' if args.interactive else 'off')
+        env['GCN_AUDIO']='0' if audio=='off' else '1'
+        env['GCN_AUDIO_MUTE']='1' if audio=='muted' else '0'
+        if not args.interactive:env.update(SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0', SDL_AUDIODRIVER='dummy')
     if ios_profile!=4:command+=['--ios-profile',str(ios_profile)]
     before = {name: identity(path) for name,path in paths.items()}
     receipt = dict(inputs=before, title=metadata, command=command,
@@ -106,7 +111,10 @@ def discover(args):
     if (work / 'mem1.bin').exists():
         receipt['mem1'] = identity(work / 'mem1.bin')
     (work / 'run.json').write_text(json.dumps(receipt, indent=2) + '\n')
-    print((work / 'host.log').read_text(), end='')
+    print(json.dumps(dict(work_root=str(work),exit_code=result.returncode,log=str(work/'host.log'))))
+    for line in (work/'host.log').read_text().splitlines():
+        if line.startswith('{') or line.startswith('static PPC miss ') or line.startswith('[dsp-aot] summary '):
+            print(line)
     return result.returncode
 
 
@@ -126,6 +134,9 @@ def main():
     p.add_argument('--dsp-coef', type=Path)
     p.add_argument('--nand-profile', type=Path, help='Create or reuse an isolated writable NAND copy')
     p.add_argument('--gx-library', type=Path, help='Wii-selected shared native GX service library')
+    p.add_argument('--interactive',action='store_true',help='Normal visible window and normal audio by default')
+    p.add_argument('--window-title',help='Clean game/window caption')
+    p.add_argument('--audio-output',choices=('off','muted','on'),help='Actual host output policy; unattended default is off')
     p.add_argument('--native-ios37',action='store_true',
                    help='Explicit native IOS37 development boundary; no original IOS37 ARM execution')
     args = p.parse_args()

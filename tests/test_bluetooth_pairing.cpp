@@ -71,5 +71,14 @@ int main() {
     CHECK(reopened.stored_keys.size()==1 && reopened.stored_keys.at(remote->GetBD())==saved_key);
     reopened.ResetController();CHECK(reopened.stored_keys.size()==1);
   }
+  {
+    IOS::HLE::BluetoothEmuDevice unpaired(&cpu,nullptr);
+    WiiBluetoothInput input{0,{512,512,616},512,384,false,true,false};unpaired.SetInput(input);
+    auto* remote=unpaired.AccessWiimoteByIndex(0);CHECK(remote->EventConnectionAccept());remote->Update();
+    // A refused incoming HID connection must disconnect, preserving the
+    // guest's security decision while leaving a usable machine/provider.
+    u8 rejected[]={12,0,1,0,3,2,8,0,0x40,0,0x40,0,3,0,0,0};
+    remote->ExecuteL2capCmd(rejected,sizeof rejected);CHECK(!remote->IsConnected());
+  }
   cpu_free(&cpu);return 0;
 }

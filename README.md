@@ -67,6 +67,14 @@ operations stop explicitly. Provenance and licenses are in
 For bounded development input, `WIILLR_INPUT_SCRIPT` names sorted lines containing
 `guest-cycle button-mask-hex [present [pairing]]`; `WIILLR_SYNC_CYCLES` schedules
 one console Sync press. These feed device input without changing guest flags.
+`--interactive` opens a normal window with normal audio; automated runs remain
+hidden and silent. `--audio-output muted` exercises the real host device without
+speaker output. `--window-title` sets the clean game caption. Visible controls
+use arrows/left stick for the sideways D-pad, X/South for 2, Z/East for 1,
+Enter/Start for Plus, C/West for A and A/right shoulder for HOME. Hold D/right
+trigger to enter virtual-remote pairing and press the console Sync button.
+I/J/K/L or the right stick move the virtual pointer. Physical-device ownership
+and the owner-facing interaction route still require qualification.
 
 The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 The GPIO AV encoder bus clocks real I2C transactions into a register bank;

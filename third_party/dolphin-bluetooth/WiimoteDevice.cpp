@@ -558,7 +558,12 @@ void WiimoteDevice::ReceiveConnectionResponse(u8 ident, u8* data, u32 size)
   DEBUG_LOG_FMT(IOS_WIIMOTE, "    Result: {:#06x}", rsp->result);
   DEBUG_LOG_FMT(IOS_WIIMOTE, "    Status: {:#06x}", rsp->status);
 
-  DEBUG_ASSERT(rsp->result == L2CAP_SUCCESS);
+  if(rsp->result==L2CAP_PENDING)return;
+  if(rsp->result!=L2CAP_SUCCESS) {
+    // A legitimate unpaired/security rejection closes the virtual radio link.
+    // It cannot be turned into a successful HID channel or halt the machine.
+    m_host->RemoteDisconnect(GetBD());Reset();return;
+  }
   DEBUG_ASSERT(rsp->status == L2CAP_NO_INFO);
   DEBUG_ASSERT(DoesChannelExist(rsp->scid));
 
