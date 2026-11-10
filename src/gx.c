@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/gx.h"
+#include "wiillr/pointer.h"
 #include "memory/memory.h"
 #include "cpu/native_code.h"
 #include <stdio.h>
@@ -57,7 +58,7 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     if(!get || !(g->api=get(GCNLLR_NATIVE_GX_ABI))) {wii_gx_stop(g);return false;}
     const char* title=getenv("WIILLR_WINDOW_TITLE"),*window=getenv("WIILLR_WINDOW");
     g->visible=window && !strcmp(window,"1");
-    g->input=(WiiBluetoothInput){0,{512,512,616},512,384,true,true,false};
+    g->input=(WiiBluetoothInput){0,{512,512,616},512,280,false,true,false};
     const GcnllrNativeGxConfig config={.abi=GCNLLR_NATIVE_GX_ABI,.title=title?title:"Wii",.data_directory=data,
         .cache_directory=cache,.hidden=!(window && !strcmp(window,"1")),.user=g,.bp_write=bp_write,.write_copy=write_copy,
         .resolve_memory=resolve,.locate_memory=locate};
@@ -81,6 +82,8 @@ bool wii_gx_tick(WiiGx* g) {
         }
     }
     GcnllrNativeGxStatus status={0};g->api->status(&status);
+    g->quit=status.quit!=0;
+    if(g->quit)return !status.failed;
     if(g->visible && g->machine->ios.bluetooth && (!g->input_sent || g->input_field!=g->machine->fields)) {
         g->input_field=g->machine->fields;
         WiiBluetoothInput next=g->input;next.buttons=0;
@@ -97,19 +100,31 @@ bool wii_gx_tick(WiiGx* g) {
         if(pad.stick_x>176 || (pad.buttons&2))next.buttons|=4;
         if(pad.stick_y>176 || (pad.buttons&8))next.buttons|=2;
         if(pad.stick_y<80 || (pad.buttons&4))next.buttons|=1;
-        int x=(int)next.pointer_x+((int)pad.substick_x-128)/16;
+        int x=(int)next.pointer_x-((int)pad.substick_x-128)/16;
         int y=(int)next.pointer_y-((int)pad.substick_y-128)/16;
         next.pointer_x=(u16)(x<0?0:x>1023?1023:x);next.pointer_y=(u16)(y<0?0:y>767?767:y);
+        if(pad.substick_x<112 || pad.substick_x>144 || pad.substick_y<112 || pad.substick_y>144) {
+            g->mouse_active=false;next.pointing=true;
+        } else if(status.pointer.valid) {
+            g->mouse_active=true;next.pointing=true;
+            const WiiPointerCamera point=wii_pointer_camera(status.pointer.x,status.pointer.y);
+            next.pointer_x=point.x;next.pointer_y=point.y;
+        } else if(g->mouse_active)next.pointing=false;
+        /* A+B held together performs the original menu's channel drag. */
+        if(status.pointer.valid && (status.pointer.buttons&1))next.buttons|=0x800;
+        if(status.pointer.valid && (status.pointer.buttons&2))next.buttons|=0x400;
+        if(status.pointer.valid && (status.pointer.buttons&4))next.buttons|=0x8000;
         next.pairing=(pad.buttons&0x20)!=0;
         const bool sync=next.pairing && !g->input.pairing;
         if(!g->input_sent || next.buttons!=g->input.buttons || next.pairing!=g->input.pairing ||
-           next.pointer_x!=g->input.pointer_x || next.pointer_y!=g->input.pointer_y) {
+           next.pointer_x!=g->input.pointer_x || next.pointer_y!=g->input.pointer_y ||
+           next.pointing!=g->input.pointing) {
             if(!wii_bluetooth_set_input(g->machine->ios.bluetooth,&next))return false;
             g->input=next;g->input_sent=true;
         }
         if(sync && !wii_bluetooth_press_sync(g->machine->ios.bluetooth))return false;
     }
-    return !status.failed && !status.quit;
+    return !status.failed;
 }
 void wii_gx_stop(WiiGx* g) {
     if(g->machine) {g->machine->gx_fifo=NULL;g->machine->gx_user=NULL;gcn_gp_set_drain_hook(&g->machine->gp,NULL,NULL);}

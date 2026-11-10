@@ -87,7 +87,8 @@ struct WiiControl {
       const auto dsp=machine->dsp.engine?gcn_dsp_engine_stats(machine->dsp.engine):GcnDspEngineStats{};
       return "{\"ok\":true,\"cycles\":"+std::to_string(cpu->cycles)+",\"pc\":"+std::to_string(cpu->pc)+
         ",\"fields\":"+std::to_string(machine->fields)+",\"paused\":"+(paused?"true":"false")+
-        ",\"halted\":"+(cpu->halted?"true":"false")+",\"ppc_interpreter\":"+std::to_string(gcn_interpreter_instruction_count())+
+        ",\"halted\":"+(cpu->halted?"true":"false")+",\"gpio_out\":"+std::to_string(machine->gpio_out)+
+        ",\"ppc_interpreter\":"+std::to_string(gcn_interpreter_instruction_count())+
         ",\"ppc_misses\":"+std::to_string(gcn_interpreter_unique_miss_count())+",\"dsp_native\":"+std::to_string(dsp.native_instructions)+
         ",\"dsp_interpreter\":"+std::to_string(dsp.interpreter_instructions)+",\"dsp_misses\":"+std::to_string(dsp.misses)+"}";
     }

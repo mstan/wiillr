@@ -15,7 +15,7 @@ add_executable(test_wii_starlet tests/test_starlet.cpp)
 target_link_libraries(test_wii_starlet PRIVATE wii_starlet)
 add_test(NAME wii_starlet_memory COMMAND test_wii_starlet)
 add_executable(test_wii_gx_memory tests/test_gx_memory.cpp)
-target_include_directories(test_wii_gx_memory PRIVATE external/gc-wii-core/native/gx external/gc-wii-core/include)
+target_include_directories(test_wii_gx_memory PRIVATE include external/gc-wii-core/native/gx external/gc-wii-core/include)
 add_test(NAME wii_gx_memory_contract COMMAND test_wii_gx_memory)
 
 add_subdirectory(external/powerpc-recomp-core powerpc)

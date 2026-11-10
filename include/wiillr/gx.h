@@ -10,7 +10,7 @@ typedef struct {
     CPUState* cpu;
     u64 copies,scanouts,last_service;
     u32 scanout_address,scanout_width,scanout_height,scanout_stride;
-    bool visible,input_sent;
+    bool visible,input_sent,mouse_active,quit;
     u64 input_field;
     WiiBluetoothInput input;
 } WiiGx;

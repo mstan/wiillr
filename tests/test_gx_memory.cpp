@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "memory.hpp"
+#include "pointer.hpp"
+#include "wiillr/pointer.h"
 #include <array>
 #include <cstdio>
 #define CHECK(x) do {if(!(x)) {std::fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
@@ -45,5 +47,21 @@ int main() {
         static uint8_t byte;*out={&byte,0xfffffff0,32};return 1;
     };
     CHECK(!gcnllr::gx_memory(config,0,4,memory));
+    auto pointer=gcnllr::image_pointer(400,300,3,800,600,1600,1200,800,600);
+    CHECK(pointer.valid && pointer.x==32768 && pointer.y==32768 && pointer.buttons==3);
+    pointer=gcnllr::image_pointer(160,360,4,1280,720,1280,720,960,720);
+    CHECK(pointer.valid && pointer.x==0 && pointer.y==32768 && pointer.buttons==4);
+    CHECK(!gcnllr::image_pointer(159,360,1,1280,720,1280,720,960,720).valid);
+    CHECK(!gcnllr::image_pointer(1120,360,1,1280,720,1280,720,960,720).valid);
+    pointer=gcnllr::image_pointer(300,450,0,600,900,1200,1800,600,450);
+    CHECK(pointer.valid && pointer.x==32768 && pointer.y==32768);
+    CHECK(!gcnllr::image_pointer(300,224,1,600,900,1200,1800,600,450).valid);
+    CHECK(!gcnllr::image_pointer(-1,300,1,800,600,800,600,800,600).valid);
+    CHECK(!gcnllr::image_pointer(NAN,300,1,800,600,800,600,800,600).valid);
+    CHECK(!gcnllr::image_pointer(400,300,1,0,600,800,600,800,600).valid);
+    auto ir=wii_pointer_camera(32768,32768);CHECK(ir.x==512 && ir.y==280);
+    ir=wii_pointer_camera(0,0);CHECK(ir.x==762 && ir.y==93);
+    ir=wii_pointer_camera(65535,65535);CHECK(ir.x==262 && ir.y==467);
+    ir=wii_pointer_camera(16384,16384);CHECK(ir.x==637 && ir.y==187);
     return 0;
 }

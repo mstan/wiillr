@@ -212,6 +212,7 @@ int main(int argc, char** argv) {
         ++steps;
         wii_machine_tick(&machine, &cpu);
         if(!wii_gx_tick(&gx)) {fprintf(stderr,"native GX failed\n");cpu.halted=true;}
+        if(gx.quit)break;
         if (cpu.exception) {
             if (exceptions < 8)
                 fprintf(stderr, "exception delivered=%08x vector=%08x instruction_pc=%08x\n",
