@@ -30,12 +30,18 @@ gcnllr_add_native_dsp(wiillr_dsp "${WIILLR_DSP}" "${WIILLR_DSP_CATALOG}")
 
 set(WIILLR_IOS "none" CACHE STRING "Build-selected development IOS boundary")
 set_property(CACHE WIILLR_IOS PROPERTY STRINGS none native-development)
+set(WIILLR_GX "none" CACHE STRING "Build-selected development GX boundary")
+set_property(CACHE WIILLR_GX PROPERTY STRINGS none native-development)
+if(NOT WIILLR_GX MATCHES "^(none|native-development)$")
+  message(FATAL_ERROR "Unknown GX provider")
+endif()
 if(NOT WIILLR_IOS MATCHES "^(none|native-development)$")
   message(FATAL_ERROR "Unknown IOS provider")
 endif()
-add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/ipc.c src/dsp.c src/ios.c src/ave.c
+add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/ipc.c src/dsp.c src/ios.c src/ave.c src/gx.c
   external/gc-wii-core/src/pi.c external/gc-wii-core/src/mi.c external/gc-wii-core/src/vi.c
   external/gc-wii-core/src/ai.c external/gc-wii-core/src/exi.c
+  external/gc-wii-core/src/cp.c external/gc-wii-core/src/pe.c external/gc-wii-core/src/gp.c
   external/gc-wii-core/src/exi_cpu.c external/gc-wii-core/src/rtc.c
   external/gc-wii-core/src/memcard.c external/gc-wii-core/src/di.c external/gc-wii-core/src/si.c)
 add_library(wii_fs STATIC src/fs.cpp third_party/dolphin-ios-fs/FileSystemCommon.cpp
@@ -47,7 +53,10 @@ add_executable(test_wii_fs tests/test_fs.cpp)
 target_link_libraries(test_wii_fs PRIVATE wii_boot)
 add_test(NAME wii_nand_persistence COMMAND test_wii_fs "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(wii_boot PRIVATE GCNLLR_VI_DEVICE_ONLY=1)
+target_compile_definitions(wii_boot PRIVATE GCNLLR_GPU_DEVICE_ONLY=1)
 target_compile_definitions(wii_boot PUBLIC WIILLR_IOS_NATIVE=$<STREQUAL:${WIILLR_IOS},native-development>)
+target_compile_definitions(wii_boot PUBLIC WIILLR_GX_NATIVE=$<STREQUAL:${WIILLR_GX},native-development>)
+target_link_libraries(wii_boot PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(wii_boot PUBLIC include)
 target_link_libraries(wii_boot PUBLIC gcn_runtime_core)
 target_link_libraries(wii_boot PUBLIC wiillr_dsp)
@@ -63,6 +72,12 @@ add_test(NAME wii_pi_ipc COMMAND test_wii_devices)
 add_executable(test_wii_ave tests/test_ave.c)
 target_link_libraries(test_wii_ave PRIVATE wii_boot)
 add_test(NAME wii_ave_serial_bus COMMAND test_wii_ave)
+add_executable(test_wii_gpu tests/test_gpu.c)
+target_link_libraries(test_wii_gpu PRIVATE wii_boot)
+add_test(NAME wii_graphics_fifo COMMAND test_wii_gpu)
+add_executable(test_wii_audio_dma tests/test_audio_dma.c)
+target_link_libraries(test_wii_audio_dma PRIVATE wii_boot)
+add_test(NAME wii_audio_dma COMMAND test_wii_audio_dma)
 add_executable(test_wii_ios tests/test_ios.c)
 target_link_libraries(test_wii_ios PRIVATE wii_boot)
 add_test(NAME wii_native_ios_contract COMMAND test_wii_ios)

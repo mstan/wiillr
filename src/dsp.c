@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: MIT */
-/* Bounded DSP discovery adapter: maintained LLE/AOT engine, real mailbox and
- * control semantics. ARAM/AID transfers are not implemented here yet and fail
- * explicitly. No audio or complete Wii DSP compatibility is claimed. */
+/* Maintained DSP engine with shared ARAM and paced audio-DMA state machines.
+ * PCM retirement is counted; audible output is not attached by this adapter. */
 #include "wiillr/dsp.h"
 #include "cpu/native_code.h"
 #include "memory/memory.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 static bool prepare(void* user, u32 offset, u32 size, bool writing) {
@@ -28,11 +28,16 @@ static bool written(void* user, u32 offset, u32 size) {
 }
 static u64 timebase(void* user) { return ((WiiDsp*)user)->cpu->timebase; }
 static void interrupt(void* user) { ((WiiDsp*)user)->registers.csr |= GCN_DSP_CSR_DSPINT; }
+static void audio(void* user,const u8* samples,u32 bytes) {
+    WiiDsp* d=user;d->audio_frames+=bytes/4;
+    for(u32 n=0;n<bytes;n++)if(samples[n])++d->audio_nonzero_bytes;
+}
 
 bool wii_dsp_start(WiiDsp* d, CPUState* cpu, const u8* irom, const u8* coef) {
     memset(d, 0, sizeof *d);
     gcn_dsp_reset_registers(&d->registers);
     d->cpu = cpu;
+    d->registers.audio_sink=audio;d->registers.audio_user=d;
     d->aram = calloc(1, 0x1000000);
     if (!d->aram) return false;
     GcnDspEngineConfig config = {0};
@@ -61,6 +66,9 @@ static bool read16(WiiDsp* d, u32 offset, u16* value) {
                (d->registers.dma_active ? GCN_DSP_CSR_DMA:0);
         return true;
     }
+    if(offset>=GCN_DSP_AID_START_HI && offset<=GCN_DSP_AID_BLOCKS_LEFT) {
+        *value=gcn_dsp_aid_read16(&d->registers,offset);return true;
+    }
     *value=gcn_dsp_reg_read16(&d->registers, offset);
     return true;
 }
@@ -82,8 +90,9 @@ static bool write16(WiiDsp* d, u32 offset, u16 value) {
         d->registers.csr=(d->registers.csr & 0xa8u & ~value) | (value & 0x150u);
         return true;
     }
-    if (offset == GCN_DSP_AID_CTRL && (value & GCN_DSP_AID_ENABLE))
-        return false; /* actual transfer must be attached before acceptance */
+    if(offset>=GCN_DSP_AID_START_HI && offset<=GCN_DSP_AID_BLOCKS_LEFT) {
+        gcn_dsp_aid_write16(&d->registers,offset,value,true);return true;
+    }
     gcn_dsp_reg_write16(&d->registers, offset, value);
     if(offset==GCN_DSP_AR_CNT_LO)
         return gcn_dsp_aram_transfer(&d->registers,d->cpu,d->cpu->mem2,d->cpu->mem2_size);
@@ -95,7 +104,10 @@ bool wii_dsp_write(WiiDsp* d, u32 offset, u8 size, u64 value) {
     if (size == 2) return write16(d, offset, (u16)value);
     return write16(d, offset, (u16)(value >> 16)) && write16(d, offset+2, (u16)value);
 }
-bool wii_dsp_tick(WiiDsp* d, u32 cpu_cycles) {
+bool wii_dsp_tick(WiiDsp* d, u32 cpu_cycles,u32 audio_period) {
+    if(!gcn_dsp_aid_advance(&d->registers,d->cpu,cpu_cycles,audio_period)) {
+        fprintf(stderr,"invalid audio DMA address=%08x\n",d->registers.aid_cur_addr);return false;
+    }
     gcn_dsp_aram_advance(&d->registers,cpu_cycles);
     u64 cycles=(u64)cpu_cycles+d->cycle_phase;
     d->cycle_phase=(u32)(cycles%6);

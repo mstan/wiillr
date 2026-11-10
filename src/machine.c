@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/machine.h"
 #include "cpu/timing.h"
+#include "memory/memory.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -15,6 +16,12 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     if(width==4 && gpio==0x0d0000c8u)
         return (m->gpio_out&m->gpio_direction&0x0320u)|wii_ave_pins(&m->ave)|
                (m->di.disc_present?0x80u:0);
+    if(physical>=0x0c000000u && physical+width<=0x0c000000u+GCN_CP_SIZE &&
+       (width==2 || width==4) && !(address&(width-1)))
+        return gcn_cp_read(&m->cp,cpu,physical|0xc0000000u,width);
+    if(physical>=0x0c001000u && physical+width<=0x0c001000u+GCN_PE_SIZE &&
+       (width==2 || width==4) && !(address&(width-1)))
+        return gcn_pe_read(&m->pe,cpu,physical|0xc0000000u,width);
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3))
         return gcn_si_read(&m->si, cpu, GCN_SI_BASE + physical - 0x0d006400u, width);
@@ -72,6 +79,24 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
         m->gpio_out=(m->gpio_out&~0xc3a0u)|((u32)value&0xc3a0u);
         if(wii_ave_gpio(&m->ave,m->gpio_out,m->gpio_direction))return;
         fprintf(stderr,"unimplemented AVE read register=%02x\n",m->ave.index);cpu->halted=true;return;
+    }
+    if(physical>=0x0c000000u && physical+width<=0x0c000000u+GCN_CP_SIZE &&
+       (width==2 || width==4) && !(address&(width-1))) {
+        gcn_cp_write(&m->cp,cpu,physical|0xc0000000u,(u32)value,width);return;
+    }
+    if(physical>=0x0c001000u && physical+width<=0x0c001000u+GCN_PE_SIZE &&
+       (width==2 || width==4) && !(address&(width-1))) {
+        gcn_pe_write(&m->pe,cpu,physical|0xc0000000u,(u32)value,width);return;
+    }
+    if(physical>=0x0c008000u && physical+width<=0x0c008000u+GCN_GP_SIZE &&
+       (width==1 || width==2 || width==4 || width==8) && !(address&(width-1))) {
+        u32 available;
+        if(m->gp.count+width>=32 && (!gcn_mem_resolve(cpu,m->pi.reg[GCN_PI_FIFO_WPTR>>2],&available) || available<32)) {
+            fprintf(stderr,"invalid GX gather address=%08x\n",m->pi.reg[GCN_PI_FIFO_WPTR>>2]);cpu->halted=true;return;
+        }
+        if(width==8) {gcn_gp_write(&m->gp,cpu,address,(u32)(value>>32),4);gcn_gp_write(&m->gp,cpu,address+4,(u32)value,4);}
+        else gcn_gp_write(&m->gp,cpu,address,(u32)value,width);
+        return;
     }
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3)) {
@@ -144,11 +169,16 @@ static void di_interrupt(void* user, int asserted) {
 static void si_interrupt(void* user, int asserted) {
     gcn_pi_set_interrupt(user, GCN_PI_INT_SI, asserted);
 }
+static void cp_interrupt(void* user,int asserted) {gcn_pi_set_interrupt(user,GCN_CP_INT_CAUSE,asserted);}
+static void pe_interrupt(void* user,u32 cause,int asserted) {gcn_pi_set_interrupt(user,cause,asserted);}
 
 void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     memset(m, 0, sizeof *m);
     wii_ave_init(&m->ave);
     gcn_pi_init_model(&m->pi, true);
+    gcn_cp_init_model(&m->cp,true);gcn_cp_set_irq(&m->cp,cp_interrupt,&m->pi);
+    gcn_pe_init(&m->pe);gcn_pe_set_irq(&m->pe,pe_interrupt,&m->pi);
+    gcn_gp_init(&m->gp,&m->pi,&m->cp);gcn_pi_set_fifo_reset_hook(&m->pi,gcn_gp_reset);
     wii_ipc_init(&m->ipc);
     wii_ios_native_init(&m->ios);
     gcn_mi_init(&m->mi);
@@ -178,11 +208,22 @@ void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
     m->tb_phase = (u32)(delta % 12);
     m->last_cycles = cpu->cycles;
     cpu->timebase += ticks;
+    while(m->cp.gp_read_enable && gcn_cp_fifo_rw_distance(&m->cp)>=32 && !gcn_cp_at_breakpoint(&m->cp)) {
+        u32 available;
+        const u32 address=gcn_cp_fifo_read_pointer(&m->cp);
+        const u8* data=gcn_mem_resolve(cpu,address,&available);
+        if(!data || available<32 || !m->gx_fifo || !m->gx_fifo(m->gx_user,data,32)) {
+            fprintf(stderr,"GX FIFO consumer unavailable/failed address=%08x\n",address);cpu->halted=true;break;
+        }
+        gcn_cp_gpu_consume_chunk(&m->cp);
+    }
     ppc_decrementer_tick(cpu, ticks);
-    if (!wii_dsp_tick(&m->dsp, (u32)elapsed)) cpu->halted=true;
+    const u32 audio_rate=(m->ai.control&GCN_AI_CR_AIDFR)?32000u:48000u;
+    if (!wii_dsp_tick(&m->dsp, (u32)elapsed,(u32)(729000000ull*8/audio_rate))) cpu->halted=true;
     u32 csr=m->dsp.registers.csr;
     gcn_pi_set_interrupt(&m->pi, GCN_PI_INT_DSP,
-                         ((csr & 0x80u) && (csr & 0x100u)) || ((csr & 0x20u) && (csr & 0x40u)));
+                         ((csr & 0x80u) && (csr & 0x100u)) || ((csr & 0x20u) && (csr & 0x40u)) ||
+                         ((csr & GCN_DSP_CSR_AIDINT) && (csr & GCN_DSP_CSR_AIDMASK)));
     gcn_vi_tick(cpu->cycles);
     gcn_ai_tick((u32)elapsed);
     gcn_di_tick(cpu, (u32)elapsed);

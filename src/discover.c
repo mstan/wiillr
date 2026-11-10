@@ -5,6 +5,7 @@
 #include "wiillr/dol.h"
 #include "wiillr/machine.h"
 #include "wiillr/boot.h"
+#include "wiillr/gx.h"
 #include "memory/memory.h"
 #include "cpu/interpreter.h"
 #include "debug/rings.h"
@@ -38,6 +39,10 @@ static int dump(const char* path, const void* bytes, size_t size) {
 }
 
 int main(int argc, char** argv) {
+    const char *gx_library=NULL,*gx_data=NULL,*gx_cache=NULL;
+    if(argc>=9 && !strcmp(argv[argc-4],"--gx")) {
+        gx_library=argv[argc-3];gx_data=argv[argc-2];gx_cache=argv[argc-1];argc-=4;
+    }
     if (argc != 5 && argc != 7 && argc != 8 && argc != 10) {
         fprintf(stderr, "usage: wiillr-discover ORIGINAL-DOL MAX-STEPS MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID]\n"
                         "Discovery only; all guest instructions are interpreted. STOP-PC=0 disables.\n");
@@ -91,6 +96,16 @@ int main(int argc, char** argv) {
         fprintf(stderr,"filesystem needs the build-selected native IOS provider\n");cpu_free(&cpu);return 2;
 #endif
     }
+    WiiGx gx={0};
+    if(gx_library) {
+#if WIILLR_GX_NATIVE
+        if(!wii_gx_start(&gx,&machine,&cpu,gx_library,gx_data,gx_cache)) {
+            fprintf(stderr,"native GX start failed\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+        }
+#else
+        fprintf(stderr,"GX needs the build-selected native provider\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+#endif
+    }
     u8 irom[8192], coef[4096];
     if (argc == 7 || argc==10) {
         FILE* rom=fopen(argv[5], "rb");
@@ -99,7 +114,7 @@ int main(int argc, char** argv) {
             fread(coef,1,sizeof coef,co)==sizeof coef;
         if (rom) fclose(rom);
         if (co) fclose(co);
-        if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
+        if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
     }
     gcn_interpreter_set_cache_loop_batch_enabled(false);
     u64 steps = 0, exceptions = 0;
@@ -109,6 +124,7 @@ int main(int argc, char** argv) {
         if (!gcn_interpreter_step(&cpu)) break;
         ++steps;
         wii_machine_tick(&machine, &cpu);
+        if(!wii_gx_tick(&gx)) {fprintf(stderr,"native GX failed\n");cpu.halted=true;}
         if (cpu.exception) {
             if (exceptions < 8)
                 fprintf(stderr, "exception delivered=%08x vector=%08x instruction_pc=%08x\n",
@@ -144,6 +160,8 @@ int main(int argc, char** argv) {
     printf("{\"ave_transactions\":%llu,\"ave_register_writes\":%llu,\"ave_failed\":%s}\n",
            (unsigned long long)machine.ave.transactions,(unsigned long long)machine.ave.writes,
            machine.ave.failed ? "true":"false");
+    printf("{\"audio_dma_frames\":%llu,\"audio_dma_nonzero_bytes\":%llu,\"audio_output\":\"unattached\"}\n",
+           (unsigned long long)machine.dsp.audio_frames,(unsigned long long)machine.dsp.audio_nonzero_bytes);
     if (machine.dsp.engine) {
         GcnDspEngineStats stats=gcn_dsp_engine_stats(machine.dsp.engine);
         printf("{\"dsp_provider\":%u,\"native\":%llu,\"interpreter\":%llu,\"misses\":%llu,\"failed\":%u}\n",
@@ -152,6 +170,13 @@ int main(int argc, char** argv) {
         wii_dsp_stop(&machine.dsp);
     }
     wii_fs_unmount(machine.ios.fs);
+    if(gx.api) {
+        GcnllrNativeGxStatus status={0};gx.api->drain();gx.api->status(&status);
+        printf("{\"gx_fifo_bytes\":%llu,\"gx_draws\":%llu,\"gx_display_copies\":%llu,\"gx_presents\":%llu,\"gx_failed\":%u}\n",
+            (unsigned long long)status.fifo_bytes,(unsigned long long)status.draws,
+            (unsigned long long)status.display_copies,(unsigned long long)status.presents,status.failed);
+    }
+    wii_gx_stop(&gx);
     printf("{\"execution\":\"discovery-interpreter\",\"entry\":%u,\"pc\":%u,"
            "\"steps\":%llu,\"interpreter_instructions\":%llu,\"unique_native_misses\":%llu,"
            "\"cycles\":%llu,\"halted\":%s,\"stop_reached\":%s,\"mem1_saved\":%s}\n",

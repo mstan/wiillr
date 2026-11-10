@@ -13,6 +13,9 @@
 #include "exi/exi.h"
 #include "di/di.h"
 #include "si/si.h"
+#include "cp/cp.h"
+#include "pe/pe.h"
+#include "gp/gp.h"
 typedef struct {
     GcnPi pi;
     WiiIpc ipc;
@@ -31,6 +34,11 @@ typedef struct {
     u32 gpio_out,gpio_direction;
     WiiAve ave;
     u32 vi_config; /* HW_VI1CFG bit17: region/VISEL selection latch */
+    GcnCp cp;
+    GcnPe pe;
+    GcnGp gp;
+    int (*gx_fifo)(void* user,const u8* bytes,u32 size);
+    void* gx_user;
 } WiiMachine;
 void wii_machine_init(WiiMachine* machine, CPUState* cpu);
 void wii_machine_tick(WiiMachine* machine, CPUState* cpu);

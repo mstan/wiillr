@@ -70,6 +70,14 @@ def discover(args):
             raise ValueError('A native filesystem profile belongs to PPC discovery')
         original_nand, uid = nand_profile.prepare(args.nand, args.nand_profile, args.title)
         command += [str(args.nand_profile.absolute()), str(uid), str(metadata['group_id'])]
+    if args.gx_library:
+        if starlet:
+            raise ValueError('Native GX belongs to PPC discovery')
+        paths['gx_library'] = args.gx_library.resolve(strict=True)
+        data, cache = work / 'gx-data', work / 'gx-cache'
+        data.mkdir(); cache.mkdir()
+        command += ['--gx', str(paths['gx_library']), str(data), str(cache)]
+        env.update(SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0', SDL_AUDIODRIVER='dummy', GCN_AUDIO='0')
     before = {name: identity(path) for name,path in paths.items()}
     receipt = dict(inputs=before, title=metadata, command=command,
                    boot_profile='ios4-v3-elf-kernel-entry' if starlet else 'native-ios4-v3-memory-contract',
@@ -110,6 +118,7 @@ def main():
     p.add_argument('--dsp-rom', type=Path)
     p.add_argument('--dsp-coef', type=Path)
     p.add_argument('--nand-profile', type=Path, help='Create or reuse an isolated writable NAND copy')
+    p.add_argument('--gx-library', type=Path, help='Wii-selected shared native GX service library')
     args = p.parse_args()
     if not 0 < args.steps <= 1000000000 or args.timeout <= 0:
         p.error('Positive bounded steps/timeout required')

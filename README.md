@@ -42,6 +42,11 @@ The machine reuses the shared PI, VI, MI, AI, EXI, SI and DI implementations.
 The GPIO AV encoder bus clocks real I2C transactions into a register bank;
 unaddressed devices NACK, and reads of unimplemented register state stop.
 Analog output conversion and register-driven presentation are not yet qualified.
+CP/PE and the gather pipe feed the same shared native GX service using explicit
+MEM1/MEM2 callbacks. `WIILLR_GX=native-development` and `--gx-library` enable
+that development composition; the default build stops when it needs a renderer.
+Audio DMA uses shared paced transfers and records retired PCM, while audible
+output is still unattached. These components do not establish menu compatibility.
 Wii clock selection preserves the existing GameCube defaults. The DSP engine is
 selected at build time with `WIILLR_DSP`; development interpretation and static
 AOT catalogs remain separate builds. DSP ROMs/coefficient data must be supplied
