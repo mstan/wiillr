@@ -21,6 +21,7 @@ typedef struct {
     bool kd_rtc_set;
     u64 kd_utc,kd_utc_cycles;
     bool kd_utc_set;
+    u32 kd_suspend_count; /* local KD scheduler gate; no network workers installed */
     GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
     bool di_initialized;
     bool di_waiting;

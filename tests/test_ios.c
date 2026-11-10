@@ -82,6 +82,11 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && ios.led_mode==2 && gpio==0x320);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x10000400,246,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-4 && ios.led_mode==2 && gpio==0x320);
+    CHECK(mem_read32_cia(&cpu,0x10000440,0)==0x12345678);
     ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,0x10000400,0,0);
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
@@ -115,10 +120,32 @@ int main(void) {
     mem_write32_cia(&cpu,message+20,0,0);mem_write32_cia(&cpu,message+28,32,0);
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && (s32)mem_read32_cia(&cpu,0x10000440,0)==-39);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && mem_read32_cia(&cpu,0x10000440,0)==1 && ios.kd_suspend_count==1);
     CHECK(mem_read32_cia(&cpu,0x10000444,0)==0xabcdef01);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,2,0);mem_write32_cia(&cpu,message+28,4,0);
+    mem_write32_cia(&cpu,message+20,32,0);mem_write32_cia(&cpu,0x10000400,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && mem_read32_cia(&cpu,0x10000440,0)==2 && ios.kd_suspend_count==2);
+    CHECK(mem_read32_cia(&cpu,0x10000444,0)==0xabcdef01);
+    mem_write32_cia(&cpu,message+28,32,0);
     ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,3,0);
+    mem_write32_cia(&cpu,message+20,0,0);
     mem_write32_cia(&cpu,0x10000440,0x12345678,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && mem_read32_cia(&cpu,0x10000440,0)==1 && ios.kd_suspend_count==1);
+    CHECK(mem_read32_cia(&cpu,0x10000444,0)==0xabcdef01);
+    ios.phase=0;wii_ipc_init(&ipc);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !ios.kd_suspend_count && !mem_read32_cia(&cpu,0x10000440,0));
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,8,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && (s32)mem_read32_cia(&cpu,0x10000440,0)==-39);
+    CHECK(mem_read32_cia(&cpu,0x10000444,0)==0xabcdef01 && !ios.kd_suspend_count);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message+12,0x0d,0);
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && (s32)mem_read32_cia(&cpu,0x10000440,0)==-39);
@@ -213,5 +240,22 @@ int main(void) {
     cpu.cycles+=60000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ipc.y && ios.keyboard_messages[0]==message);
     CHECK(mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x12345678);
     CHECK(mem_read32_cia(&cpu,0x10000400,0)==0xabcdef01);
+    /* IP control has a real descriptor lifecycle; opening it must not turn
+     * an unimplemented network operation into a successful reply. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);
+    memcpy(cpu.ram+path,"/dev/net/ip/top",sizeof "/dev/net/ip/top");
+    mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);mem_write32_cia(&cpu,message+16,0,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && ios.descriptors[0]==12);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+8,0,0);
+    mem_write32_cia(&cpu,message+12,0x1234,0);mem_write32_cia(&cpu,message+4,0x12345678,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y && mem_read32_cia(&cpu,message+4,0)==0x12345678);
+    ios.phase=0;wii_ipc_init(&ipc);mem_write32_cia(&cpu,message,2,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !ios.descriptors[0]);
     cpu_free(&cpu);return 0;
 }

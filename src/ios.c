@@ -128,6 +128,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/net/ncd/manage") && ios->fs)device=10;
         if(!strcmp((const char*)path,"/dev/usb/oh1/57e/305"))device=9;
         if(!strcmp((const char*)path,"/dev/usb/kbd"))device=11;
+        if(!strcmp((const char*)path,"/dev/net/ip/top"))device=12;
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
@@ -209,14 +210,40 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         return 1;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 &&
-       (read_be32(request+12)==1 || read_be32(request+12)==3)) {
-        // Suspend/resume of an unavailable WC24 scheduler reports disabled.
-        // There is no background network engine whose work can be suspended.
-        ios->result=-4;
+       (read_be32(request+12)==8 || read_be32(request+12)==9 || read_be32(request+12)==0x0d)) {
+        // Socket and background mail workers are absent in this offline
+        // profile. Never claim a socket lock or a worker's mail-cache flush.
         const u32 output=read_be32(request+24),size=read_be32(request+28);
-        if(read_be32(request+20) || !output || (output&3) || size<32 ||
+        ios->result=-4;
+        if(read_be32(request+20) || !output || (output&3) || size<4 ||
            !ios_memory(cpu,output,&available) || available<size)return 1;
         mem_write32_cia(cpu,output,(u32)-39,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 &&
+       (read_be32(request+12)>=1 && read_be32(request+12)<=3)) {
+        // KD returns its nesting count, including locks held while the PPC
+        // accesses local WC24 files. This provider has an empty worker queue;
+        // download/mail execution remains unsupported independently of this gate.
+        ios->result=-4;
+        const u32 operation=read_be32(request+12),input_size=read_be32(request+20);
+        const u32 output=read_be32(request+24),size=read_be32(request+28);
+        const u32 minimum=operation==2?4:32;
+        if(!output || (output&3) || size<minimum ||
+           !ios_memory(cpu,output,&available) || available<size)return 1;
+        if(operation==2) {
+            const u32 address=read_be32(request+16);const u8* input=ios_memory(cpu,address,&available);
+            if(!address || (address&3) || input_size<4 || !input || available<input_size)return 1;
+            if(read_be32(input))return 0; /* unimplemented try-suspend flags */
+        }else if(input_size)return 1;
+        if(operation==3) {
+            if(ios->kd_suspend_count)--ios->kd_suspend_count;
+        }else {
+            if(ios->kd_suspend_count==0x7fffffffu) {
+                mem_write32_cia(cpu,output,(u32)-3,cpu->pc);ios->result=0;return 1;
+            }
+            ++ios->kd_suspend_count;
+        }
+        mem_write32_cia(cpu,output,ios->kd_suspend_count,cpu->pc);ios->result=0;return 1;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==1 && read_be32(request+12)==0x5001 && ios->hollywood) {
         ios->result=-4;
@@ -306,7 +333,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
            read_be32(request+28)!=32 ||
            !ios_memory(cpu,read_be32(request+24),&available) || available<32)return 1;
         const u32 mode=read_be32(input);
-        if(mode>2)return 0;
+        if(mode>2)return 1; /* invalid setting; keep the current LED state */
         ios->led_mode=mode;
         if(!mode && ios->gpio_out)*ios->gpio_out&=~0x20u;
         ios->result=0;return 1;
