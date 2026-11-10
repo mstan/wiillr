@@ -250,6 +250,18 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         mem_write32_cia(cpu,output+4,(u32)title,cpu->pc);ios->result=0;return 1;
     }
     if(fd<24 && ios->fs && (ios->descriptors[fd]==4 || ios->descriptors[fd]==5)) {
+        if(ios->command==7 && ios->descriptors[fd]==4 && read_be32(request+12)==0x0c) {
+            ios->result=-101;
+            if(read_be32(request+16)!=1 || read_be32(request+20)!=2)return 1;
+            const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+            if(!vectors || available<24 || read_be32(vectors+4)!=64 || read_be32(vectors+12)!=4 || read_be32(vectors+20)!=4)return 1;
+            const u32 input=read_be32(vectors),out_clusters=read_be32(vectors+8),out_inodes=read_be32(vectors+16);
+            const u8* path=ios_memory(cpu,input,&available);if(!path || available<64)return 1;
+            if(!ios_memory(cpu,out_clusters,&available) || available<4 || !ios_memory(cpu,out_inodes,&available) || available<4)return 1;
+            u32 clusters,inodes;ios->result=wii_fs_directory_usage(ios->fs,path,&clusters,&inodes);
+            if(!ios->result){mem_write32_cia(cpu,out_clusters,clusters,cpu->pc);mem_write32_cia(cpu,out_inodes,inodes,cpu->pc);}
+            return 1;
+        }
         if(ios->command==7 && ios->descriptors[fd]==4 && read_be32(request+12)==4) {
             ios->result=-101;
             const u32 count=read_be32(request+16);

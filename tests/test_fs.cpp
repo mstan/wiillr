@@ -157,6 +157,18 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,0x1014,12,0);mem_write32_cia(&cpu,buffer+32,0x11223344,0);
   es_request(4,2,2);mem_write32_cia(&cpu,message+8,1,0);
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-101 && mem_read32_cia(&cpu,buffer+32,0)==0x11223344);
+  // GetUsage returns actual directory storage, and malformed output vectors
+  // cannot partially overwrite the first result.
+  std::memset(cpu.ram+0x1800,0,64);std::memcpy(cpu.ram+0x1800,"/sys",5);
+  mem_write32_cia(&cpu,0x1000,0x1800,0);mem_write32_cia(&cpu,0x1004,64,0);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,4,0);
+  mem_write32_cia(&cpu,0x1010,buffer+32,0);mem_write32_cia(&cpu,0x1014,4,0);
+  es_request(0x0c,1,2);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  CHECK(mem_read32_cia(&cpu,buffer,0)==1 && mem_read32_cia(&cpu,buffer+32,0)==2);
+  mem_write32_cia(&cpu,0x1014,3,0);mem_write32_cia(&cpu,buffer,0x12345678,0);
+  es_request(0x0c,1,2);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-101 && mem_read32_cia(&cpu,buffer,0)==0x12345678);
   cpu_free(&cpu);wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0x1001,1);CHECK(nand && wii_fs_open(nand,"/save",1)==-102);wii_fs_unmount(nand);
   // Only this exclusively created, flat disposable fixture is removed.

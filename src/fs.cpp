@@ -163,6 +163,13 @@ extern "C" int32_t wii_fs_read_directory(WiiFs* s,const uint8_t* input,uint8_t* 
     return 0;
   }catch(const std::invalid_argument&){return -101;}catch(const std::exception&){return -117;}
 }
+extern "C" int32_t wii_fs_directory_usage(WiiFs* s,const uint8_t* input,uint32_t* clusters,uint32_t* inodes) {
+  try {
+    const auto path=path_param(s,input,64);
+    const auto stats=s->backend.GetDirectoryStats(path);if(!stats)return result(stats.error());
+    *clusters=stats->used_clusters;*inodes=stats->used_inodes;return 0;
+  }catch(const std::invalid_argument&){return -101;}catch(const std::exception&){return -117;}
+}
 extern "C" int32_t wii_es_content_open(WiiFs* s,uint32_t index) {
   try {
     uint64_t title;if(index>0xffff || !wii_fs_boot_title(s,&title))return -1017;

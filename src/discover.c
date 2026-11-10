@@ -6,6 +6,8 @@
 #include "wiillr/machine.h"
 #include "wiillr/boot.h"
 #include "wiillr/gx.h"
+#include "wiillr/control.h"
+#include "host/host_audio.h"
 #include "memory/memory.h"
 #include "cpu/interpreter.h"
 #if WIILLR_PPC_STATIC
@@ -156,11 +158,17 @@ int main(int argc, char** argv) {
         if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
     }
     gcn_interpreter_set_cache_loop_batch_enabled(false);
+    if(machine.dsp.engine && gcn_host_audio_start(32000u)) {
+        machine.dsp.output_sink=gcn_host_audio_submit_be_s16;machine.dsp.output_rate=32000u;
+    }
 #if WIILLR_PPC_STATIC
     wii_native_install();
 #endif
     u64 steps = 0, exceptions = 0;unsigned input_next=0;bool input_pending=false;
     WiiBluetoothInput input_state={0};
+    input_state.accel[0]=input_state.accel[1]=512;input_state.accel[2]=616;
+    WiiControl* control=wii_control_start(&cpu,&machine,&gx,&input_state,&input_pending);
+    if(getenv("WIILLR_CONTROL_PORT") && !control){wii_dsp_stop(&machine.dsp);wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
     while (
 #if WIILLR_PPC_STATIC
            cpu.cycles < limit &&
@@ -169,6 +177,8 @@ int main(int argc, char** argv) {
 #endif
            !cpu.halted && (!stop || cpu.pc != stop)) {
         u32 cia = cpu.pc;
+        if(!wii_control_poll(control))continue;
+        if(wii_control_quit_requested(control))break;
         if(sync_pending && cpu.cycles>=sync_at && machine.ios.bluetooth) {
             if(!wii_bluetooth_press_sync(machine.ios.bluetooth)){cpu.halted=true;break;}
             fprintf(stderr,"console Sync button cycles=%llu\n",(unsigned long long)cpu.cycles);
@@ -212,6 +222,7 @@ int main(int argc, char** argv) {
         }
     }
     int saved = dump(argv[3], cpu.ram, cpu.ram_size);
+    wii_control_stop(control);
     printf("{\"ios_provider\":\"%s\",\"native_operations\":%llu,\"ARM_interpreter_instructions\":0,\"stm_event_waiting\":%s}\n",
            WIILLR_IOS_NATIVE ? "native-development":"none",(unsigned long long)machine.ios.operations,
            machine.ios.event_waiting ? "true":"false");
@@ -242,8 +253,13 @@ int main(int argc, char** argv) {
            machine.vi.reg[GCN_VI_DCR>>1],machine.vi.irq_level,machine.vi.half_line_count,
            (u32)machine.vi.reg[0x18]<<16|machine.vi.reg[0x19],(u32)machine.vi.reg[0x1a]<<16|machine.vi.reg[0x1b],
            (u32)machine.vi.reg[0x1c]<<16|machine.vi.reg[0x1d],(u32)machine.vi.reg[0x1e]<<16|machine.vi.reg[0x1f]);
-    printf("{\"audio_dma_frames\":%llu,\"audio_dma_nonzero_bytes\":%llu,\"audio_output\":\"unattached\"}\n",
-           (unsigned long long)machine.dsp.audio_frames,(unsigned long long)machine.dsp.audio_nonzero_bytes);
+    GcnHostAudioStats audio_stats;gcn_host_audio_get_stats(&audio_stats);
+    printf("{\"audio_dma_frames\":%llu,\"audio_dma_nonzero_bytes\":%llu,\"audio_output_open\":%s,\"audio_muted\":%s,\"audio_rate\":%u,\"audio_capture_frames\":%llu,\"audio_capture_signal_frames\":%llu,\"audio_capture_peak\":%u,\"audio_capture_failed\":%s}\n",
+           (unsigned long long)machine.dsp.audio_frames,(unsigned long long)machine.dsp.audio_nonzero_bytes,
+           audio_stats.device_open?"true":"false",audio_stats.output_muted?"true":"false",audio_stats.sample_rate,
+           (unsigned long long)audio_stats.capture_frames,(unsigned long long)audio_stats.capture_signal_frames,
+           audio_stats.capture_peak,audio_stats.capture_failed?"true":"false");
+    gcn_host_audio_stop();
     if (machine.dsp.engine) {
         GcnDspEngineStats stats=gcn_dsp_engine_stats(machine.dsp.engine);
         printf("{\"dsp_provider\":%u,\"native\":%llu,\"interpreter\":%llu,\"misses\":%llu,\"failed\":%u}\n",

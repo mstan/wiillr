@@ -75,8 +75,10 @@ Analog output conversion and register-driven presentation are not yet qualified.
 CP/PE and the gather pipe feed the same shared native GX service using explicit
 MEM1/MEM2 callbacks. `WIILLR_GX=native-development` and `--gx-library` enable
 that development composition; the default build stops when it needs a renderer.
-Audio DMA uses shared paced transfers and records retired PCM, while audible
-output is still unattached. These components do not establish menu compatibility.
+Audio DMA uses shared paced transfers and records retired PCM. The shared host
+sink supports opt-in output and bounded WAV capture for the exercised 32 kHz
+route. A rate change with this sink attached stops explicitly. Headless runs
+remain muted. These components do not establish menu compatibility.
 Wii clock selection preserves the existing GameCube defaults. The DSP engine is
 selected at build time with `WIILLR_DSP`; development interpretation and static
 AOT catalogs remain separate builds. DSP ROMs/coefficient data must be supplied
@@ -92,6 +94,13 @@ The separate `wiillr-native-discover` target permits counted interpreter misses
 for bring-up (`--ppc-mode mixed-discovery`). It cannot establish native acceptance.
 Repeat `--capture` during preparation to combine verified loader and later title
 code variants with matching title/profile identities.
+`WIILLR_CONTROL_PORT` enables a loopback-only, nonblocking development interface;
+`WIILLR_CONTROL_PAUSED=1` parks before the first instruction. `tools/wii_control.py`
+provides `status`, `pause`, `run [guest-cycles]`, `input mask [x y pointing present
+pairing]`, `sync`, `read hex-address byte-count`, `write hex-address hex-bytes`,
+`frame` and `quit`. Frame capture drains actual GPU work without advancing guest
+time; `--frame-output` optionally saves a PNG using Pillow. RAM commands reject
+MMIO and out-of-range requests. A pause preserves guest time and device state.
 
 `wiillr-starlet-discover` loads the original IOS4 ARM ELF at its kernel-entry
 boundary using the pinned ARM core. Its development bus covers big-endian

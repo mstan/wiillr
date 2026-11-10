@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /* Maintained DSP engine with shared ARAM and paced audio-DMA state machines.
- * PCM retirement is counted; audible output is not attached by this adapter. */
+ * PCM retirement is counted; the consumer may attach the shared host sink. */
 #include "wiillr/dsp.h"
 #include "cpu/native_code.h"
 #include "memory/memory.h"
@@ -31,6 +31,7 @@ static void interrupt(void* user) { ((WiiDsp*)user)->registers.csr |= GCN_DSP_CS
 static void audio(void* user,const u8* samples,u32 bytes) {
     WiiDsp* d=user;d->audio_frames+=bytes/4;
     for(u32 n=0;n<bytes;n++)if(samples[n])++d->audio_nonzero_bytes;
+    if(d->output_sink)d->output_sink(d->output_user,samples,bytes);
 }
 
 bool wii_dsp_start(WiiDsp* d, CPUState* cpu, const u8* irom, const u8* coef) {
@@ -105,6 +106,9 @@ bool wii_dsp_write(WiiDsp* d, u32 offset, u8 size, u64 value) {
     return write16(d, offset, (u16)(value >> 16)) && write16(d, offset+2, (u16)value);
 }
 bool wii_dsp_tick(WiiDsp* d, u32 cpu_cycles,u32 audio_period) {
+    if(audio_period && d->output_sink && d->output_rate!=(u32)(729000000ull*8/audio_period)) {
+        fprintf(stderr,"host audio sample-rate change unsupported rate=%u\n",(unsigned)(729000000ull*8/audio_period));return false;
+    }
     if(audio_period && !gcn_dsp_aid_advance(&d->registers,d->cpu,cpu_cycles,audio_period)) {
         fprintf(stderr,"invalid audio DMA address=%08x\n",d->registers.aid_cur_addr);return false;
     }

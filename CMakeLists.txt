@@ -39,6 +39,8 @@ if(NOT WIILLR_IOS MATCHES "^(none|native-development)$")
   message(FATAL_ERROR "Unknown IOS provider")
 endif()
 add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/ipc.c src/dsp.c src/ios.c src/ave.c src/gx.c
+  src/control.cpp
+  external/gc-wii-core/src/host_audio.c
   external/gc-wii-core/src/pi.c external/gc-wii-core/src/mi.c external/gc-wii-core/src/vi.c
   external/gc-wii-core/src/ai.c external/gc-wii-core/src/exi.c
   external/gc-wii-core/src/cp.c external/gc-wii-core/src/pe.c external/gc-wii-core/src/gp.c
@@ -75,12 +77,17 @@ target_compile_definitions(wii_boot PRIVATE GCNLLR_GPU_DEVICE_ONLY=1)
 target_compile_definitions(wii_boot PUBLIC WIILLR_IOS_NATIVE=$<STREQUAL:${WIILLR_IOS},native-development>)
 target_compile_definitions(wii_boot PUBLIC WIILLR_GX_NATIVE=$<STREQUAL:${WIILLR_GX},native-development>)
 target_link_libraries(wii_boot PRIVATE ${CMAKE_DL_LIBS})
+if(WIN32)
+  target_link_libraries(wii_boot PRIVATE ws2_32 ole32 uuid avrt)
+endif()
 target_include_directories(wii_boot PUBLIC include)
 target_link_libraries(wii_boot PUBLIC gcn_runtime_core)
 target_link_libraries(wii_boot PUBLIC wiillr_dsp)
 target_link_libraries(wii_boot PRIVATE ipl_descramble_core)
 add_executable(wiillr-discover src/discover.c)
 target_link_libraries(wiillr-discover PRIVATE wii_boot)
+add_test(NAME wii_live_control COMMAND "${Python3_EXECUTABLE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_control.py" "$<TARGET_FILE:wiillr-discover>")
 set(WIILLR_PPC_GENERATED_DIR "" CACHE PATH "Private verified static PPC catalog")
 if(WIILLR_PPC_GENERATED_DIR)
   if(NOT EXISTS "${WIILLR_PPC_GENERATED_DIR}/overlay_module_tables.inc" OR
