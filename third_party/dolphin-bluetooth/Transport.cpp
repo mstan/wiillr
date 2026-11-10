@@ -62,6 +62,17 @@ void BluetoothEmuDevice::PressSync() {
   event.buffer[0]=0xff;event.buffer[1]=1;event.buffer[2]=8;
   AddEventToQueue(event);
 }
+void BluetoothEmuDevice::Close() {
+  // Release the USB reads that still have no result. Completions already
+  // posted to IOS keep their order, and the controller keeps its pairings.
+  m_hci_endpoint.reset();
+  m_acl_endpoint.reset();
+  m_event_queue.clear();
+  m_acl_pool.Clear();
+  m_scan_enable = 0;
+  m_last_ticks = 0;
+  std::fill(std::begin(m_packet_count), std::end(m_packet_count), 0);
+}
 void BluetoothEmuDevice::ResetController() {
   // HCI reset does not cancel pending USB endpoint transfers. In particular,
   // the first ACL receive is submitted before reset by the original SDK.
@@ -238,6 +249,7 @@ extern "C" WiiBluetooth* wii_bluetooth_create(CPUState* cpu,const u32* gpio,cons
   try{return new WiiBluetooth(cpu,gpio,store);}catch(const std::exception& e){std::fprintf(stderr,"Bluetooth init: %s\n",e.what());return nullptr;}
 }
 extern "C" void wii_bluetooth_destroy(WiiBluetooth* bt){delete bt;}
+extern "C" void wii_bluetooth_close(WiiBluetooth* bt){if(bt)bt->device.Close();}
 extern "C" bool wii_bluetooth_set_input(WiiBluetooth* bt,const WiiBluetoothInput* input) {
   try{if(!bt || !input)return false;bt->device.SetInput(*input);return true;}
   catch(const std::exception& e){std::fprintf(stderr,"Bluetooth input: %s\n",e.what());return false;}

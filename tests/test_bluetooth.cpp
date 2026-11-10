@@ -73,5 +73,22 @@ int main() {
   const u8 sync_event[]={0xff,1,8};CHECK(!std::memcmp(cpu.mem2+0x1000,sync_event,3));
   vector(0x1000,2,0x13fffffe,64);
   CHECK(!wii_bluetooth_submit(bt,event));
+  // Closing the USB handle releases both pending reads without publishing a
+  // reply or writing their buffers. A new handle can bind both endpoints.
+  vector(0x1000,2,0x10001000,64);
+  put(0x10001000,0x12345678);put(0x10002000,0x90abcdef);
+  CHECK(wii_bluetooth_submit(bt,event));
+  wii_bluetooth_close(bt);
+  cpu.cycles+=6000;
+  CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && !ready);
+  CHECK(mem_read32_cia(&cpu,0x10001000,0)==0x12345678);
+  CHECK(mem_read32_cia(&cpu,0x10002000,0)==0x90abcdef);
+  CHECK(wii_bluetooth_submit(bt,acl));
+  vector(0x1000,2,0x10003000,64);
+  CHECK(wii_bluetooth_submit(bt,event) && wii_bluetooth_press_sync(bt));
+  cpu.cycles+=6000;
+  CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && ready && message==event && result==3);
+  CHECK(!std::memcmp(cpu.mem2+0x3000,sync_event,3));
+  CHECK(mem_read32_cia(&cpu,0x10001000,0)==0x12345678);
   wii_bluetooth_destroy(bt);cpu_free(&cpu);return 0;
 }

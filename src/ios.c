@@ -691,12 +691,12 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==2) {
         if(fd<24 && ios->keyboard_messages[fd])return false; /* cancellation not implemented */
-        if(fd<24 && ios->descriptors[fd]==9)return false; /* USB cancellation not implemented */
         if(ios->event_waiting && fd==ios->event_fd)return false;
         if(ios->di_waiting && fd==ios->di_fd)return false;
         if(ios->sd_event_message && fd==ios->sd_event_fd)return false;
         ios->result=-4;
         if(fd<24 && ios->descriptors[fd]) {
+            if(ios->descriptors[fd]==9)wii_bluetooth_close(ios->bluetooth);
             ios->result=ios->descriptors[fd]==5 ? wii_fs_close(ios->fs,ios->fs_handles[fd]):0;
             if(!ios->result)ios->descriptors[fd]=0;
         }

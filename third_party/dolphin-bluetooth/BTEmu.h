@@ -31,6 +31,7 @@ public:
   System& GetSystem() {return m_system;}
   EmulationKernel& GetEmulationKernel() {return m_kernel;}
   void Submit(u32 message);
+  void Close();
   bool Poll(u32* message,s32* result);
   bool SensorBarEnabled() const {return gpio_out && (*gpio_out&0x100u);}
   void ResetController();
