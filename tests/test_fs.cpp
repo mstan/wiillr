@@ -141,8 +141,31 @@ int main(int argc,char** argv) {
   std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(network.data()),network.size());
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
+  const auto ncd_write=[&]() {
+    es_request(6,1,1);mem_write32_cia(&cpu,message+8,2,0);
+    mem_write32_cia(&cpu,buffer+32,0x11223344,0);
+    CHECK(exchange());
+    return int32_t(mem_read32_cia(&cpu,message+4,0));
+  };
+  const auto network_reader=wii_fs_open(nand,"/shared2/sys/net/02/config.dat",1);CHECK(network_reader>=0);
+  const auto original_network=network;
+  cpu.mem2[0x2004]=0;cpu.mem2[0x2000+network.size()-1]=0x6b;
+  mem_write32_cia(&cpu,0x1004,WIILLR_NETWORK_CONFIG_SIZE-1,0);
+  CHECK(ncd_write()==-4 && mem_read32_cia(&cpu,buffer+32,0)==0x11223344);
+  mem_write32_cia(&cpu,0x1004,WIILLR_NETWORK_CONFIG_SIZE,0);
+  mem_write32_cia(&cpu,0x100c,3,0);
+  CHECK(ncd_write()==-4 && mem_read32_cia(&cpu,buffer+32,0)==0x11223344);
+  CHECK(!wii_fs_network_config(nand,network.data()) && network==original_network);
+  mem_write32_cia(&cpu,0x100c,32,0);
+  CHECK(!ncd_write() && !mem_read32_cia(&cpu,buffer+32,0) && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
+  CHECK(wii_fs_read(nand,network_reader,network.data(),network.size())==int32_t(network.size()));
+  CHECK(!std::memcmp(network.data(),cpu.mem2+0x2000,network.size()) && !wii_fs_close(nand,network_reader));
+  const auto saved_network=network;
   std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary)<<'x';
   network.fill(0x55);CHECK(wii_fs_network_config(nand,network.data())==-117 && network.front()==0x55);
+  CHECK(ncd_write()==-117 && fs::file_size(root/"shared2/sys/net/02/config.dat")==1 &&
+        mem_read32_cia(&cpu,buffer+32,0)==0x11223344);
+  std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(saved_network.data()),saved_network.size());
   // 0x18 is ticket deletion, not a metadata query, and remains unsupported.
   for(const auto operation:{0x18u}) {
     es_request(operation,1,0);mem_write32_cia(&cpu,message+4,0x11223344,0);
@@ -365,6 +388,7 @@ int main(int argc,char** argv) {
   CHECK(fs::file_size(root/"save")==5);
   wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0x1001,1);CHECK(nand && wii_fs_open(nand,"/save",1)==-102);
+  CHECK(!wii_fs_network_config(nand,network.data()) && network==saved_network);
   CHECK(!wii_es_titles(nand,nullptr,0,&title_count) && title_count==1);wii_fs_unmount(nand);
   // SetUID changes actual PPC file access, while existing ES handles retain
   // their opener's authority and the active-title queries retain boot identity.

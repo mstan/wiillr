@@ -209,6 +209,19 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
         return 1;
     }
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==6 && ios->fs) {
+        ios->result=-4;
+        if(read_be32(request+16)!=1 || read_be32(request+20)!=1)return 1;
+        const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+        if(!vectors || available<16 || read_be32(vectors+4)!=WIILLR_NETWORK_CONFIG_SIZE || read_be32(vectors+12)<4)return 1;
+        const u32 address=read_be32(vectors),status=read_be32(vectors+8);
+        const u8* config=ios_memory(cpu,address,&available);
+        if(!config || available<WIILLR_NETWORK_CONFIG_SIZE ||
+           !ios_memory(cpu,status,&available) || available<read_be32(vectors+12))return 1;
+        ios->result=wii_fs_network_config_write(ios->fs,config);
+        if(!ios->result)mem_write32_cia(cpu,status,0,cpu->pc);
+        return 1;
+    }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 &&
        (read_be32(request+12)==8 || read_be32(request+12)==9 || read_be32(request+12)==0x0d)) {
         // Socket and background mail workers are absent in this offline

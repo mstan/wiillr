@@ -25,6 +25,7 @@ bool wii_fs_bt_write(void*,const uint8_t*,uint32_t size);
 bool wii_fs_network_mac(WiiFs*,uint8_t mac[6]);
 #define WIILLR_NETWORK_CONFIG_SIZE 7004u
 int32_t wii_fs_network_config(WiiFs*,uint8_t data[WIILLR_NETWORK_CONFIG_SIZE]);
+int32_t wii_fs_network_config_write(WiiFs*,const uint8_t data[WIILLR_NETWORK_CONFIG_SIZE]);
 /* Persistent virtual chip identity and real local WC24 generation. No online
  * registration or console certificate provisioning is performed. */
 int32_t wii_fs_wc24_generate_id(WiiFs*,uint64_t* id,uint32_t* stage);
