@@ -121,10 +121,14 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
             if control is not None:
                 try:
                     control.command('quit')
-                    process.wait(timeout=10)
-                except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                except (OSError, RuntimeError):
                     pass
-            if process.poll() is None:
+            # The runtime closes control before printing shutdown diagnostics.
+            # A terminal guest failure can therefore reset this connection
+            # while the process is still saving RAM and draining its devices.
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
                 process.terminate()
                 process.wait(timeout=10)
         if control is not None:
