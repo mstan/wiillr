@@ -172,3 +172,7 @@ output/audio pairs: 63.7–67.3 versus 30.5–31.4 fields/s, a median throughput
 gain of 114.5% and CPU-time reduction of 58.2% per field. This is a separate
 whole-application comparison against the original renderer. The campaign's
 130-field/s target and per-thread budgets remain open.
+These earlier timing runs retained muted host audio playback. Its queue can
+throttle execution, so the rates describe observed throughput rather than an
+unpaced headroom limit. Unpaced qualification must disable host playback while
+retaining DSP emulation and complete PCM validation.
