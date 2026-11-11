@@ -5,6 +5,7 @@
 #include "gcnllr/native_gx.h"
 typedef struct {
     void* library;
+    void* output;
     const GcnllrNativeGxApi* api;
     WiiMachine* machine;
     CPUState* cpu;

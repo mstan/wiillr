@@ -15,6 +15,9 @@
 #define FINAL_TEXTURE 0x8039b2c0u
 static WiiGx* owner;
 static const GcWiiNativeFrameApi* frame_api;
+static const GcWiiNativeOutputApi* output_api;
+void wii_mm9_renderer_bind_output(const GcWiiNativeOutputApi* api) {output_api=api;}
+static int output_complete(void) {return output_api?output_api->submit():frame_api->complete(0,0);}
 static WiiMm9ScreenNative* screen_renderer;
 static WiiMm9Frame* prepared;
 static u8* oracle_entry;
@@ -71,7 +74,7 @@ static bool ordered_boundary(void) {
         u32 available;const u8* bytes=gcn_mem_resolve(cpu,gcn_cp_fifo_read_pointer(&m->cp),&available);
         if(!bytes || available<32 || !owner->api->fifo(bytes,32))return false;gcn_cp_gpu_consume_chunk(&m->cp);
     }
-    return !gcn_cp_fifo_rw_distance(&m->cp) && owner->api->drain() && frame_api->complete(0,0);
+    return !gcn_cp_fifo_rw_distance(&m->cp) && owner->api->drain() && output_complete();
 }
 static int unsupported(CPUState* cpu,const char* why) {
     ++uncovered;if(uncovered<=8)fprintf(stderr,"Native MM9 unsupported: %s\n",why);
@@ -161,7 +164,7 @@ bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,co
     if(owner || !gx || !render || !frame || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
     const WiiMm9Memory memory={gx->cpu,read_memory};screen_renderer=wii_mm9_screen_create(memory,render);prepared=calloc(1,sizeof *prepared);
     if(!screen_renderer || !prepared){wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;free(prepared);prepared=NULL;return false;}
-    owner=gx;frame_api=frame;verified=oracle_pending=false;frames=uncovered=failed=oracle_checked=oracle_different=0;oracle_max_delta=0;
+    owner=gx;frame_api=frame;output_api=NULL;verified=oracle_pending=false;frames=uncovered=failed=oracle_checked=oracle_different=0;oracle_max_delta=0;
 #if WIILLR_MM9_FRAME_MODE
     owned_reset();
 #endif
@@ -234,6 +237,6 @@ void wii_mm9_renderer_hook_stop(void) {
     owned_summary();
 #endif
     printf("{\"native_mm9_renderer\":%u,\"compositor_frames\":%llu,\"screen_draws\":%llu,\"screen_mesh_uploads\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"oracle_frames\":%llu,\"oracle_different_pixels\":%llu,\"oracle_max_channel_delta\":%u}\n",WIILLR_MM9_RENDERER_MODE,(unsigned long long)frames,(unsigned long long)status.draws,(unsigned long long)status.mesh_uploads,(unsigned long long)uncovered,(unsigned long long)failed,(unsigned long long)oracle_checked,(unsigned long long)oracle_different,oracle_max_delta);
-    wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;free(prepared);prepared=NULL;free(oracle_entry);oracle_entry=NULL;owner=NULL;frame_api=NULL;
+    wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;free(prepared);prepared=NULL;free(oracle_entry);oracle_entry=NULL;owner=NULL;frame_api=NULL;output_api=NULL;
 }
 

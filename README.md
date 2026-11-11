@@ -174,3 +174,12 @@ selector. Offline preparation does not establish native ES import or launch.
 
 Format references: [title metadata](https://wiibrew.org/wiki/Title_metadata),
 [WAD layout](https://wiibrew.org/wiki/WAD).
+
+`WIILLR_NATIVE_OUTPUT=ON` selects guarded immutable output for the native MM9
+frame owner. Windows x64 uses page-backed MEM1: an actual CPU, DMA or host
+pointer access materializes the real GPU generation on the machine thread.
+VI can present an unchanged owned generation directly. GPU workers never write
+guest RAM. Copy publication invalidates reservations and executable identities;
+later byte materialization is only a representation change. MEM2 keeps eager,
+bank-qualified copies. Other hosts retain the functioning eager output floor.
+The option defaults off and does not change audio, guest timing or pacing.

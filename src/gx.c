@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/gx.h"
 #include "wiillr/pointer.h"
+#include "wiillr/gx_output.h"
 #include "memory/memory.h"
 #include "cpu/native_code.h"
 #include <stdio.h>
@@ -40,15 +41,17 @@ static void bp_write(void* user,u32 reg,u32 value) {
     if(reg==0x47 || reg==0x48)gcn_pe_set_token(&g->machine->pe,(u16)value,reg==0x48);
 }
 static int write_copy(void* user,u32 address,const u8* bytes,u32 size,u32 flags,u32 width,u32 height,u32 stride) {
-    (void)flags;(void)width;(void)height;(void)stride;
+    (void)width;(void)height;(void)stride;
     WiiGx* g=user;GcnllrNativeGxMemory range;
     if(!resolve(user,address,size,&range))return 0;
-    memcpy(range.bytes,bytes,size);gcn_native_code_content_dirty(range.physical_address,size);
-    if(g->cpu->reserve_valid && size) {
+    if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING) && !wii_gx_output_prepare(g,address,size))return 0;
+    memcpy(range.bytes,bytes,size);
+    if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING))gcn_native_code_content_dirty(range.physical_address,size);
+    if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING) && g->cpu->reserve_valid && size) {
         const u32 reservation=gcn_reservation_key(g->cpu->reserve_addr)&~31u;
         if((u64)reservation+32>range.physical_address && reservation<(u64)range.physical_address+size)g->cpu->reserve_valid=false;
     }
-    ++g->copies;return 1;
+    if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING))++g->copies;return 1;
 }
 static int fifo(void* user,const u8* bytes,u32 size) {WiiGx* g=user;return g->api->fifo(bytes,size);}
 static void drain(void* user) {WiiGx* g=user;if(!g->api->drain())g->cpu->halted=true;}
@@ -76,9 +79,14 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     g->visible=false;
 #endif
     g->input=(WiiBluetoothInput){0,{512,512,616},512,280,false,true,false};
-    const GcnllrNativeGxConfig config={.abi=GCNLLR_NATIVE_GX_ABI,.title=title?title:"Wii",.data_directory=data,
+    GcnllrNativeGxConfig config={.abi=GCNLLR_NATIVE_GX_ABI,.title=title?title:"Wii",.data_directory=data,
         .cache_directory=cache,.hidden=!(window && !strcmp(window,"1")),.user=g,.bp_write=bp_write,.write_copy=write_copy,
         .resolve_memory=resolve,.locate_memory=locate};
+#if WIILLR_NATIVE_OUTPUT
+    if(wii_gx_output_open(g)) {
+        config.own_copy=wii_gx_output_own;config.pending_read=wii_gx_output_pending;config.prepare_read=wii_gx_output_prepare;
+    } else fprintf(stderr,"Native output ownership unavailable; retaining eager copy floor\n");
+#endif
     if(!g->api->start(&config)) {wii_gx_stop(g);return false;}
 #if WIILLR_MENU_PICTURES || WIILLR_MM9_RENDERER
 #ifdef _WIN32
@@ -104,6 +112,17 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
 #endif
     const GcWiiNativeFrameApi* frame_api=frame_get?frame_get(GC_WII_NATIVE_FRAME_ABI):NULL;
     if(!wii_mm9_renderer_hook_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
+#if WIILLR_NATIVE_OUTPUT
+    if(g->output) {
+#ifdef _WIN32
+        GcWiiNativeOutputGetApi output_get=(GcWiiNativeOutputGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_output_get_api");
+#else
+        GcWiiNativeOutputGetApi output_get=(GcWiiNativeOutputGetApi)dlsym(g->library,"gc_wii_native_output_get_api");
+#endif
+        const GcWiiNativeOutputApi* output=output_get?output_get(GC_WII_NATIVE_OUTPUT_ABI):NULL;
+        if(!output){wii_gx_stop(g);return false;}wii_mm9_renderer_bind_output(output);
+    }
+#endif
 #endif
 #endif
     /* The current unowned synchronous renderer publishes on this machine
@@ -123,7 +142,9 @@ bool wii_gx_tick(WiiGx* g) {
             GcnllrNativeGxMemory range;
             const u64 extent=(u64)(height-1)*stride+(u64)width*2;
             if(!width || !height || width>1024 || height>1024 || extent>0xffffffffu ||
-               !resolve(g,address,(u32)extent,&range) || !g->api->present(range.bytes,width,height,stride))return false;
+               !resolve(g,address,(u32)extent,&range))return false;
+            const int resident=wii_gx_output_present(g,address,width,height,stride);
+            if(resident<0 || (!resident && !g->api->present(range.bytes,width,height,stride)))return false;
             g->scanout_address=address;g->scanout_width=width;g->scanout_height=height;g->scanout_stride=stride;
         }
     }
@@ -180,6 +201,11 @@ void wii_gx_stop(WiiGx* g) {
     wii_menu_picture_hook_stop();
 #endif
     if(g->machine) {g->machine->gx_fifo=NULL;g->machine->gx_user=NULL;gcn_gp_set_drain_hook(&g->machine->gp,NULL,NULL);}
+    if(!wii_gx_output_close(g)) {
+        fprintf(stderr,"Could not materialize native output at shutdown\n");
+        if(g->cpu)g->cpu->halted=true;
+        return; /* Preserve unresolved ownership and its live renderer. */
+    }
     if(g->api)g->api->stop();g->api=NULL;
     if(g->library) {
 #ifdef _WIN32

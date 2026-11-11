@@ -109,7 +109,7 @@ static int owned_finish_compositor(CPUState* cpu,const GcWiiNativeDisplayCopy* c
      * That publication is observable, so retain its native copy and barrier.
      * Hidden work images alone qualify for retirement. */
     if(!owned_work_is_hidden(copy->destination,copy->stride*copy->height)) {
-        if(!frame_api->display_copy(copy) || !frame_api->complete(0,0))return -1;
+        if(!frame_api->display_copy(copy) || !output_complete())return -1;
         ++owned.observable_copies;return 1;
     }
     GcWiiNativeClear clear=copy->clear_value;clear.x=copy->x;clear.y=copy->y;clear.width=copy->width;clear.height=copy->height;
@@ -143,7 +143,7 @@ static int owned_initialize(CPUState* cpu) {
         .width=640,.height=480,.scale_y=256,.flags=GC_WII_NATIVE_COPY_CLAMP_TOP|GC_WII_NATIVE_COPY_CLAMP_BOTTOM|GC_WII_NATIVE_COPY_CLEAR,.clear_value=clear};
     for(u32 n=0;n<7;n++)copy.filter[n]=r8(cpu,0x803b92f2+n);
     if(input_invalid)return owned_stop(cpu,"graphics initial copy settings");
-    if(!frame_api->clear(&clear) || !frame_api->display_copy(&copy) || !frame_api->complete(0,0))return failure(cpu,"native graphics initialization");
+    if(!frame_api->clear(&clear) || !frame_api->display_copy(&copy) || !output_complete())return failure(cpu,"native graphics initialization");
     owned.initialized=true;++owned.initializations;cpu->pc=cpu->lr;++cpu->cycles;return 1;
 }
 static bool owned_textures(CPUState* cpu) {
@@ -219,7 +219,8 @@ static int owned_call(CPUState* cpu,u32 address) {
         if(owned_effects(cpu,&clear,&copy,true)!=1)return owned_stop(cpu,"final copy settings");
         /* With native startup there is no SDK draw-done waiter/interrupt to
          * wake. The typed barrier retires the same ordered copy effects. */
-        if(!ordered_boundary() || !frame_api->display_copy(&copy) || !frame_api->complete(owned.initialized?0:GC_WII_NATIVE_COMPLETE_DRAW_DONE,0))return failure(cpu,"native final submission");
+        if(!ordered_boundary() || !frame_api->display_copy(&copy) ||
+           !(owned.initialized?output_complete():frame_api->complete(GC_WII_NATIVE_COMPLETE_DRAW_DONE,0)))return failure(cpu,"native final submission");
         ++owned.submits;cpu->pc=0x800e766c;++cpu->cycles;return 1;
     }
     cpu->pc=cpu->lr;++cpu->cycles;return 1;
