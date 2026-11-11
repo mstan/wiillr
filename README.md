@@ -93,6 +93,15 @@ AOT catalogs remain separate builds. DSP ROMs/coefficient data must be supplied
 locally. Rendering, audio delivery, IOS services and title compatibility remain
 in progress.
 
+Experimental `WIILLR_DSP=hle` builds reuse the pinned DSPHLE implementation
+through the same shared engine contract. Configure `WIILLR_DSP_DONOR_SOURCE`
+with the RecompCore checkout and `WIILLR_DSP_HOST_SOURCE` with its BlueWake host
+adapter checkout; `WIILLR_DSP_FMT_SOURCE` optionally supplies matching fmt
+sources. The build derives its console-aware adapter without editing either
+donor. Wii MEM2 is supported and unknown DSP tasks stop explicitly. This
+selection requires its own title/audio qualification; the separately selected
+AOT and development interpreter remain available as LLE references.
+
 `tools/prepare_ppc.py` validates an original-title discovery's input, journal
 and code-page identities before using the shared Broadway compiler. Pass its
 private `generated` directory as `WIILLR_PPC_GENERATED_DIR` to build the native

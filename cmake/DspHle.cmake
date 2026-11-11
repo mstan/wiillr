@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# Reuse the pinned donor DSP implementation without configuring its game or GPU
+# executable. Consumer tooling supplies and records these dependency identities.
+set(WIILLR_DSP_DONOR_SOURCE "" CACHE PATH "Pinned RecompCore source for DSP HLE")
+set(WIILLR_DSP_HOST_SOURCE "" CACHE PATH "Pinned BlueWake source for DSP HLE host adapter")
+if(NOT EXISTS "${WIILLR_DSP_DONOR_SOURCE}/Source/Core/Core/HW/DSPHLE/UCodes/AXWii.cpp" OR
+   NOT EXISTS "${WIILLR_DSP_HOST_SOURCE}/runtime/host/src/dsp_hle_backend.cpp")
+  message(FATAL_ERROR "Wii DSP HLE requires verified WIILLR_DSP_DONOR_SOURCE and WIILLR_DSP_HOST_SOURCE")
+endif()
+find_package(ZLIB REQUIRED)
+set(WIILLR_DSP_FMT_SOURCE "" CACHE PATH "Optional verified fmt source for the DSP donor")
+if(EXISTS "${WIILLR_DSP_FMT_SOURCE}/CMakeLists.txt")
+  add_subdirectory("${WIILLR_DSP_FMT_SOURCE}" dsp-fmt EXCLUDE_FROM_ALL)
+else()
+  find_package(fmt CONFIG QUIET)
+endif()
+if(NOT TARGET fmt::fmt)
+  find_path(_fmt_include fmt/format.h REQUIRED)
+  find_library(_fmt_library NAMES fmt REQUIRED)
+  add_library(fmt::fmt UNKNOWN IMPORTED)
+  set_target_properties(fmt::fmt PROPERTIES IMPORTED_LOCATION "${_fmt_library}"
+    INTERFACE_INCLUDE_DIRECTORIES "${_fmt_include}")
+endif()
+find_library(_xxhash_library NAMES xxhash REQUIRED)
+set(_dsp "${WIILLR_DSP_DONOR_SOURCE}/Source/Core/Core/DSP")
+set(_hle "${WIILLR_DSP_DONOR_SOURCE}/Source/Core/Core/HW/DSPHLE")
+set(_host "${WIILLR_DSP_HOST_SOURCE}/runtime/host/src")
+file(READ "${WIILLR_DSP_HOST_SOURCE}/apple/ios/src/dsp_common_shim.cpp" _shim)
+_gcn_dsp_replace(_shim "Wii filesystem size provider" "u64 GetSize(const std::string&)\n{\n  return 0;\n}" "// File::GetSize is supplied by the consumer's real filesystem.")
+set(_shim_source "${CMAKE_BINARY_DIR}/wiillr-dsp/dsp_common_shim.cpp")
+file(CONFIGURE OUTPUT "${_shim_source}" CONTENT "${_shim}" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${WIILLR_DSP_HOST_SOURCE}/apple/ios/src/dsp_common_shim.cpp")
+set(GC_DSP_DONOR_HOST_DIR "${_host}" CACHE PATH "Pinned native DSP donor host headers" FORCE)
+set(_dsp_units DSPAccelerator DSPAnalyzer DSPAssembler DSPCaptureLogger DSPCodeUtil DSPCore
+  DSPDisassembler DSPHWInterface DSPMemoryMap DSPStacks DSPTables LabelMap)
+set(_int_units DSPIntArithmetic DSPIntBranch DSPIntExtOps DSPIntLoadStore DSPIntMisc
+  DSPIntMultiplier DSPIntTables DSPInterpreter)
+set(_ucodes AESnd ASnd AX AXWii CARD GBA INIT ROM UCodes Zelda ZeldaUCodesTable)
+set(_sources)
+foreach(_unit IN LISTS _dsp_units)
+  list(APPEND _sources "${_dsp}/${_unit}.cpp")
+endforeach()
+foreach(_unit IN LISTS _int_units)
+  list(APPEND _sources "${_dsp}/Interpreter/${_unit}.cpp")
+endforeach()
+foreach(_unit IN LISTS _ucodes)
+  list(APPEND _sources "${_hle}/UCodes/${_unit}.cpp")
+endforeach()
+add_library(bluewake_dsp_donor STATIC ${_sources} "${_dsp}/Jit/DSPEmitterBase.cpp"
+  "${_hle}/DSPHLE.cpp" "${_hle}/MailHandler.cpp"
+  "${_shim_source}")
+target_include_directories(bluewake_dsp_donor PUBLIC
+  "${WIILLR_DSP_DONOR_SOURCE}/Source/Core" "${WIILLR_DSP_DONOR_SOURCE}/Source"
+  "${WIILLR_DSP_DONOR_SOURCE}/Externals" "${WIILLR_DSP_DONOR_SOURCE}/Externals/xxhash/xxHash"
+  "${WIILLR_DSP_HOST_SOURCE}/apple/ios/dsp_generated")
+target_compile_features(bluewake_dsp_donor PUBLIC cxx_std_23)
+target_compile_definitions(bluewake_dsp_donor PUBLIC FMT_EXCEPTIONS=0 __STDC_CONSTANT_MACROS __STDC_LIMIT_MACROS)
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+  target_compile_definitions(bluewake_dsp_donor PUBLIC _ARCH_64=1)
+endif()
+if(WIN32)
+  target_compile_definitions(bluewake_dsp_donor PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+endif()
+target_compile_options(bluewake_dsp_donor PRIVATE -fno-strict-aliasing)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(bluewake_dsp_donor PRIVATE -fno-ms-compatibility -fcomplete-member-pointers)
+endif()
+target_link_libraries(bluewake_dsp_donor PUBLIC fmt::fmt ZLIB::ZLIB "${_xxhash_library}")
+add_library(bluewake_dsp_adapter STATIC "${_host}/dsp_adapter.cpp" "${_host}/dsp_adapter_c.cpp"
+  "${_host}/dsp_adapter_donor_stubs.cpp" "${_host}/dsp_hle_backend.cpp")
+target_include_directories(bluewake_dsp_adapter PRIVATE "${_host}")
+if(WIN32 AND NOT MINGW)
+  target_include_directories(bluewake_dsp_adapter PRIVATE "${WIILLR_DSP_HOST_SOURCE}/windows/compat/include"
+    "${WIILLR_DSP_HOST_SOURCE}/windows/compat")
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(bluewake_dsp_adapter PRIVATE -fno-ms-compatibility)
+endif()
+target_link_libraries(bluewake_dsp_adapter PUBLIC bluewake_dsp_donor)
+if(MINGW)
+  # Dolphin's Windows stat alias must follow MinGW's guarded system structs.
+  target_compile_options(bluewake_dsp_donor PRIVATE "SHELL:-include sys/stat.h")
+  target_compile_options(bluewake_dsp_adapter PRIVATE "SHELL:-include sys/stat.h")
+endif()
