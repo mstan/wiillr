@@ -122,5 +122,28 @@ compositor outputs and 7,415 native queued draws with no unsupported calls or
 backend failures. Final scanout, full PCM and selected caller-visible buffers
 match the original. Two earlier scanouts have small shading precision
 differences (RGB8 maximum 4 and 3; mean absolute differences 0.0391 and 0.0198).
-Frame setup and final copy operations still use the original path; this does
-not establish a completely FIFO-free workload or a runtime performance win.
+The matched normal draw-slice timing replay passed three exact output/audio
+pairs: median throughput improved 82.0% and CPU time per field fell 50.3% on
+the measured host. The AOT-DSP reference ran at 27.1–27.5 fields/s and the
+candidate at 47.8–52.3 fields/s. These results do not meet the wider campaign's
+throughput target or establish per-thread phase budgets.
+
+`WIILLR_MM9_FRAME=native` extends that provider into one scoped frame owner
+inside the attested original frame orchestration. It supplies typed camera,
+clear, display-copy and completion operations, submits the complete ordered
+quad queues, and omits internal palette-cache/TLUT materialization. The original
+input, logical palette changes, VRAM transfers, game/pause logic and VI handoff
+continue to execute. Texture initialization preserves the real caller-visible
+texture-object fields without issuing graphics commands. A populated separate
+overlay draw list, unsupported input or failed native submission stops visibly;
+an owned frame cannot resume an original path whose setup it omitted.
+
+The 43-billion-cycle functional replay completes 3,374 owned frames and 7,415
+native draws with zero owned-frame FIFO bytes, zero interpreter execution,
+zero unresolved native misses and no unsupported cases or backend failures.
+Only 1,792 bootstrap FIFO bytes remain outside that boundary. Final video,
+the complete 1,806,344-frame stereo PCM stream and the checked caller buffers
+match the original exactly. The two earlier pictures are byte-identical to the
+draw-slice candidate, retaining its bounded shading precision differences.
+This frame-owner result is functional evidence; its separate normal timing
+comparison remains required before a performance claim.
