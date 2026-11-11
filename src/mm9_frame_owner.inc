@@ -124,6 +124,8 @@ static int owned_initialize(CPUState* cpu) {
     if(!sdk || (sdk&3) || (base&31) || (size&31) || size<0x4000 || !read_memory(cpu,base,size) || index>1 ||
        !read_memory(cpu,sdk,0x600))return owned_stop(cpu,"graphics initialization storage");
     if(!ordered_boundary())return failure(cpu,"graphics initialization prior work");
+    if(!wii_machine_claim_native_graphics(owner->machine,"mm9-frame"))
+        return owned_stop(cpu,"graphics initialization guest FIFO ingress");
     /* Preserve the actual SDK FIFO object's CPU ABI and the handle returned
      * to the title. It describes the caller's real storage; the native owner
      * never binds it to command construction, gather or replay. */
@@ -188,6 +190,20 @@ static int owned_queues(CPUState* cpu) {
 static int owned_call(CPUState* cpu,u32 address) {
     const u32 p=address&0x1fffffff;if(WIILLR_MM9_RENDERER_MODE<2)return 0;
     if(p==0x9905c){if(cpu->cycles>=cpu->cycle_deadline)return 1;return owned_initialize(cpu);}
+    if(p==0x1131a8 && owned.initialized) {
+        if(cpu->cycles>=cpu->cycle_deadline)return 1;
+        /* The native renderer resolves current asset bytes at submission; it
+         * has no guest texture cache to invalidate. Asset loaders can still
+         * request invalidation outside a frame. Retain the SDK's CPU-visible
+         * flush latch without constructing or replaying its four BP commands. */
+        input_invalid=false;
+        if(!identity(cpu,0x801131a8,0x48,UINT64_C(0x76c472702915e9fa)))
+            return owned_stop(cpu,"texture invalidation identity");
+        const u32 sdk=r32(cpu,cpu->gpr[2]-0x7bc0);
+        if(!sdk || !read_memory(cpu,sdk,4) || input_invalid)
+            return owned_stop(cpu,"texture invalidation storage");
+        mem_write16(cpu,sdk+2,0);cpu->pc=cpu->lr;++cpu->cycles;return 1;
+    }
     if(!owned.scope)return 0;
     if(p!=0x99200 && p!=0x99394 && p!=0x995f0 && p!=0xd5990 && p!=0xe8024 && p!=0x83730)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;

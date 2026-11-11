@@ -23,6 +23,7 @@ def main():
         pages['overlay_8009D000_hD295BDE95AA6CA50.c']=[]
         pages['overlay_800E8000_hB0FDEF9B22C93FE2.c']=[0x800e8024]
         pages['overlay_80083000_h748FAA87F633CA31.c']=[0x80083730]
+        pages['overlay_80113000_hB4BBDB2F39E5B955.c']=[0x801131a8]
         markers['overlay_8009D000_hD295BDE95AA6CA50.c']=[0x8009dcb8,0x8009de3c]
     if source.name not in pages:raise ValueError('MM9 native entry requires its original verified page')
     header=source.parent.parent/'generated_abi.h'

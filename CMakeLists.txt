@@ -286,7 +286,7 @@ if(WIILLR_PPC_GENERATED_DIR)
     if(WIILLR_MM9_FRAME STREQUAL "native")
       list(APPEND _mm9_entry_names overlay_80099000_hB4A449361DFA7467.c
         overlay_8009D000_hD295BDE95AA6CA50.c overlay_800E8000_hB0FDEF9B22C93FE2.c
-        overlay_80083000_h748FAA87F633CA31.c)
+        overlay_80083000_h748FAA87F633CA31.c overlay_80113000_hB4BBDB2F39E5B955.c)
       list(APPEND _mm9_entry_args --frame-owner)
     endif()
     list(LENGTH _mm9_entry_names _mm9_entry_expected)
