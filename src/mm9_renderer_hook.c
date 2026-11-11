@@ -2,6 +2,7 @@
 #include <wiillr/mm9_renderer_hook.h>
 #include <wiillr/mm9_compositor.h>
 #include <wiillr/mm9_screen.h>
+#include <wiillr/mm9_overlay.h>
 #include <memory/memory.h>
 #include <cpu/native_code.h>
 #include <stdio.h>
@@ -19,6 +20,7 @@ static const GcWiiNativeOutputApi* output_api;
 void wii_mm9_renderer_bind_output(const GcWiiNativeOutputApi* api) {output_api=api;}
 static int output_complete(void) {return output_api?output_api->submit():frame_api->complete(0,0);}
 static WiiMm9ScreenNative* screen_renderer;
+static WiiMm9OverlayNative* overlay_renderer;
 static WiiMm9Frame* prepared;
 static u8* oracle_entry;
 static bool verified,oracle_pending,input_invalid;
@@ -122,6 +124,7 @@ static bool publish(CPUState* cpu,u32 address,const u8* bytes,u32 size) {
     u8* target=(u8*)read_memory(cpu,address,size);if(!target)return false;memcpy(target,bytes,size);const u32 physical=address&0x1fffffffu;gcn_native_code_content_dirty(physical,size);
     if(cpu->reserve_valid){const u32 reservation=gcn_reservation_key(cpu->reserve_addr)&~31u;if((u64)reservation+32>physical && reservation<(u64)physical+size)cpu->reserve_valid=false;}return true;
 }
+static void overlay_write_byte(void* user,u32 address,u8 value){mem_write8(user,address,value);}
 #if WIILLR_MM9_FRAME_MODE
 #include "mm9_frame_owner.inc"
 #endif
@@ -163,7 +166,8 @@ bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,co
     if(WIILLR_MM9_RENDERER_MODE==0)return true;
     if(owner || !gx || !render || !frame || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
     const WiiMm9Memory memory={gx->cpu,read_memory};screen_renderer=wii_mm9_screen_create(memory,render);prepared=calloc(1,sizeof *prepared);
-    if(!screen_renderer || !prepared){wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;free(prepared);prepared=NULL;return false;}
+    overlay_renderer=wii_mm9_overlay_create(memory,overlay_write_byte,render);
+    if(!screen_renderer || !overlay_renderer || !prepared){wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;return false;}
     owner=gx;frame_api=frame;output_api=NULL;verified=oracle_pending=false;frames=uncovered=failed=oracle_checked=oracle_different=0;oracle_max_delta=0;
 #if WIILLR_MM9_FRAME_MODE
     owned_reset();
@@ -233,10 +237,12 @@ int wii_mm9_renderer_hook_dispatch(CPUState* cpu,u32 address) {
 }
 void wii_mm9_renderer_hook_stop(void) {
     if(!owner)return;WiiMm9ScreenStatus status={0};wii_mm9_screen_status(screen_renderer,&status);
+    WiiMm9OverlayStatus overlay={0};wii_mm9_overlay_status(overlay_renderer,&overlay);
+    printf("{\"native_mm9_overlay\":1,\"entries\":%llu,\"nodes\":%llu,\"glyphs\":%llu,\"draws\":%llu,\"mesh_uploads\":%llu,\"rejected\":%llu}\n",(unsigned long long)overlay.entries,(unsigned long long)overlay.nodes,(unsigned long long)overlay.glyphs,(unsigned long long)overlay.draws,(unsigned long long)overlay.mesh_uploads,(unsigned long long)overlay.rejected);
 #if WIILLR_MM9_FRAME_MODE
     owned_summary();
 #endif
     printf("{\"native_mm9_renderer\":%u,\"compositor_frames\":%llu,\"screen_draws\":%llu,\"screen_mesh_uploads\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"oracle_frames\":%llu,\"oracle_different_pixels\":%llu,\"oracle_max_channel_delta\":%u}\n",WIILLR_MM9_RENDERER_MODE,(unsigned long long)frames,(unsigned long long)status.draws,(unsigned long long)status.mesh_uploads,(unsigned long long)uncovered,(unsigned long long)failed,(unsigned long long)oracle_checked,(unsigned long long)oracle_different,oracle_max_delta);
-    wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;free(prepared);prepared=NULL;free(oracle_entry);oracle_entry=NULL;owner=NULL;frame_api=NULL;output_api=NULL;
+    wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;free(oracle_entry);oracle_entry=NULL;owner=NULL;frame_api=NULL;output_api=NULL;
 }
 

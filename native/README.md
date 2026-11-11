@@ -134,9 +134,23 @@ clear, display-copy and completion operations, submits the complete ordered
 quad queues, and omits internal palette-cache/TLUT materialization. The original
 input, logical palette changes, VRAM transfers, game/pause logic and VI handoff
 continue to execute. Texture initialization preserves the real caller-visible
-texture-object fields without issuing graphics commands. A populated separate
-overlay draw list, unsupported input or failed native submission stops visibly;
-an owned frame cannot resume an original path whose setup it omitted.
+texture-object fields without issuing graphics commands. The separate RFNT
+overlay list is laid out and submitted as retained native text batches, sharing
+the Menu's resource-level glyph reader. UTF-8, UTF-16 and CP1252 input preserve
+original integer scaling, alignment, atlas coordinates, alpha and font encoding
+effects. The OS-font family, Shift-JIS conversion, unsupported input and failed
+native submissions stop visibly; an owned frame cannot resume an original path
+whose setup it omitted.
+
+The machine-level graphics owner also rejects CPU gather writes, including
+commands that would never reach the backend FIFO counter. Obsolete texture-cache
+invalidations outside the frame retain their CPU flush latch without constructing
+commands. The original DLC confirmation dialog exercises 13,125 native glyphs
+with zero CPU gather writes and zero backend FIFO bytes. Its complete PCM matches
+the original; the full-frame image differs by at most four RGB levels, within the
+five-level shading tolerance. Menu-font and overlay component tests also run on
+Windows and Linux. These checks do not establish full-game or performance
+acceptance.
 
 The same owner replaces the verified game graphics initializer at `0x8009905c`.
 It retains the real caller FIFO object and public handle, clear values and

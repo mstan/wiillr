@@ -21,6 +21,10 @@ typedef struct {
  * No guest call, GX construction or host rendering occurs here. */
 int wii_menu_font_glyph(WiiMenuMemory,uint32_t font,uint16_t code_unit,
                         WiiMenuFontGlyph*,char* error,uint32_t error_size);
+/* Shared relocated RFNT resource reader. The title binding owns text decoding
+ * and font-class validation. Zero sheet_offsets selects an ordinary font. */
+int wii_resource_font_glyph(WiiMenuMemory,uint32_t font_info,uint16_t code_unit,
+                           uint32_t sheet_offsets,WiiMenuFontGlyph*,char*,uint32_t);
 
 typedef struct WiiMenuTextNative WiiMenuTextNative;
 typedef struct {

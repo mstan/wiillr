@@ -35,6 +35,12 @@ int main() {
     CHECK(wii_menu_font_glyph(memory,0x100,0x41,&g,error,sizeof error));
     CHECK(g.left==-1 && g.advance==7 && g.glyph_width==6 && g.glyph_height==7);
     CHECK(g.cell_x==1 && g.cell_y==1 && g.texture.address==0x1000 && g.texture.size==512);
+    // A resource caller does not need the Menu's font object or vtable.
+    const auto bound=g;word(0x100,0xdeadbeef);
+    CHECK(wii_resource_font_glyph(memory,0x200,0x41,0,&g,error,sizeof error));
+    CHECK(std::memcmp(&bound,&g,sizeof g)==0);
+    CHECK(!wii_menu_font_glyph(memory,0x100,0x41,&g,error,sizeof error));
+    CHECK(std::memcmp(&bound,&g,sizeof g)==0);word(0x100,0x8166fe88);
     CHECK(wii_menu_font_glyph(memory,0x100,0x3042,&g,error,sizeof error));
     CHECK(g.cell_x==1 && g.cell_y==9 && g.texture.address==0x1200);
     // Table and sparse maps use Unicode code units without host wchar_t.

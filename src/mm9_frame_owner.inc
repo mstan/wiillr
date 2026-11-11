@@ -19,11 +19,12 @@ static void owned_reset(void){memset(&owned,0,sizeof owned);}
 static int owned_stop(CPUState* cpu,const char* why){++uncovered;fprintf(stderr,"Native MM9 frame unsupported: %s\n",why);cpu->halted=true;return 1;}
 static void owned_invalidate(u32 address,u32 size) {
     const u32 a=address&0x1fffffff;const u64 end=(u64)a+size;
-    if((a<0x83828 && end>0x83730)||(a<0x99650 && end>0x99200)||(a<0x9de40 && end>0x9dcb8)||
-       (a<0xd5b90 && end>0xd5990)||(a<0xe8204 && end>0xe8024))owned.attested=false;
+    if((a<0x840f8 && end>0x83730)||(a<0x99650 && end>0x99200)||(a<0x9de40 && end>0x9dcb8)||
+       (a<0xd5b90 && end>0xd5990)||(a<0xe8204 && end>0xe8024)||(a<0x1e1eac && end>0x1e1800))owned.attested=false;
 }
 static bool owned_attest(CPUState* cpu) {
-    return identity(cpu,0x80083730,0xf8,UINT64_C(0x80fc4f5c51d5d887)) &&
+    return identity(cpu,0x80083730,0x9c8,UINT64_C(0xe88b23cf449d4c9f)) &&
+        identity(cpu,0x801e1800,0x6ac,UINT64_C(0xa03767f1e3a73d42)) &&
         identity(cpu,0x8009dcb8,0x188,UINT64_C(0x2651ec4888522db1)) &&
         identity(cpu,0x80099200,0x194,UINT64_C(0x1425568b3744f92e)) &&
         identity(cpu,0x80099394,0x25c,UINT64_C(0x0fefe46b8cc497bc)) &&
@@ -215,10 +216,13 @@ static int owned_call(CPUState* cpu,u32 address) {
     else if(p==0x99394){if(!owned_view(cpu))return owned_stop(cpu,"native camera");++owned.setups;}
     else if(p==0xe8024){if(cpu->gpr[3]>3)return owned_stop(cpu,"palette group");++owned.palettes;}
     else if(p==0x83730) {
-        /* The original pass only establishes GX state when this intrusive
-         * draw list is empty. A populated list is a separate unsupported
-         * graphics family, never silently discarded or replayed as native. */
-        if(r32(cpu,0x80305230)!=0x8030522c || input_invalid)return owned_stop(cpu,"overlay draw list");
+        if(r32(cpu,0x80305230)!=0x8030522c) {
+            if(!owned.view_ready || input_invalid)return owned_stop(cpu,"overlay camera/list");
+            const int result=wii_mm9_overlay_draw(overlay_renderer,0x8030522c,0x80305210,0x80272f90,r32(cpu,0x803bb32c),&owned.view);
+            if(result<0)return failure(cpu,"native overlay submission");
+            if(!result){WiiMm9OverlayStatus s={0};wii_mm9_overlay_status(overlay_renderer,&s);return owned_stop(cpu,s.error);}
+        }
+        if(input_invalid)return owned_stop(cpu,"overlay draw list");
         ++owned.overlays;
     }
     else if(p==0xd5990) {

@@ -77,12 +77,8 @@ uint32_t image_size(uint32_t format,uint32_t w,uint32_t h) {
     }
     return ((w+bw-1)/bw)*((h+bh-1)/bh)*bytes;
 }
-WiiMenuFontGlyph glyph(const Reader& r,uint32_t font,uint16_t code) {
-    const auto vtable=r.u32(font);
-    need(vtable==0x8166fe88 || vtable==0x8166ff70,"Unbound Menu font class");
-    const bool archive=vtable==0x8166ff70;
-    const auto info=r.u32(r.at(font,0x14));r.bytes(info,24);
-    need(r.u8(r.at(info,7))==1,"Menu text requires UTF-16 font encoding");
+WiiMenuFontGlyph glyph(const Reader& r,uint32_t info,uint16_t code,uint32_t offsets) {
+    r.bytes(info,24);
     const auto texture=r.u32(r.at(info,8));r.bytes(texture,24);
     const auto row=r.u16(r.at(texture,12)),line=r.u16(r.at(texture,14));
     need(row && line,"Empty font sheet grid");
@@ -92,11 +88,10 @@ WiiMenuFontGlyph glyph(const Reader& r,uint32_t font,uint16_t code) {
     if(index==0xffff)index=alternate;
     auto real=index;
     const auto adjust=[&](uint16_t value) {
-        const auto offsets=r.u32(r.at(font,0x18));
         const auto offset=r.u16(r.at(offsets,(uint32_t(value)/per_sheet)*2));
         return offset==0xffff ? uint16_t(0xffff):uint16_t(value-offset);
     };
-    if(archive) {
+    if(offsets) {
         real=adjust(index);
         if(real==0xffff){index=alternate;real=adjust(index);}
     }
@@ -129,6 +124,21 @@ extern "C" int wii_menu_font_glyph(WiiMenuMemory memory,uint32_t font,uint16_t c
                                     WiiMenuFontGlyph* out,char* error,uint32_t size) {
     const auto message=[&](const char* text){if(error && size)std::snprintf(error,size,"%s",text);};
     if(!memory.read || !out){message("Missing font resource input");return 0;}
-    try{const auto prepared=glyph(Reader{memory},font,code);*out=prepared;message("");return 1;}
+    try{
+        const Reader r{memory};const auto vtable=r.u32(font);
+        need(vtable==0x8166fe88 || vtable==0x8166ff70,"Unbound Menu font class");
+        const auto info=r.u32(r.at(font,0x14));
+        need(r.u8(r.at(info,7))==1,"Menu text requires UTF-16 font encoding");
+        const auto offsets=vtable==0x8166ff70?r.u32(r.at(font,0x18)):0;
+        need(vtable!=0x8166ff70 || offsets,"Missing archive font sheet offsets");
+        const auto prepared=glyph(r,info,code,offsets);*out=prepared;message("");return 1;
+    }
+    catch(const std::exception& e){message(e.what());return 0;}
+}
+extern "C" int wii_resource_font_glyph(WiiMenuMemory memory,uint32_t info,uint16_t code,
+                                       uint32_t offsets,WiiMenuFontGlyph* out,char* error,uint32_t size) {
+    const auto message=[&](const char* text){if(error && size)std::snprintf(error,size,"%s",text);};
+    if(!memory.read || !out){message("Missing font resource input");return 0;}
+    try{const auto prepared=glyph(Reader{memory},info,code,offsets);*out=prepared;message("");return 1;}
     catch(const std::exception& e){message(e.what());return 0;}
 }
