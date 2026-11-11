@@ -49,6 +49,16 @@ Configure this directory with `GC_WII_CORE_DIR` pointing to a core with
 `include/gcnllr/native_render.h` for the standalone library and focused contract
 test. This component build does not establish in-game rendering or performance.
 
+The separate `WIILLR_MENU_TEXT=declared-slice|strict` adapter replaces the whole
+4.3U `TextBox::DrawSelf` operation through the same Menu recording owner. It
+reads relocated resource/archive fonts, explicit UTF-16 code units, wrapping,
+alignment, color mapping and gradients, then retains native glyph batches by
+pane. Unchanged text geometry is uploaded once; textures and poses remain live.
+Custom tag processors decline visibly or stop in strict mode. Backend/resource
+submission failure always stops rather than rendering the original a second
+time. This text adapter has frontend and portable contract checks; live GPU
+image qualification remains pending.
+
 ## Mega Man 9 compositor candidate
 
 `mm9_compositor` prepares the whole logical 224-line game screen directly from

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/menu_picture_hook.h"
 #include "wiillr/menu_picture.h"
+#include "wiillr/menu_text_hook.h"
 #include "memory/memory.h"
 #include <stdio.h>
 #include <string.h>
@@ -28,7 +29,7 @@ static bool attest(CPUState* cpu) {
     for(u32 i=0;i<MENU_DRAW_BYTES;i++){hash^=bytes[i];hash*=UINT64_C(1099511628211);}
     return hash==MENU_DRAW_FNV;
 }
-static bool ordered_boundary(WiiGx* gx) {
+bool wii_menu_native_boundary(WiiGx* gx) {
     WiiMachine* machine=gx->machine;CPUState* cpu=gx->cpu;
     /* At this high-level function boundary earlier guest commands are
      * complete. Publish a partial gather with NOP padding, then consume the
@@ -53,13 +54,22 @@ bool wii_menu_picture_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* api,const
     const WiiMenuMemory memory={gx->cpu,read_memory};renderer=wii_menu_native_create(memory,api);
     if(!renderer)return false;
     if(!wii_menu_native_gui(renderer,gui)){wii_menu_native_destroy(renderer);renderer=NULL;return false;}
+#if WIILLR_MENU_TEXT
+    if(!wii_menu_text_hook_start(gx,api,gui)){wii_menu_native_destroy(renderer);renderer=NULL;return false;}
+#endif
     owner=gx;verified=false;entries=declines=failures=0;return true;
 }
 void wii_menu_picture_hook_invalidate(u32 address,u32 size) {
+#if WIILLR_MENU_TEXT
+    wii_menu_text_hook_invalidate(address,size);
+#endif
     const u32 physical=address&0x1fffffffu;
     if((u64)physical+size>(MENU_DRAW&0x1fffffffu) && physical<(MENU_DRAW&0x1fffffffu)+MENU_DRAW_BYTES)verified=false;
 }
 int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
+#if WIILLR_MENU_TEXT
+    if(wii_menu_text_hook_call(cpu,address))return 1;
+#endif
     if(!owner || owner->cpu!=cpu)return 0;
     const u32 physical=address&0x1fffffffu;
     if(physical==(MENU_DESTRUCTOR&0x1fffffffu)) {
@@ -82,7 +92,7 @@ int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
     if(!wii_menu_picture_prepare(memory,cpu->gpr[3],cpu->gpr[4],&view,&prepared,error,sizeof error)) {
         ++declines;if(WIILLR_MENU_PICTURES==2){fprintf(stderr,"Native Menu Picture rejected input: %s\n",error);cpu->halted=true;return 1;}return 0;
     }
-    if(!prepared.skipped && !ordered_boundary(owner)){++failures;fprintf(stderr,"Native Menu Picture could not drain previous work\n");cpu->halted=true;return 1;}
+    if(!prepared.skipped && !wii_menu_native_boundary(owner)){++failures;fprintf(stderr,"Native Menu Picture could not drain previous work\n");cpu->halted=true;return 1;}
     const int result=wii_menu_native_draw_picture(renderer,cpu->gpr[3],cpu->gpr[4],&view);
     if(result!=1){++failures;WiiMenuNativeStatus status;wii_menu_native_status(renderer,&status);fprintf(stderr,"Native Menu Picture submission failed: %s\n",status.error);cpu->halted=true;return 1;}
     /* Void C++ method: preserve caller-owned registers, return through LR.
@@ -92,6 +102,9 @@ int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
     return 1;
 }
 void wii_menu_picture_hook_stop(void) {
+#if WIILLR_MENU_TEXT
+    wii_menu_text_hook_stop();
+#endif
     if(!renderer)return;WiiMenuNativeStatus status;memset(&status,0,sizeof status);wii_menu_native_status(renderer,&status);
     printf("{\"native_menu_picture\":\"%s\",\"entries\":%llu,\"draws\":%llu,\"skipped\":%llu,\"mesh_uploads\":%llu,\"uncovered\":%llu,\"failed\":%llu}\n",
         WIILLR_MENU_PICTURES==2?"strict":"declared-slice",(unsigned long long)entries,(unsigned long long)status.draws,(unsigned long long)status.skipped,(unsigned long long)status.mesh_uploads,(unsigned long long)declines,(unsigned long long)failures);
