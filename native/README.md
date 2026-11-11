@@ -20,6 +20,10 @@ opacity comes from the high endpoint; pane tint does not affect this equation.
 The separate native GUI layers API retains the existing GUI1/Render1 layouts.
 Only the verified three-image asset equation and rectangular UV inputs bind;
 other custom equations and wider signed weights reject explicitly.
+The single-image shadow family uses constant RGB and texture-masked opacity.
+Its authored equation ignores pane tint/global alpha, so those unused inputs
+do not invalidate retained geometry; live shadow color and opacity stay in
+the existing GUI range material.
 Unsupported custom material equations, filtering and layout cases
 reject explicitly. Backend failures are distinct from unsupported families.
 Call `forget_picture` at pane destruction; destroy the provider before shutting

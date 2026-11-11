@@ -71,13 +71,20 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
     const auto material=out.material;need(r.u32(material)==material_vtable,"Unbound Wii Menu material class");
     const Counts cap(r.u32(material+0x4c)),num(r.u32(material+0x50));
     const bool layered=num.textures==3 && num.generators==3 && num.stages==3 && !num.ind_stages;
-    need(layered || (num.textures<=1 && num.generators==num.textures && !num.stages && !num.ind_stages),"Wii Menu material requires a broader native shader family");
+    const bool shadow=num.textures==1 && num.generators==1 && num.stages==1 && !num.ind_stages;
+    need(layered || shadow || (num.textures<=1 && num.generators==num.textures && !num.stages && !num.ind_stages),"Wii Menu material requires a broader native shader family");
     need(num.textures<=cap.textures && num.srts<=cap.srts && num.generators<=cap.generators && num.stages<=cap.stages,"Invalid Wii Menu material allocation");
     need(cap.textures<=8 && cap.srts<=10 && cap.generators<=8 && cap.ind_srts<=3 && cap.ind_stages<=4 && cap.stages<=16,"Unbounded Wii Menu material allocation");
-    need(!cap.swaps || layered,"Wii Menu custom component swaps need a native shader family");
+    need(!cap.swaps || layered || shadow,"Wii Menu custom component swaps need a native shader family");
     const auto mem=r.u32(material+0x58);if(cap.textures || cap.srts || cap.generators || cap.channels || cap.color || cap.alpha || cap.blend)need(mem!=0,"Missing Wii Menu material storage");
     const auto srt=mem+cap.textures*32,gen=srt+cap.srts*20,channel=gen+cap.generators*4;
     const auto mat_color=channel+cap.channels*4,alpha=mat_color+cap.color*4+cap.swaps*4,blend=alpha+cap.alpha*4;
+    if(shadow) {
+        constexpr uint8_t mask[]{0,4,0,0,0xff,0x2f,0,0x61,0x17,0x74,0,0xe1,0,0,0,0};
+        const auto stages=blend+cap.blend*4+cap.ind_stages*4+cap.ind_srts*20;
+        need(!std::memcmp(r.bytes(stages,sizeof mask),mask,sizeof mask),"Wii Menu shadow equation needs another native material family");
+    }
+    if((layered || shadow) && cap.swaps)for(unsigned i=0;i<4;++i)need(r.u8(mat_color+cap.color*4+i)==0xe4,"Wii Menu component swap needs another native material family");
     if(layered) {
         // Match the source-defined complete channel background material, not
         // an arbitrary combiner program. The host API accepts its semantic
@@ -87,7 +94,6 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
             2,4,2,0,0xef,0x08,0,0x61,0x77,0x07,0,0xe1,0,0,0,0};
         const auto stages=blend+cap.blend*4+cap.ind_stages*4+cap.ind_srts*20;
         need(!std::memcmp(r.bytes(stages,sizeof background),background,sizeof background),"Wii Menu layered equation needs another native material family");
-        if(cap.swaps)for(unsigned i=0;i<4;++i)need(r.u8(mat_color+cap.color*4+i)==0xe4,"Wii Menu layered component swap needs another native material family");
         for(unsigned c=0;c<4;++c) {
             const int32_t weight=static_cast<int16_t>(r.u16(material+0x34+c*2));
             need(weight>=0 && weight<=255,"Wii Menu signed overlay weight needs another native material family");
@@ -105,6 +111,12 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
         out.color.low[ch]=low;out.color.high[ch]=high;
         if(high!=255 || (num.textures && low!=0))out.needs_gui=1;
     }
+    if(shadow) {
+        // The authored shadow is a solid RGB color with texture-masked
+        // opacity. Its equation has no pane/raster-color input.
+        for(unsigned c=0;c<3;++c)out.color.high[c]=out.color.low[c];
+        out.color.high[3]=out.color.low[3];out.color.low[3]=0;out.needs_gui=1;
+    }
     const auto global_alpha=r.u8(pane+0xce);unsigned color_source=1,alpha_source=1;
     if(cap.channels){color_source=r.u8(channel);alpha_source=r.u8(channel+1);need(color_source<=1 && alpha_source<=1,"Invalid Wii Menu color source");}
     std::array<uint8_t,4> material_color{255,255,255,255};if(cap.color)for(unsigned ch=0;ch<4;++ch)material_color[ch]=r.u8(mat_color+ch);
@@ -117,6 +129,7 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
     for(unsigned v=0;v<4;++v) {
         auto& vertex=out.vertices[v];vertex.position[0]=xs[v];vertex.position[1]=ys[v];
         for(unsigned ch=0;ch<4;++ch) {
+            if(shadow){vertex.color[ch]=1.f;continue;}
             unsigned value=(ch==3?alpha_source:color_source)?r.u8(pane+0xd4+color_index[v]*4+ch):material_color[ch];
             if(ch==3 && alpha_source)value=value*global_alpha/255;
             vertex.color[ch]=float(value)/255.f;
