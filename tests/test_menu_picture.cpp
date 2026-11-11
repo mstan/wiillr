@@ -16,6 +16,7 @@ std::vector<uint8_t> ram(0x4000);
 constexpr uint32_t pane=0x80000100,material=0x80000400,info=0x80000600,mem=0x80000800,coords=0x80000900;
 uint64_t uploads{},draws{},destroyed{},next_handle=1;bool fail_draw{};GcWiiNativeDraw last{};
 GcWiiNativeGuiMaterial last_gui{};
+GcWiiNativeGuiLayersDraw last_layers{};
 const uint8_t* read(void*,uint32_t address,uint32_t size){address&=0x1fffffffu;if(address==0x1695618)address=0xa00;return address<=ram.size() && size<=ram.size()-address?ram.data()+address:nullptr;}
 void p16(uint32_t a,uint16_t v){a&=0x1fffffff;ram.at(a)=v>>8;ram.at(a+1)=v&255;}
 void p32(uint32_t a,uint32_t v){p16(a,v>>16);p16(a+2,v&65535);}
@@ -33,6 +34,7 @@ uint64_t create(const GcWiiNativeMesh* mesh){require(mesh && mesh->vertex_count=
 int destroy(uint64_t handle){require(handle>0,"Destroying invalid native mesh");++destroyed;return 1;}
 int draw(const GcWiiNativeDraw* job){last=*job;if(fail_draw)return 0;++draws;return 1;}
 int draw_gui(const GcWiiNativeGuiDraw* job){last_gui=job->color;return draw(&job->draw);}
+int draw_layers(const GcWiiNativeGuiLayersDraw* job){last_layers=*job;return draw(&job->draw);}
 void status(GcWiiNativeRenderStatus*){}
 void units() {
     fixture();const WiiMenuMemory memory{nullptr,read};auto view=camera();WiiMenuPicture out{};char error[192]{};
@@ -80,6 +82,34 @@ void units() {
     const auto remap_previous=out;p16(material+0x2c,1024);
     require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof(error)) && std::memcmp(&out,&remap_previous,sizeof(out))==0,"Invalid signed endpoint must reject atomically");
     wii_menu_native_destroy(colored);
+    fixture();view=camera();
+    constexpr uint32_t layered_count=(3u<<28)|(3u<<24)|(3u<<20)|(1u<<14)|(3u<<9)|(1u<<8)|(1u<<7)|(1u<<6)|(1u<<5);
+    p32(material+0x4c,layered_count);p32(material+0x50,layered_count);p32(material+0x58,mem);
+    ram[(pane&0x1fffffff)+0xe5]=3;p32(pane+0xe8,coords);
+    for(unsigned t=0;t<3;++t) {
+        p32(mem+t*32,0);p32(mem+t*32+8,(1u<<20)|(3u<<10)|7);p32(mem+t*32+12,(0x10000100+t*0x100)>>5);
+        pf(mem+96+t*20+12,1);pf(mem+96+t*20+16,1);p32(mem+156+t*4,(1u<<24)|((4+t)<<16)|((30+t*3)<<8));
+        for(unsigned n=0;n<8;++n)pf(coords+t*32+n*4,uv[n]);
+    }
+    pf(mem+116,.25f);pf(mem+120,.5f);pf(mem+128,2);pf(mem+132,5);
+    p32(mem+176,0xe4e4e4e4);p32(mem+180,0x77000000);p32(mem+184,0x01040500);
+    constexpr uint8_t layers_stage[]{0,4,0,0,0x42,0xf8,0,0x61,0x77,0x27,0,0xe1,0,0,0,0,
+        1,4,1,0,0x6f,0x08,0,0x61,0x77,0x07,0,0xe1,0,0,0,0,
+        2,4,2,0,0xef,0x08,0,0x61,0x77,0x07,0,0xe1,0,0,0,0};
+    std::copy(std::begin(layers_stage),std::end(layers_stage),ram.begin()+0x8bc);
+    for(unsigned c=0;c<4;++c){p16(material+0x34+c*2,12);ram[(material&0x1fffffff)+0x3c+c]=8;}
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.needs_layers && out.layers.overlays[1].address==0x10000300,"Three-image material resource identities");
+    require(out.layers.uv[0][0][0]==2 && out.layers.uv[0][0][2]==-.25f && out.layers.uv[0][1][1]==5 && out.layers.uv[0][1][2]==-1.5f,"Independent overlay coordinate transform");
+    auto* layered=wii_menu_native_create(memory,&api);require(layered,"Layered provider creation");
+    require(wii_menu_native_draw_picture(layered,pane,info,&view)==0,"Missing layered backend must decline before upload");
+    const GcWiiNativeGuiLayersApi layers_api{1,draw_layers};require(wii_menu_native_gui_layers(layered,&layers_api),"Layered backend binding");
+    const auto layer_uploads=uploads;
+    require(wii_menu_native_draw_picture(layered,pane,info,&view)==1 && last_layers.weights[0][0]==12,"Layered material native submission");
+    pf(mem+120,1.5f);require(wii_menu_native_draw_picture(layered,pane,info,&view)==1 && uploads==layer_uploads+1 && last_layers.uv[0][1][2]==-.5f,"Overlay animation must reuse base geometry");
+    const auto layers_previous=out;ram[0x8bc+20]=0xff;
+    require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&layers_previous,sizeof out),"Different layer equation must reject atomically");
+    wii_menu_native_destroy(layered);
     p32(0xa00,0x80001000);p32(0x1528,1);pf(0x152c,1);pf(0x1534,1);pf(0x153c,-1);pf(0x1540,0);
     pf(0x154c,640);pf(0x1550,480);pf(0x1558,1);p32(0x1148,(342u<<12)|342u);p32(0x114c,(981u<<12)|821u);p32(0x1220,24);
     WiiMenuView sdk{};require(wii_menu_picture_sdk_view(memory,&sdk,error,sizeof(error)),error);

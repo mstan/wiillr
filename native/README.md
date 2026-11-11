@@ -14,6 +14,12 @@ use the high endpoint times pane color. Both endpoints currently require byte
 values; wider signed colors reject explicitly. Animated endpoints stay separate
 from retained geometry. This family uses the shared native GUI material API and
 existing shader compiler/resource cache, without changing RenderAPI1.
+The channel-background family adds two independently transformed, weighted
+textures to a clamped primary RGB remap, saturating after each addition. Its
+opacity comes from the high endpoint; pane tint does not affect this equation.
+The separate native GUI layers API retains the existing GUI1/Render1 layouts.
+Only the verified three-image asset equation and rectangular UV inputs bind;
+other custom equations and wider signed weights reject explicitly.
 Unsupported custom material equations, filtering and layout cases
 reject explicitly. Backend failures are distinct from unsupported families.
 Call `forget_picture` at pane destruction; destroy the provider before shutting
