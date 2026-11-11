@@ -6,6 +6,7 @@
 #include "wiillr/machine.h"
 #include "wiillr/boot.h"
 #include "wiillr/gx.h"
+#include "wiillr/gx_output.h"
 #include "wiillr/control.h"
 #include "debug/cost_ring.h"
 #include "host/host_audio.h"
@@ -277,7 +278,9 @@ int main(int argc, char** argv) {
             cpu.exception = 0;
         }
     }
-    int saved = dump(argv[3], cpu.ram, cpu.ram_size);
+    /* Kernel file I/O cannot fault guarded resident pages back into RAM.
+     * A complete snapshot is an explicit CPU observer of every MEM1 byte. */
+    int saved = wii_gx_output_prepare(&gx,0,cpu.ram_size) && dump(argv[3], cpu.ram, cpu.ram_size);
     wii_control_stop(control);
     printf("{\"ios_provider\":\"%s\",\"native_operations\":%llu,\"ARM_interpreter_instructions\":0,\"stm_event_waiting\":%s}\n",
            WIILLR_IOS_NATIVE ? "native-development":"none",(unsigned long long)machine.ios.operations,
