@@ -91,6 +91,9 @@ RAM scanout; the existing TCP `frame` command captures it without a GPU service.
 It runs serially, ignores GPU backend environment selections and supports a
 portable scalar path. It is a headless correctness reference rather than an
 interactive performance configuration.
+For a software-rendering failure, `GCN_GX_TEV_CENSUS=1` and
+`GCN_GX_DRAW_STATE=1` enable the existing draw records;
+`WIILLR_SOFTWARE_GX_STATE=<path>` writes those records and copy registers at exit.
 Audio DMA uses shared paced transfers and records retired PCM. The shared host
 sink supports opt-in output and bounded WAV capture for the exercised 32 kHz
 route. A rate change with this sink attached stops explicitly. Headless runs
