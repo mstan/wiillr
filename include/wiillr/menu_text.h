@@ -2,6 +2,7 @@
 #ifndef WIILLR_MENU_TEXT_H
 #define WIILLR_MENU_TEXT_H
 #include "wiillr/menu_picture.h"
+#include <gcnllr/native_gui.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -11,7 +12,7 @@ typedef struct {
     int32_t left,advance;
     uint32_t glyph_width,glyph_height,cell_x,cell_y;
     uint32_t font_width,font_height,font_ascent;
-    int32_t line_feed;
+    int32_t line_feed,baseline;
 } WiiMenuFontGlyph;
 
 /* Read the Menu's relocated NW4R font resources. Unicode input is explicitly
@@ -20,6 +21,19 @@ typedef struct {
  * No guest call, GX construction or host rendering occurs here. */
 int wii_menu_font_glyph(WiiMenuMemory,uint32_t font,uint16_t code_unit,
                         WiiMenuFontGlyph*,char* error,uint32_t error_size);
+
+typedef struct WiiMenuTextNative WiiMenuTextNative;
+typedef struct {
+    uint64_t entries,glyphs,draws,mesh_uploads,rejected;
+    char error[192];
+} WiiMenuTextStatus;
+WiiMenuTextNative* wii_menu_text_create(WiiMenuMemory,const GcWiiNativeRenderApi*,const GcWiiNativeGuiApi*);
+void wii_menu_text_destroy(WiiMenuTextNative*);
+/* 1: submitted; 0: unsupported input before any upload/submission;
+ * -1: resource/backend failure, which must not invoke the original renderer. */
+int wii_menu_text_draw(WiiMenuTextNative*,uint32_t pane,uint32_t draw_info,const WiiMenuView*);
+void wii_menu_text_forget(WiiMenuTextNative*,uint32_t pane);
+void wii_menu_text_status(const WiiMenuTextNative*,WiiMenuTextStatus*);
 
 #ifdef __cplusplus
 }

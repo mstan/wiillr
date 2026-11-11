@@ -17,7 +17,7 @@ add_test(NAME wii_starlet_memory COMMAND test_wii_starlet)
 add_executable(test_wii_gx_memory tests/test_gx_memory.cpp)
 target_include_directories(test_wii_gx_memory PRIVATE include external/gc-wii-core/native/gx external/gc-wii-core/include)
 add_test(NAME wii_gx_memory_contract COMMAND test_wii_gx_memory)
-add_executable(test_wii_menu_font tests/test_menu_font.cpp native/menu_text.cpp)
+add_executable(test_wii_menu_font tests/test_menu_font.cpp native/menu_text.cpp native/menu_text_draw.cpp)
 target_include_directories(test_wii_menu_font PRIVATE include external/gc-wii-core/include)
 add_test(NAME wii_menu_font_resources COMMAND test_wii_menu_font)
 

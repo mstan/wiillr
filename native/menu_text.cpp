@@ -120,6 +120,7 @@ WiiMenuFontGlyph glyph(const Reader& r,uint32_t font,uint16_t code) {
     need(out.cell_x+out.glyph_width<=image.width && out.cell_y+out.glyph_height<=image.height,"Font glyph outside sheet");
     out.font_width=r.u8(r.at(info,21));out.font_height=r.u8(r.at(info,20));out.font_ascent=r.u8(r.at(info,22));
     out.line_feed=r.s8(r.at(info,1));
+    out.baseline=r.s8(r.at(texture,2));
     need(out.font_width && out.font_height,"Empty font metrics");
     return out;
 }
