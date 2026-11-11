@@ -30,6 +30,9 @@ if(WIILLR_DSP STREQUAL "hle")
   include(cmake/DspHle.cmake)
 endif()
 gcnllr_add_native_dsp(wiillr_dsp "${WIILLR_DSP}" "${WIILLR_DSP_CATALOG}")
+option(WIILLR_DSP_TRACE "Record the first 512 DSP mailbox/control/IRQ events for contract QA" OFF)
+set_property(SOURCE src/dsp.c APPEND PROPERTY COMPILE_DEFINITIONS
+  WIILLR_DSP_TRACE=$<BOOL:${WIILLR_DSP_TRACE}>)
 
 set(WIILLR_IOS "none" CACHE STRING "Build-selected development IOS boundary")
 set_property(CACHE WIILLR_IOS PROPERTY STRINGS none native-development)
