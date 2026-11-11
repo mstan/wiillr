@@ -8,6 +8,32 @@
 #include <stdio.h>
 #include <string.h>
 
+#if WIILLR_DSP_TRACE
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+static unsigned trace_left;
+static u16 trace_cpu_high,trace_dsp_high;
+static void trace_event(const WiiDsp* d,const char* event,u32 value) {
+    if(!trace_left)return;
+    --trace_left;
+    char line[192];
+    const int size=snprintf(line,sizeof line,"[wii-dsp-contract] {\"event\":\"%s\",\"cycles\":%llu,\"value\":%u,\"csr\":%u}\n",
+        event,(unsigned long long)d->cpu->cycles,value,d->registers.csr);
+    if(size<=0 || size>=(int)sizeof line){trace_left=0;return;}
+    /* One low-level write keeps the record whole beside foreign GPU loggers. */
+#ifdef _WIN32
+    if(_write(_fileno(stderr),line,(unsigned)size)!=size)trace_left=0;
+#else
+    if(write(fileno(stderr),line,(size_t)size)!=size)trace_left=0;
+#endif
+}
+#else
+#define trace_event(...) ((void)0)
+#endif
+
 static bool prepare(void* user, u32 offset, u32 size, bool writing) {
     WiiDsp* d = user;
     (void)writing;
@@ -27,7 +53,10 @@ static bool written(void* user, u32 offset, u32 size) {
     return true;
 }
 static u64 timebase(void* user) { return ((WiiDsp*)user)->cpu->timebase; }
-static void interrupt(void* user) { ((WiiDsp*)user)->registers.csr |= GCN_DSP_CSR_DSPINT; }
+static void interrupt(void* user) {
+    WiiDsp* d=user;d->registers.csr |= GCN_DSP_CSR_DSPINT;
+    trace_event(d,"irq",GCN_DSP_CSR_DSPINT);
+}
 static void audio(void* user,const u8* samples,u32 bytes) {
     WiiDsp* d=user;d->audio_frames+=bytes/4;
     for(u32 n=0;n<bytes;n++)if(samples[n])++d->audio_nonzero_bytes;
@@ -38,6 +67,9 @@ bool wii_dsp_start(WiiDsp* d, CPUState* cpu, const u8* irom, const u8* coef) {
     memset(d, 0, sizeof *d);
     gcn_dsp_reset_registers(&d->registers);
     d->cpu = cpu;
+#if WIILLR_DSP_TRACE
+    trace_left=512;trace_cpu_high=trace_dsp_high=0;
+#endif
     d->registers.audio_sink=audio;d->registers.audio_user=d;
     d->aram = calloc(1, 0x1000000);
     if (!d->aram) return false;
@@ -59,7 +91,15 @@ void wii_dsp_stop(WiiDsp* d) {
     d->engine=NULL; d->aram=NULL;
 }
 static bool read16(WiiDsp* d, u32 offset, u16* value) {
-    if (offset <= 6) return gcn_dsp_engine_read_mail(d->engine, offset < 4, (offset & 2) != 0, value);
+    if (offset <= 6) {
+        const bool ok=gcn_dsp_engine_read_mail(d->engine,offset<4,(offset&2)!=0,value);
+#if WIILLR_DSP_TRACE
+        if(ok && offset==4)trace_dsp_high=*value;
+        if(ok && offset==6 && (trace_dsp_high&0x8000u))
+            trace_event(d,"dsp-mail",(u32)trace_dsp_high<<16|*value);
+#endif
+        return ok;
+    }
     if (offset == GCN_DSP_CSR) {
         u16 control;
         if (!gcn_dsp_engine_read_control(d->engine, &control)) return false;
@@ -83,12 +123,20 @@ bool wii_dsp_read(WiiDsp* d, u32 offset, u8 size, u64* value) {
     return true;
 }
 static bool write16(WiiDsp* d, u32 offset, u16 value) {
-    if (offset < 4) return gcn_dsp_engine_write_mail(d->engine, offset == 2, value);
+    if (offset < 4) {
+        const bool ok=gcn_dsp_engine_write_mail(d->engine,offset==2,value);
+#if WIILLR_DSP_TRACE
+        if(ok && offset==0)trace_cpu_high=value;
+        if(ok && offset==2)trace_event(d,"cpu-mail",(u32)trace_cpu_high<<16|value);
+#endif
+        return ok;
+    }
     if (offset == 4 || offset == 6) return false; /* DSP-owned mailbox */
     if (offset == GCN_DSP_CSR) {
         if (!gcn_dsp_engine_write_control(d->engine, value & GCN_DSP_CONTROL_MASK)) return false;
         /* Interrupt masks are writable; interrupt status is W1C. */
         d->registers.csr=(d->registers.csr & 0xa8u & ~value) | (value & 0x150u);
+        trace_event(d,"control",value);
         return true;
     }
     if(offset>=GCN_DSP_AID_START_HI && offset<=GCN_DSP_AID_BLOCKS_LEFT) {

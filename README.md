@@ -101,6 +101,9 @@ sources. The build derives its console-aware adapter without editing either
 donor. Wii MEM2 is supported and unknown DSP tasks stop explicitly. This
 selection requires its own title/audio qualification; the separately selected
 AOT and development interpreter remain available as LLE references.
+`WIILLR_DSP_TRACE=ON` builds a bounded mailbox/control/IRQ trace into the DSP
+transport for protocol QA. It records at most 512 events to the existing log;
+the normal build compiles it out.
 
 `tools/prepare_ppc.py` validates an original-title discovery's input, journal
 and code-page identities before using the shared Broadway compiler. Pass its
