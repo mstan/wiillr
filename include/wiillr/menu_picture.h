@@ -25,6 +25,8 @@ typedef struct WiiMenuPicture {
     uint8_t needs_gui;
     GcWiiNativeGuiLayersDraw layers;
     uint8_t needs_layers;
+    GcWiiNativeGuiMaskDraw mask;
+    uint8_t needs_mask;
 } WiiMenuPicture;
 /* Wii Menu 4.3U NW4R Picture::DrawSelf replacement inputs.
  * This reads live pane/material data; it does not execute guest routines or
@@ -42,6 +44,7 @@ typedef struct WiiMenuNativeStatus {
 WiiMenuNative* wii_menu_native_create(WiiMenuMemory,const GcWiiNativeRenderApi*);
 int wii_menu_native_gui(WiiMenuNative*,const GcWiiNativeGuiApi*);
 int wii_menu_native_gui_layers(WiiMenuNative*,const GcWiiNativeGuiLayersApi*);
+int wii_menu_native_gui_mask(WiiMenuNative*,const GcWiiNativeGuiMaskApi*);
 void wii_menu_native_destroy(WiiMenuNative*);
 int wii_menu_native_draw_picture(WiiMenuNative*,uint32_t picture,uint32_t draw_info,const WiiMenuView*);
 void wii_menu_native_forget_picture(WiiMenuNative*,uint32_t picture);

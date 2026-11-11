@@ -15,7 +15,7 @@
 #define MENU_DESTRUCTOR 0x81520d34u
 static WiiGx* owner;
 static WiiMenuNative* renderer;
-static bool verified,layers_ready;
+static bool verified,layers_ready,mask_ready;
 static u64 declines,failures,entries;
 static const u8* read_memory(void* user,u32 address,u32 size) {
     CPUState* cpu=user;const u32 physical=address&0x1fffffffu;
@@ -57,10 +57,13 @@ bool wii_menu_picture_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* api,const
 #if WIILLR_MENU_TEXT
     if(!wii_menu_text_hook_start(gx,api,gui)){wii_menu_native_destroy(renderer);renderer=NULL;return false;}
 #endif
-    owner=gx;verified=false;layers_ready=false;entries=declines=failures=0;return true;
+    owner=gx;verified=false;layers_ready=mask_ready=false;entries=declines=failures=0;return true;
 }
 bool wii_menu_picture_hook_layers(const GcWiiNativeGuiLayersApi* api) {
     layers_ready=renderer && wii_menu_native_gui_layers(renderer,api);return layers_ready;
+}
+bool wii_menu_picture_hook_mask(const GcWiiNativeGuiMaskApi* api) {
+    mask_ready=renderer && wii_menu_native_gui_mask(renderer,api);return mask_ready;
 }
 void wii_menu_picture_hook_invalidate(u32 address,u32 size) {
 #if WIILLR_MENU_TEXT
@@ -97,6 +100,9 @@ int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
     }
     if(prepared.needs_layers && !layers_ready) {
         ++declines;if(WIILLR_MENU_PICTURES==2){fprintf(stderr,"Native Menu Picture layered material backend unavailable\n");cpu->halted=true;return 1;}return 0;
+    }
+    if(prepared.needs_mask && !mask_ready) {
+        ++declines;if(WIILLR_MENU_PICTURES==2){fprintf(stderr,"Native Menu Picture mask material backend unavailable\n");cpu->halted=true;return 1;}return 0;
     }
     if(!prepared.skipped && !wii_menu_native_boundary(owner)){++failures;fprintf(stderr,"Native Menu Picture could not drain previous work\n");cpu->halted=true;return 1;}
     const int result=wii_menu_native_draw_picture(renderer,cpu->gpr[3],cpu->gpr[4],&view);

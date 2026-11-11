@@ -17,6 +17,7 @@ constexpr uint32_t pane=0x80000100,material=0x80000400,info=0x80000600,mem=0x800
 uint64_t uploads{},draws{},destroyed{},next_handle=1;bool fail_draw{};GcWiiNativeDraw last{};
 GcWiiNativeGuiMaterial last_gui{};
 GcWiiNativeGuiLayersDraw last_layers{};
+GcWiiNativeGuiMaskDraw last_mask{};
 const uint8_t* read(void*,uint32_t address,uint32_t size){address&=0x1fffffffu;if(address==0x1695618)address=0xa00;return address<=ram.size() && size<=ram.size()-address?ram.data()+address:nullptr;}
 void p16(uint32_t a,uint16_t v){a&=0x1fffffff;ram.at(a)=v>>8;ram.at(a+1)=v&255;}
 void p32(uint32_t a,uint32_t v){p16(a,v>>16);p16(a+2,v&65535);}
@@ -35,6 +36,12 @@ int destroy(uint64_t handle){require(handle>0,"Destroying invalid native mesh");
 int draw(const GcWiiNativeDraw* job){last=*job;if(fail_draw)return 0;++draws;return 1;}
 int draw_gui(const GcWiiNativeGuiDraw* job){last_gui=job->color;return draw(&job->draw);}
 int draw_layers(const GcWiiNativeGuiLayersDraw* job){last_layers=*job;return draw(&job->draw);}
+int draw_mask(const GcWiiNativeGuiMaskDraw* job){last_mask=*job;return draw(&job->draw);}
+void custom_stage(uint32_t address,unsigned slot,std::array<unsigned,4> color,std::array<unsigned,4> alpha) {
+    p32(address,(slot<<24)|(4u<<16)|(slot<<8));
+    p32(address+4,((color[0]|(color[1]<<4))<<24)|((color[2]|(color[3]<<4))<<16)|0x61);
+    p32(address+8,((alpha[0]|(alpha[1]<<4))<<24)|((alpha[2]|(alpha[3]<<4))<<16)|0xe1);p32(address+12,0);
+}
 void status(GcWiiNativeRenderStatus*){}
 void units() {
     fixture();const WiiMenuMemory memory{nullptr,read};auto view=camera();WiiMenuPicture out{};char error[192]{};
@@ -128,6 +135,35 @@ void units() {
     ram[(pane&0x1fffffff)+0xce]=1;p16(material+0x2a,80);
     require(wii_menu_native_draw_picture(shadow,pane,info,&view)==1 && uploads==shadow_uploads+1 && last_gui.high[3]==80,"Shadow opacity and unused pane animation must reuse geometry");
     wii_menu_native_destroy(shadow);
+    fixture();view=camera();
+    constexpr uint32_t mask_count=(2u<<28)|(2u<<24)|(2u<<20)|(1u<<14)|(2u<<9)|(1u<<8)|(1u<<7)|(1u<<6)|(1u<<5);
+    p32(material+0x4c,mask_count);p32(material+0x50,mask_count);p32(material+0x58,mem);
+    p16(material+0x2a,90);ram[(pane&0x1fffffff)+0xe5]=1;p32(pane+0xe8,coords);
+    for(unsigned t=0;t<2;++t){p32(mem+t*32,0);p32(mem+t*32+8,(1u<<20)|(3u<<10)|7);p32(mem+t*32+12,(0x10000100+t*0x100)>>5);pf(mem+64+t*20+12,1);pf(mem+64+t*20+16,1);p32(mem+104+t*4,(1u<<24)|(4u<<16)|((30+t*3)<<8));}
+    pf(mem+84,.25f);pf(mem+88,.5f);pf(mem+96,2);pf(mem+100,.5f);
+    p32(mem+112,0x01010000);p32(mem+120,0xe4e4e4e4);p32(mem+124,0x77000000);p32(mem+128,0x01040500);
+    for(unsigned n=0;n<8;++n)pf(coords+n*4,uv[n]);
+    custom_stage(mem+132,0,{2,4,8,15},{7,7,7,7});custom_stage(mem+148,1,{15,0,8,15},{7,1,4,7});
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.needs_mask && out.mask.flags==1 && out.mask.opacity==90 && out.mask.mask.address==0x10000200,"RGBA coverage material and source opacity");
+    require(out.mask.uv[0][0]==2 && out.mask.uv[0][2]==-.25f && out.mask.uv[1][1]==.5f && out.mask.uv[1][2]==.75f,"Mask generators may share original TEX0 coordinates");
+    auto* masked=wii_menu_native_create(memory,&api);require(masked,"Mask provider creation");
+    require(wii_menu_native_draw_picture(masked,pane,info,&view)==0,"Missing mask backend must decline");
+    const GcWiiNativeGuiMaskApi mask_api{1,draw_mask};require(wii_menu_native_gui_mask(masked,&mask_api),"Mask backend binding");
+    const auto mask_uploads=uploads;require(wii_menu_native_draw_picture(masked,pane,info,&view)==1,"Native mask submission");
+    ram[(pane&0x1fffffff)+0xce]=1;p16(material+0x2a,70);
+    require(wii_menu_native_draw_picture(masked,pane,info,&view)==1 && uploads==mask_uploads+1 && last_mask.opacity==70,"Mask opacity and unused pane alpha preserve geometry");
+    wii_menu_native_destroy(masked);
+    custom_stage(mem+132,0,{15,15,15,15},{7,7,7,4});custom_stage(mem+148,1,{2,4,8,15},{7,7,7,0});
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.draw.material.texture.address==0x10000200 && out.mask.mask.address==0x10000100 && out.mask.flags==0 && out.mask.opacity==255,"Coverage-first material maps independent color/mask resources");
+    require(out.vertices[0].uv[0]==-.25f && out.mask.uv[0][0]==.5f && out.mask.uv[0][2]==.125f && out.mask.uv[1][1]==2 && out.mask.uv[1][2]==-1.5f,"Coverage-first coordinates invert the color mapping");
+    custom_stage(mem+132,0,{2,4,8,15},{7,7,7,7});custom_stage(mem+148,1,{15,15,15,0},{7,7,7,4});
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && out.mask.opacity==255 && out.mask.flags==0,"Coverage-last material");
+    custom_stage(mem+148,1,{15,15,15,0},{4,7,7,7});
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),"Equivalent direct-alpha coverage material");
+    const auto mask_previous=out;ram[0x884+6]=1;
+    require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&mask_previous,sizeof out),"Unsupported mask operation must reject atomically");
     p32(0xa00,0x80001000);p32(0x1528,1);pf(0x152c,1);pf(0x1534,1);pf(0x153c,-1);pf(0x1540,0);
     pf(0x154c,640);pf(0x1550,480);pf(0x1558,1);p32(0x1148,(342u<<12)|342u);p32(0x114c,(981u<<12)|821u);p32(0x1220,24);
     WiiMenuView sdk{};require(wii_menu_picture_sdk_view(memory,&sdk,error,sizeof(error)),error);

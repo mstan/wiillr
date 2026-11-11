@@ -54,6 +54,16 @@ GcWiiNativeTexture texture(const Reader& r,uint32_t address) {
     }
     return out;
 }
+using QuadUv=std::array<std::array<float,2>,4>;
+void relative_uv(const QuadUv& primary,const QuadUv& other,float (&transform)[2][3]) {
+    for(const auto* uv:{&primary,&other})need((*uv)[0][0]==(*uv)[3][0] && (*uv)[1][0]==(*uv)[2][0] && (*uv)[0][1]==(*uv)[1][1] && (*uv)[2][1]==(*uv)[3][1],"Wii Menu nonrectangular UVs need another native material family");
+    const auto du=primary[1][0]-primary[0][0],dv=primary[3][1]-primary[0][1];
+    need(du!=0 && dv!=0,"Wii Menu collapsed UVs need another native material family");
+    for(auto& row:transform)for(float& f:row)f=0;
+    transform[0][0]=(other[1][0]-other[0][0])/du;transform[0][2]=other[0][0]-transform[0][0]*primary[0][0];
+    transform[1][1]=(other[3][1]-other[0][1])/dv;transform[1][2]=other[0][1]-transform[1][1]*primary[0][1];
+    for(const auto& row:transform)for(float f:row)need(std::isfinite(f),"Nonfinite Wii Menu relative coordinates");
+}
 void view(const WiiMenuView& source,GcWiiNativeDraw& out) {
     for(float f:source.projection)need(std::isfinite(f),"Nonfinite Wii Menu projection");
     const float fields[]{source.x,source.y,source.width,source.height,source.near_depth,source.far_depth};for(float f:fields)need(std::isfinite(f),"Nonfinite Wii Menu view");
@@ -72,19 +82,37 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
     const Counts cap(r.u32(material+0x4c)),num(r.u32(material+0x50));
     const bool layered=num.textures==3 && num.generators==3 && num.stages==3 && !num.ind_stages;
     const bool shadow=num.textures==1 && num.generators==1 && num.stages==1 && !num.ind_stages;
-    need(layered || shadow || (num.textures<=1 && num.generators==num.textures && !num.stages && !num.ind_stages),"Wii Menu material requires a broader native shader family");
+    const bool masked=num.textures==2 && num.generators==2 && num.stages==2 && !num.ind_stages;
+    need(layered || shadow || masked || (num.textures<=1 && num.generators==num.textures && !num.stages && !num.ind_stages),"Wii Menu material requires a broader native shader family");
     need(num.textures<=cap.textures && num.srts<=cap.srts && num.generators<=cap.generators && num.stages<=cap.stages,"Invalid Wii Menu material allocation");
     need(cap.textures<=8 && cap.srts<=10 && cap.generators<=8 && cap.ind_srts<=3 && cap.ind_stages<=4 && cap.stages<=16,"Unbounded Wii Menu material allocation");
-    need(!cap.swaps || layered || shadow,"Wii Menu custom component swaps need a native shader family");
+    need(!cap.swaps || layered || shadow || masked,"Wii Menu custom component swaps need a native shader family");
     const auto mem=r.u32(material+0x58);if(cap.textures || cap.srts || cap.generators || cap.channels || cap.color || cap.alpha || cap.blend)need(mem!=0,"Missing Wii Menu material storage");
     const auto srt=mem+cap.textures*32,gen=srt+cap.srts*20,channel=gen+cap.generators*4;
     const auto mat_color=channel+cap.channels*4,alpha=mat_color+cap.color*4+cap.swaps*4,blend=alpha+cap.alpha*4;
+    unsigned color_texture=0;bool mask_register_opacity=false;
+    if(masked) {
+        constexpr uint8_t rgba_mask[]{0,4,0,0,0x42,0xf8,0,0x61,0x77,0x77,0,0xe1,0,0,0,0,
+            1,4,1,0,0x0f,0xf8,0,0x61,0x17,0x74,0,0xe1,0,0,0,0};
+        constexpr uint8_t coverage_first[]{0,4,0,0,0xff,0xff,0,0x61,0x77,0x47,0,0xe1,0,0,0,0,
+            1,4,1,0,0x42,0xf8,0,0x61,0x77,0x07,0,0xe1,0,0,0,0};
+        constexpr uint8_t coverage_last[]{0,4,0,0,0x42,0xf8,0,0x61,0x77,0x77,0,0xe1,0,0,0,0,
+            1,4,1,0,0xff,0x0f,0,0x61,0x77,0x47,0,0xe1,0,0,0,0};
+        constexpr uint8_t coverage_last_a[]{0,4,0,0,0x42,0xf8,0,0x61,0x77,0x77,0,0xe1,0,0,0,0,
+            1,4,1,0,0xff,0x0f,0,0x61,0x74,0x77,0,0xe1,0,0,0,0};
+        const auto stages=blend+cap.blend*4+cap.ind_stages*4+cap.ind_srts*20;
+        const auto* equation=r.bytes(stages,32);
+        if(!std::memcmp(equation,rgba_mask,32)){out.mask.flags=GC_WII_NATIVE_GUI_MASK_RGB;mask_register_opacity=true;}
+        else if(!std::memcmp(equation,coverage_first,32))color_texture=1;
+        else need(!std::memcmp(equation,coverage_last,32) || !std::memcmp(equation,coverage_last_a,32),"Wii Menu coverage equation needs another native material family");
+        out.needs_mask=1;
+    }
     if(shadow) {
         constexpr uint8_t mask[]{0,4,0,0,0xff,0x2f,0,0x61,0x17,0x74,0,0xe1,0,0,0,0};
         const auto stages=blend+cap.blend*4+cap.ind_stages*4+cap.ind_srts*20;
         need(!std::memcmp(r.bytes(stages,sizeof mask),mask,sizeof mask),"Wii Menu shadow equation needs another native material family");
     }
-    if((layered || shadow) && cap.swaps)for(unsigned i=0;i<4;++i)need(r.u8(mat_color+cap.color*4+i)==0xe4,"Wii Menu component swap needs another native material family");
+    if((layered || shadow || masked) && cap.swaps)for(unsigned i=0;i<4;++i)need(r.u8(mat_color+cap.color*4+i)==0xe4,"Wii Menu component swap needs another native material family");
     if(layered) {
         // Match the source-defined complete channel background material, not
         // an arbitrary combiner program. The host API accepts its semantic
@@ -117,6 +145,7 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
         for(unsigned c=0;c<3;++c)out.color.high[c]=out.color.low[c];
         out.color.high[3]=out.color.low[3];out.color.low[3]=0;out.needs_gui=1;
     }
+    if(masked)out.mask.opacity=mask_register_opacity?out.color.low[3]:255;
     const auto global_alpha=r.u8(pane+0xce);unsigned color_source=1,alpha_source=1;
     if(cap.channels){color_source=r.u8(channel);alpha_source=r.u8(channel+1);need(color_source<=1 && alpha_source<=1,"Invalid Wii Menu color source");}
     std::array<uint8_t,4> material_color{255,255,255,255};if(cap.color)for(unsigned ch=0;ch<4;++ch)material_color[ch]=r.u8(mat_color+ch);
@@ -129,7 +158,7 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
     for(unsigned v=0;v<4;++v) {
         auto& vertex=out.vertices[v];vertex.position[0]=xs[v];vertex.position[1]=ys[v];
         for(unsigned ch=0;ch<4;++ch) {
-            if(shadow){vertex.color[ch]=1.f;continue;}
+            if(shadow || masked){vertex.color[ch]=1.f;continue;}
             unsigned value=(ch==3?alpha_source:color_source)?r.u8(pane+0xd4+color_index[v]*4+ch):material_color[ch];
             if(ch==3 && alpha_source)value=value*global_alpha/255;
             vertex.color[ch]=float(value)/255.f;
@@ -140,10 +169,12 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
     std::copy(pose.begin(),pose.end(),out.draw.model_view);
     view(camera,out.draw);
     if(num.textures) {
-        need(r.u8(pane+0xe5)>=num.textures && r.u8(pane+0xe5)<=8,"Missing Wii Menu texture coordinates");
-        std::array<std::array<std::array<float,2>,4>,3> uv{};
+        const auto coordinate_count=r.u8(pane+0xe5);
+        need(coordinate_count>=1 && coordinate_count<=8,"Missing Wii Menu texture coordinates");
+        std::array<QuadUv,3> uv{};std::array<GcWiiNativeTexture,3> images{};
         for(unsigned t=0;t<num.textures;++t) {
-            need(r.u8(gen+t*4)==1 && r.u8(gen+t*4+1)==4+t,"Wii Menu generated texture coordinates need a native shader family");
+            const auto source=r.u8(gen+t*4+1);
+            need(r.u8(gen+t*4)==1 && source>=4 && source-4<coordinate_count,"Wii Menu generated texture coordinates need a native shader family");
             const auto tex_matrix=r.u8(gen+t*4+2);float sx=1,sy=1,tx=0,ty=0;
             if(tex_matrix!=60) {
                 need(tex_matrix>=30 && tex_matrix<=57 && (tex_matrix-30)%3==0,"Invalid Wii Menu texture matrix");const auto slot=(tex_matrix-30)/3;
@@ -151,24 +182,21 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
                 need(r.f32(transform+8)==0,"Rotated Wii Menu texture transform needs qualification");
                 sx=r.f32(transform+12);sy=r.f32(transform+16);tx=r.f32(transform)+.5f-sx*.5f;ty=r.f32(transform+4)+.5f-sy*.5f;
             }
-            const auto coords=r.u32(pane+0xe8)+t*32;
+            const auto coords=r.u32(pane+0xe8)+(source-4)*32;
             for(unsigned v=0;v<4;++v){uv[t][v][0]=r.f32(coords+color_index[v]*8)*sx+tx;uv[t][v][1]=r.f32(coords+color_index[v]*8+4)*sy+ty;}
-            if(t)out.layers.overlays[t-1]=texture(r,mem+t*32);else out.draw.material.texture=texture(r,mem);
+            images[t]=texture(r,mem+t*32);
         }
-        for(unsigned v=0;v<4;++v)std::copy_n(uv[0][v].begin(),2,out.vertices[v].uv);
+        out.draw.material.texture=images[color_texture];
+        for(unsigned v=0;v<4;++v)std::copy_n(uv[color_texture][v].begin(),2,out.vertices[v].uv);
         if(layered) {
-            for(unsigned t=0;t<3;++t)need(uv[t][0][0]==uv[t][3][0] && uv[t][1][0]==uv[t][2][0] && uv[t][0][1]==uv[t][1][1] && uv[t][2][1]==uv[t][3][1],"Wii Menu nonrectangular UVs need another native material family");
-            const auto du=uv[0][1][0]-uv[0][0][0],dv=uv[0][3][1]-uv[0][0][1];
-            need(du!=0 && dv!=0,"Wii Menu collapsed layered UVs need another native material family");
             for(unsigned t=1;t<3;++t) {
-                auto& transform=out.layers.uv[t-1];
-                transform[0][0]=(uv[t][1][0]-uv[t][0][0])/du;transform[0][2]=uv[t][0][0]-transform[0][0]*uv[0][0][0];
-                transform[1][1]=(uv[t][3][1]-uv[t][0][1])/dv;transform[1][2]=uv[t][0][1]-transform[1][1]*uv[0][0][1];
-                for(const auto& row:transform)for(float f:row)need(std::isfinite(f),"Nonfinite Wii Menu layered coordinates");
+                out.layers.overlays[t-1]=images[t];relative_uv(uv[0],uv[t],out.layers.uv[t-1]);
             }
         }
+        if(masked){out.mask.mask=images[1-color_texture];relative_uv(uv[color_texture],uv[1-color_texture],out.mask.uv);}
     }
     out.layers.draw=out.draw;out.layers.color=out.color;
+    out.mask.draw=out.draw;out.mask.color=out.color;
     return out;
 }
 }
@@ -194,7 +222,7 @@ extern "C" int wii_menu_picture_sdk_view(WiiMenuMemory memory,WiiMenuView* outpu
 }
 struct WiiMenuNative {
     struct Mesh{uint64_t handle{};std::array<GcWiiNativeVertex,4> vertices{};};
-    WiiMenuMemory memory{};const GcWiiNativeRenderApi* backend{};const GcWiiNativeGuiApi* gui{};const GcWiiNativeGuiLayersApi* layers{};std::map<uint32_t,Mesh> meshes;WiiMenuNativeStatus status{};
+    WiiMenuMemory memory{};const GcWiiNativeRenderApi* backend{};const GcWiiNativeGuiApi* gui{};const GcWiiNativeGuiLayersApi* layers{};const GcWiiNativeGuiMaskApi* mask{};std::map<uint32_t,Mesh> meshes;WiiMenuNativeStatus status{};
 };
 extern "C" WiiMenuNative* wii_menu_native_create(WiiMenuMemory memory,const GcWiiNativeRenderApi* api) {
     if(!memory.read || !api || api->abi!=GC_WII_NATIVE_RENDER_ABI || !api->create_mesh || !api->destroy_mesh || !api->draw)return nullptr;
@@ -208,6 +236,10 @@ extern "C" int wii_menu_native_gui_layers(WiiMenuNative* renderer,const GcWiiNat
     if(!renderer || !api || api->abi!=GC_WII_NATIVE_GUI_LAYERS_ABI || !api->draw)return 0;
     renderer->layers=api;return 1;
 }
+extern "C" int wii_menu_native_gui_mask(WiiMenuNative* renderer,const GcWiiNativeGuiMaskApi* api) {
+    if(!renderer || !api || api->abi!=GC_WII_NATIVE_GUI_MASK_ABI || !api->draw)return 0;
+    renderer->mask=api;return 1;
+}
 extern "C" void wii_menu_native_forget_picture(WiiMenuNative* renderer,uint32_t pane) {
     if(!renderer)return;auto found=renderer->meshes.find(pane);if(found==renderer->meshes.end())return;
     renderer->backend->destroy_mesh(found->second.handle);renderer->meshes.erase(found);renderer->status.live_meshes=renderer->meshes.size();
@@ -220,7 +252,8 @@ extern "C" int wii_menu_native_draw_picture(WiiMenuNative* renderer,uint32_t pan
     WiiMenuPicture picture{};
     if(!wii_menu_picture_prepare(renderer->memory,pane,info,camera,&picture,renderer->status.error,sizeof(renderer->status.error))){++renderer->status.rejected;return 0;}
     if(picture.skipped){++renderer->status.skipped;return 1;}
-    if((picture.needs_layers && !renderer->layers) || (!picture.needs_layers && picture.needs_gui && !renderer->gui)) {
+    if((picture.needs_mask && !renderer->mask) || (picture.needs_layers && !renderer->layers) ||
+       (!picture.needs_mask && !picture.needs_layers && picture.needs_gui && !renderer->gui)) {
         message(renderer->status.error,sizeof(renderer->status.error),"Native GUI material backend unavailable");++renderer->status.rejected;return 0;
     }
     auto found=renderer->meshes.find(pane);
@@ -235,8 +268,10 @@ extern "C" int wii_menu_native_draw_picture(WiiMenuNative* renderer,uint32_t pan
     picture.draw.mesh=found->second.handle;
     const GcWiiNativeGuiDraw gui_draw{picture.draw,picture.color};
     picture.layers.draw=picture.draw;
-    const auto submitted=picture.needs_layers ? renderer->layers->draw(&picture.layers):
-        (picture.needs_gui ? renderer->gui->draw(&gui_draw):renderer->backend->draw(&picture.draw));
+    picture.mask.draw=picture.draw;
+    const auto submitted=picture.needs_mask?renderer->mask->draw(&picture.mask):
+        (picture.needs_layers ? renderer->layers->draw(&picture.layers):
+        (picture.needs_gui ? renderer->gui->draw(&gui_draw):renderer->backend->draw(&picture.draw)));
     if(!submitted){message(renderer->status.error,sizeof(renderer->status.error),"Native Wii Menu draw submission failed");++renderer->status.rejected;return -1;}
     ++renderer->status.draws;return 1;
 }

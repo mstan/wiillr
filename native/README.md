@@ -24,6 +24,11 @@ The single-image shadow family uses constant RGB and texture-masked opacity.
 Its authored equation ignores pane tint/global alpha, so those unused inputs
 do not invalidate retained geometry; live shadow color and opacity stay in
 the existing GUI range material.
+The two-image coverage family maps the source's separate color and mask images
+to one host material. It supports the verified coverage-first/last and RGBA-mask
+equations, independent texture matrices and shared raw coordinate sources.
+Opacity remains live while unused pane tint/global alpha do not change geometry.
+Other equations continue to reject explicitly.
 Unsupported custom material equations, filtering and layout cases
 reject explicitly. Backend failures are distinct from unsupported families.
 Call `forget_picture` at pane destruction; destroy the provider before shutting
