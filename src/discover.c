@@ -93,7 +93,11 @@ int main(int argc, char** argv) {
     char* end;
     errno = 0;
     u64 limit = strtoull(argv[2], &end, 0);
-    if (errno || *end || !limit || limit > 500000000000ull) return 2;
+    const char* visible_window=getenv("WIILLR_WINDOW");
+    /* Allow a visible interactive session up to 24 hours of Broadway time. */
+    const u64 maximum_limit=visible_window && !strcmp(visible_window,"1") ?
+        62985600000000ull:500000000000ull;
+    if (errno || *end || !limit || limit > maximum_limit) return 2;
     errno = 0;
     unsigned long stop = strtoul(argv[4], &end, 0);
     if (errno || *end || stop > 0xfffffffful || (stop & 3)) return 2;
