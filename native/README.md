@@ -151,5 +151,8 @@ hidden copies and retains one observable copy, reducing display copies from
 6,749 to 3,376. Final video, full audio and checked caller buffers remain exact;
 the two earlier images equal the preceding native candidate byte-for-byte.
 Typed phases share recording order without per-phase CPU/GPU completion waits.
-Normal matched timing of this startup/copy revision remains separate from the
-preceding frame-owner numbers.
+Normal matched timing of this startup/copy revision passed three exact
+output/audio pairs: 63.7–67.3 versus 30.5–31.4 fields/s, a median throughput
+gain of 114.5% and CPU-time reduction of 58.2% per field. This is a separate
+whole-application comparison against the original renderer. The campaign's
+130-field/s target and per-thread budgets remain open.
