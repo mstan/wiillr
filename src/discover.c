@@ -204,6 +204,7 @@ int main(int argc, char** argv) {
 #if WIILLR_PPC_STATIC
 #if GCN_COST_RING_ENABLED
         gcn_cost_begin_turn(cpu.cycles,read_be32(cpu.ram+0xe4));
+        gcn_cost_owner_boundary(GCN_COST_OWNER_EXECUTION);
         const unsigned turn_scope=gcn_cost_enter(GCN_COST_DISPATCH);
         const u64 field_before=machine.fields;
 #endif
@@ -238,6 +239,7 @@ int main(int argc, char** argv) {
 #else
 #if GCN_COST_RING_ENABLED
         gcn_cost_begin_turn(cpu.cycles,read_be32(cpu.ram+0xe4));
+        gcn_cost_owner_boundary(GCN_COST_OWNER_EXECUTION);
         const unsigned turn_scope=gcn_cost_enter(GCN_COST_GUEST);
         const u64 field_before=machine.fields;
 #endif
@@ -245,8 +247,14 @@ int main(int argc, char** argv) {
         if (!gcn_interpreter_step(&cpu)) break;
         ++steps;
 #endif
+#if GCN_COST_RING_ENABLED
+        gcn_cost_owner_boundary(GCN_COST_OWNER_DEVICES);
+#endif
         gcn_cost_enter(GCN_COST_TIME);
         wii_machine_tick(&machine, &cpu);
+#if GCN_COST_RING_ENABLED
+        gcn_cost_owner_boundary(GCN_COST_OWNER_GRAPHICS);
+#endif
         gcn_cost_enter(GCN_COST_GRAPHICS);
         if(!wii_gx_tick(&gx)) {fprintf(stderr,"native GX failed\n");cpu.halted=true;}
 #if GCN_COST_RING_ENABLED

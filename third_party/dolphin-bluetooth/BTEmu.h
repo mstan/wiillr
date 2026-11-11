@@ -33,6 +33,7 @@ public:
   void Submit(u32 message);
   void Close();
   bool Poll(u32* message,s32* result);
+  u64 Deadline(u64 cycles) const;
   bool SensorBarEnabled() const {return gpio_out && (*gpio_out&0x100u);}
   void ResetController();
   void ValidateCommand(const USB::V0CtrlMessage&);

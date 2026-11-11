@@ -9,6 +9,8 @@ int main() {
   CPUState cpu;CHECK(cpu_init(&cpu) && cpu_alloc_mem2(&cpu,0x4000000));
   cpu.spr[287]=PPC_BROADWAY_PVR;
   auto* bt=wii_bluetooth_create(&cpu,nullptr,nullptr);CHECK(bt);
+  const u64 first_report=wii_bluetooth_deadline(bt,0);
+  CHECK(first_report>6000 && wii_bluetooth_deadline(bt,0)==first_report);
   auto put=[&](u32 p,u32 v){mem_write32_cia(&cpu,p,v,0);};
   const u32 event=0x10000200,control=0x10000300;
   auto vector=[&](u32 base,u32 n,u32 address,u32 size){put(base+n*8,address);put(base+n*8+4,size);};
@@ -30,6 +32,7 @@ int main() {
   CHECK(wii_bluetooth_submit(bt,control));
   CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && !ready);
   cpu.cycles=6000;
+  CHECK(wii_bluetooth_deadline(bt,cpu.cycles)==1);
   CHECK(wii_bluetooth_poll(bt,&message,&result,&ready) && ready && message==event && result==6);
   const u8 expected[]={0x0e,4,1,3,12,0};
   CHECK(!std::memcmp(cpu.mem2+0x1000,expected,sizeof expected));

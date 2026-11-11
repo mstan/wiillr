@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/machine.h"
+#include "wiillr/bluetooth.h"
 #include "cpu/timing.h"
 #include "debug/cost_ring.h"
 #include "memory/memory.h"
@@ -20,18 +21,42 @@ static u64 domain_deadline(void* user,u32 domain,u64 cursor) {
         return gcn_vi_deadline_distance(&m->vi,cursor);
     case GCN_DOMAIN_GPU:
         return m->cp.gp_read_enable && gcn_cp_fifo_rw_distance(&m->cp)>=32 &&
-               !gcn_cp_at_breakpoint(&m->cp)?1:WII_MACHINE_EVENT_CAP;
-    case GCN_DOMAIN_AUDIO:
+               !gcn_cp_at_breakpoint(&m->cp)?1:WII_MACHINE_POLL_PERIOD;
+    case GCN_DOMAIN_AUDIO: {
         /* DSP LLE can assert a mailbox IRQ at any instruction. Until a
          * provider offers an exact next-event query, service within one cap. */
-        return WII_MACHINE_EVENT_CAP;
+        u64 next=WII_MACHINE_POLL_PERIOD;
+        const GcnDsp* dsp=&m->dsp.registers;
+        if(dsp->dma_active)next=earlier(next,dsp->dma_cycles_left?dsp->dma_cycles_left:1);
+        if(wii_hollywood_audio_clock(&m->hollywood)) {
+            if(dsp->aid_int_pending)
+                next=earlier(next,dsp->aid_start_cycles?dsp->aid_start_cycles:1);
+            if(dsp->aid_ctrl&0x8000u) {
+                const u32 rate=(m->ai.control&GCN_AI_CR_AIDFR)?32000u:48000u;
+                const u32 period=(u32)(729000000ull*8/rate);
+                next=earlier(next,period>dsp->aid_accum?period-dsp->aid_accum:1);
+            }
+            if((m->ai.control&GCN_AI_CR_PSTAT) && !(m->ai.control&GCN_AI_CR_AIINT)) {
+                const u64 count=(u32)(m->ai.int_timing-m->ai.sample_counter);
+                const u64 samples=count?count:(1ull<<32);
+                const u64 threshold=(m->ai.control&GCN_AI_CR_AISFR)?
+                    m->ai.sample_cycles_48:m->ai.sample_cycles_32;
+                const u64 total=samples*threshold;
+                const u64 scaled=total>m->ai.cycle_accum_x2?total-m->ai.cycle_accum_x2:0;
+                next=earlier(next,scaled?(scaled+m->ai.phase_scale-1)/m->ai.phase_scale:1);
+            }
+        }
+        return next;
+    }
     case GCN_DOMAIN_IO: {
-        u64 next=WII_MACHINE_EVENT_CAP;
+        u64 next=WII_MACHINE_POLL_PERIOD;
         if(m->di.cmd_pending)next=earlier(next,m->di.pending_cycles?m->di.pending_cycles:1);
         if(m->ipc.interrupt_scheduled)next=earlier(next,distance(m->ipc.interrupt_at,cursor));
         if(WIILLR_IOS_NATIVE) {
             if(m->ios.phase && !m->ipc.y)next=earlier(next,distance(m->ios.ready_at,cursor));
             if(!m->ios.phase && (m->ipc.x&1))next=1;
+            if(m->ios.bluetooth && !m->ipc.y)
+                next=earlier(next,wii_bluetooth_deadline(m->ios.bluetooth,cursor));
         }
         return next;
     }
@@ -42,6 +67,7 @@ static u64 domain_deadline(void* user,u32 domain,u64 cursor) {
 static bool advance(void* user,u32 domain,u64 elapsed,u64 target) {
     WiiMachine* m=user;CPUState* cpu=m->cpu;
     for(unsigned i=0;i<GCN_DOMAIN_COUNT;++i)if(domain==(1u<<i)) {
+        if(elapsed>m->domain_max_interval[i])m->domain_max_interval[i]=elapsed;
         const u64 due=m->domains.due[i];
         if(due!=UINT64_MAX && target>due && target-due>m->domain_max_lateness)
             m->domain_max_lateness=target-due;
@@ -117,7 +143,7 @@ void wii_machine_scheduler_init(WiiMachine* m,CPUState* cpu) {
 
 u64 wii_machine_deadline(WiiMachine* m,u64 now) {
 #if WIILLR_SCHED_DEADLINE
-    return now+earlier(WII_MACHINE_EVENT_CAP,gcn_domains_deadline(&m->domains,now));
+    return now+earlier(WII_MACHINE_POLL_PERIOD,gcn_domains_deadline(&m->domains,now));
 #else
     (void)m;return now+64;
 #endif

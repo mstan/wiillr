@@ -17,6 +17,8 @@ bool wii_bluetooth_press_sync(WiiBluetooth*);
 /* Actual USB requests are asynchronous. False preserves an unsupported request. */
 bool wii_bluetooth_submit(WiiBluetooth*,u32 message);
 bool wii_bluetooth_poll(WiiBluetooth*,u32* message,s32* result,bool* ready);
+/* Non-consuming distance to the next report, endpoint drain or completion. */
+u64 wii_bluetooth_deadline(const WiiBluetooth*,u64 cycles);
 #ifdef __cplusplus
 }
 #endif

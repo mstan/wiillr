@@ -237,6 +237,13 @@ void BluetoothEmuDevice::Update() {
     if(std::ranges::any_of(m_packet_count,[](u32 n){return n!=0;}))SendEventNumberOfCompletedPackets();
   }
 }
+u64 BluetoothEmuDevice::Deadline(u64 cycles) const {
+  u64 next=m_last_ticks+729000000u/Wiimote::UPDATE_FREQ;
+  if(!m_kernel.completions.empty())next=std::min(next,m_kernel.completions.front().ready);
+  if((!m_event_queue.empty() && m_hci_endpoint) ||
+     (!m_acl_pool.IsEmpty() && m_acl_endpoint && m_event_queue.empty()))return 1;
+  return next>cycles?next-cycles:1;
+}
 bool BluetoothEmuDevice::Poll(u32* message,s32* result) {
   Update();
   if(m_kernel.completions.empty() || m_kernel.completions.front().ready>m_system.memory.cpu->cycles)return false;
@@ -263,4 +270,7 @@ extern "C" bool wii_bluetooth_submit(WiiBluetooth* bt,u32 message) {
 }
 extern "C" bool wii_bluetooth_poll(WiiBluetooth* bt,u32* message,s32* result,bool* ready) {
   try{*ready=bt->device.Poll(message,result);return true;}catch(const std::exception& e){std::fprintf(stderr,"Bluetooth update stopped: %s\n",e.what());return false;}
+}
+extern "C" u64 wii_bluetooth_deadline(const WiiBluetooth* bt,u64 cycles) {
+  return bt?bt->device.Deadline(cycles):UINT64_MAX;
 }

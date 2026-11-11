@@ -178,11 +178,14 @@ struct WiiControl {
       std::ostringstream out;
       out << "{\"ok\":true,\"provider\":\"" << (WIILLR_SCHED_DEADLINE?"deadline":"lockstep")
           << "\",\"cap\":" << (WIILLR_SCHED_DEADLINE?WII_MACHINE_EVENT_CAP:64)
+          << ",\"poll_period\":" << (WIILLR_SCHED_DEADLINE?WII_MACHINE_POLL_PERIOD:64)
           << ",\"max_event_lateness\":" << machine->domain_max_lateness
           << ",\"failed\":" << (domains.failed?"true":"false")
           << ",\"credits\":" << domains.credits << ",\"observations\":" << domains.observations
           << ",\"services\":[";
       for(unsigned i=0;i<GCN_DOMAIN_COUNT;++i)out << (i?",":"") << domains.services[i];
+      out << "],\"max_service_intervals\":[";
+      for(unsigned i=0;i<GCN_DOMAIN_COUNT;++i)out << (i?",":"") << machine->domain_max_interval[i];
       out << "]}";return out.str();
     }
     if(args[0]=="cost" && args.size()<=2) {

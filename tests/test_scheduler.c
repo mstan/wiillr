@@ -27,6 +27,17 @@ int main(void) {
     cpu.cycles+=60750;
     CHECK(mem_read32_cia(&cpu,0xcd006c08,0)==4);
     CHECK(!cpu.halted && m.domains.services[0]>0);
+    wii_machine_tick(&m,&cpu);CHECK(!cpu.halted);
+    /* AID's initial FIFO interrupt and ARAM completion are real deadlines,
+     * independent of the fallback DSP execution cap. */
+    m.dsp.registers.aid_int_pending=1;m.dsp.registers.aid_start_cycles=200;
+    gcn_domains_changed(&m.domains,GCN_DOMAIN_AUDIO);
+    CHECK(wii_machine_deadline(&m,cpu.cycles)==cpu.cycles+200);
+    m.dsp.registers.aid_int_pending=0;
+    m.dsp.registers.dma_active=1;m.dsp.registers.dma_cycles_left=32;
+    gcn_domains_changed(&m.domains,GCN_DOMAIN_AUDIO);
+    CHECK(wii_machine_deadline(&m,cpu.cycles)==cpu.cycles+32);
+    m.dsp.registers.dma_active=0;gcn_domains_changed(&m.domains,GCN_DOMAIN_AUDIO);
     /* An IPC register mutation replaces the cached IO event immediately. */
     mem_write32_cia(&cpu,0xcd000004,0x31,0);
     CHECK(wii_machine_deadline(&m,cpu.cycles)>cpu.cycles);
