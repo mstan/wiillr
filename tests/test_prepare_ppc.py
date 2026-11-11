@@ -27,5 +27,8 @@ class DolPages(unittest.TestCase):
     def test_text_changes_make_distinct_content_identity(self):
         a,_=self.prepare(self.image());image=self.image();image[0x103]^=1;b,_=self.prepare(image)
         self.assertNotEqual(set(a),set(b))
+    def test_physical_entry_into_cached_text(self):
+        image=self.image();struct.pack_into('>I',image,0xe0,0x1004)
+        pages,record=self.prepare(image);self.assertEqual(record['entry'],0x1004);self.assertEqual(len(pages),2)
 
 if __name__=='__main__':unittest.main()

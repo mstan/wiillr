@@ -35,7 +35,9 @@ def dol_text_pages(path):
             position=physical+at;base=position&~4095;within=position-base;length=min(size-at,4096-within)
             loaded.setdefault(base,bytearray(4096))[within:within+length]=data[offset+at:offset+at+length];at+=length
     entry=word(0xe0)
-    if entry&3 or not any(s['address']<=entry<s['address']+s['size'] for s in text):raise ValueError('DOL entry outside text')
+    physical_entry=entry&0x3fffffff
+    if entry&3 or entry&0xc0000000==0x40000000 or not any(s['physical']<=physical_entry<s['physical']+s['size'] for s in text):
+        raise ValueError('DOL entry outside text')
     pages={}
     for section in text:
         for address in range(section['address']&~4095,(section['address']+section['size']+4095)&~4095,4096):
