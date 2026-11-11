@@ -47,7 +47,14 @@ def main():
                     return json.loads(stream.readline())
                 initial = command('status')
                 assert initial['ok'] and initial['paused'] and initial['cycles'] == 0
+                assert command('clock 1794355200')['ok']
+                original = command('fingerprint')
+                assert original['ok'] and original['mem2_bytes'] == 64 * 1024 * 1024
+                assert command('fingerprint') == original
                 assert command('write 80005000 12345678')['ok']
+                changed = command('fingerprint')
+                assert changed['mem1_fnv1a64'] != original['mem1_fnv1a64']
+                assert changed['mem2_fnv1a64'] == original['mem2_fnv1a64']
                 assert command('read 80005000 4')['data'] == '12345678'
                 assert not command('write 80005000 00zz')['ok']
                 assert command('read 80005000 4')['data'] == '12345678'
@@ -60,6 +67,14 @@ def main():
                     time.sleep(.001)
                 assert state['paused'] and 1000 <= state['cycles'] < 1064
                 assert command('status')['cycles'] == state['cycles']
+                assert not command('clock 1794355200')['ok']
+                assert not command('until ' + str(state['cycles']))['ok']
+                assert command('until 2000')['ok']
+                for _ in range(100):
+                    state = command('status')
+                    if state['paused']: break
+                    time.sleep(.001)
+                assert state['paused'] and state['cycles'] == 2000
                 stream.close()
             with socket.create_connection(('127.0.0.1', port), timeout=2) as reconnect:
                 reconnect.sendall(b'sta')

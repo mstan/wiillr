@@ -1,9 +1,44 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/machine.h"
+#include "debug/cost_ring.h"
 #include "cpu/timing.h"
 #include "memory/memory.h"
 #include <stdio.h>
 #include <string.h>
+
+enum WiiMmioDevice {
+    WII_MMIO_NONE, WII_MMIO_CP, WII_MMIO_PE, WII_MMIO_VI, WII_MMIO_PI,
+    WII_MMIO_MI, WII_MMIO_DSP, WII_MMIO_GP, WII_MMIO_IPC, WII_MMIO_DI,
+    WII_MMIO_SI, WII_MMIO_EXI, WII_MMIO_AI
+};
+
+#if WIILLR_MMIO_INDEXED
+/* One entry per 1 KiB register page. Each selected handler still validates
+ * the exact register extent, transfer width and alignment. */
+static unsigned mmio_device(u32 physical) {
+    static const u8 flipper[]={
+        WII_MMIO_CP,0,0,0, WII_MMIO_PE,0,0,0,
+        WII_MMIO_VI,0,0,0, WII_MMIO_PI,0,0,0,
+        WII_MMIO_MI,0,0,0, WII_MMIO_DSP,0,0,0,
+        0,0,0,0, 0,0,0,0, WII_MMIO_GP
+    };
+    static const u8 hollywood[]={
+        WII_MMIO_IPC,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0,
+        0,0,0,0, 0,0,0,0,
+        WII_MMIO_DI,WII_MMIO_SI,WII_MMIO_EXI,WII_MMIO_AI
+    };
+    const u32 page=physical>>10;
+    if(page>=0x0c000000u/1024u && page-0x0c000000u/1024u<sizeof flipper)
+        return flipper[page-0x0c000000u/1024u];
+    if(page>=0x0d000000u/1024u && page-0x0d000000u/1024u<sizeof hollywood)
+        return hollywood[page-0x0d000000u/1024u];
+    return WII_MMIO_NONE;
+}
+#define WII_MMIO_CASE(device) break; case WII_MMIO_##device:
+#else
+#define WII_MMIO_CASE(device)
+#endif
 
 static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     WiiMachine* m = cpu->external_user_data;
@@ -18,43 +53,60 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     if(width==4 && gpio==0x0d0000c8u)
         return (m->gpio_out&m->gpio_direction&0x0320u)|wii_ave_pins(&m->ave)|
                (m->di.disc_present?0x80u:0);
+#if WIILLR_MMIO_INDEXED
+    switch(mmio_device(physical)) { default:
+#endif
+    WII_MMIO_CASE(CP)
     if(physical>=0x0c000000u && physical+width<=0x0c000000u+GCN_CP_SIZE &&
        (width==2 || width==4) && !(address&(width-1)))
         return gcn_cp_read(&m->cp,cpu,physical|0xc0000000u,width);
+    WII_MMIO_CASE(PE)
     if(physical>=0x0c001000u && physical+width<=0x0c001000u+GCN_PE_SIZE &&
        (width==2 || width==4) && !(address&(width-1)))
         return gcn_pe_read(&m->pe,cpu,physical|0xc0000000u,width);
+    WII_MMIO_CASE(SI)
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3))
         return gcn_si_read(&m->si, cpu, GCN_SI_BASE + physical - 0x0d006400u, width);
+    WII_MMIO_CASE(DI)
     if (physical >= 0x0d006000u && physical < 0x0d006028u && width == 4 && !(address & 3))
         return gcn_di_read(&m->di, cpu, GCN_DI_BASE + physical - 0x0d006000u, width);
+    WII_MMIO_CASE(EXI)
     if (physical >= 0x0d006800u && physical + width <= 0x0d006800u + GCN_EXI_REGISTER_BYTES &&
         width == 4 && !(address & 3))
         return gcn_exi_read(&m->exi, cpu, GCN_EXI_BASE + physical - 0x0d006800u, width);
+    WII_MMIO_CASE(AI)
     if (physical >= 0x0d006c00u && physical < 0x0d006c10u && width == 4 && !(address & 3))
         return gcn_ai_read(&m->ai, cpu, GCN_AI_BASE + physical - 0x0d006c00u, width);
+    WII_MMIO_CASE(DSP)
     if (physical >= 0x0c005000u && physical + width <= 0x0c005000u + GCN_DSP_SIZE) {
         u64 value;
         if (wii_dsp_read(&m->dsp, physical - 0x0c005000u, width, &value)) return value;
     }
+    WII_MMIO_CASE(MI)
     if (physical >= 0x0c004000u && physical + width <= 0x0c004000u + GCN_MI_SIZE &&
         (width == 1 || width == 2 || width == 4) && !(address & (width - 1)))
         return gcn_mi_read(&m->mi, cpu, physical | 0xc0000000u, width);
+    WII_MMIO_CASE(VI)
     if (physical >= 0x0c002000u && physical + width <= 0x0c002000u + GCN_VI_SIZE &&
         (width == 1 || width == 2 || width == 4) && !(address & (width - 1)))
         return gcn_vi_read(&m->vi, cpu, physical | 0xc0000000u, width);
+    WII_MMIO_CASE(IPC)
     if (physical >= 0x0d000000u && physical < 0x0d000040u && width == 4 && !(address & 3)) {
         u32 value;
         wii_ipc_tick(&m->ipc, cpu->cycles);
         if (wii_ipc_read(&m->ipc, physical - 0x0d000000u, &value)) return value;
     }
+    WII_MMIO_CASE(PI)
     if (physical >= 0x0c003000u && physical < 0x0c003000u + GCN_PI_SIZE &&
         (width == 1 || width == 2 || width == 4) && !(address & (width - 1))) {
         u32 value = gcn_pi_read(&m->pi, cpu, (physical | 0xc0000000u) & ~3u, 4);
         return width == 4 ? value : (value >> ((4 - width - (address & 3)) * 8)) &
                                            ((1u << (width * 8)) - 1);
     }
+#if WIILLR_MMIO_INDEXED
+    }
+#endif
     m->unsupported_address = address;
     fprintf(stderr, "unimplemented read pc=%08x address=%08x width=%u\n", cpu->pc, address, width);
     cpu->halted = true;
@@ -66,6 +118,9 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     ++m->mmio_writes;
     u32 physical = address & 0x3fffffffu;
     const u32 gpio=physical&~0x00800000u;
+#if WIILLR_MMIO_INDEXED
+    if((physical>>10)==(0x0c008000u>>10))goto gather_pipe;
+#endif
     if(width==4 && value<=0xffffffffu && wii_hollywood_write(&m->hollywood,physical,(u32)value))return;
     /* HW_VI1CFG: preserve the documented region-select latch. Other bits have
      * no implemented contract and must not disappear into a no-op write. */
@@ -83,14 +138,23 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
         if(wii_ave_gpio(&m->ave,m->gpio_out,m->gpio_direction))return;
         fprintf(stderr,"unimplemented AVE read register=%02x\n",m->ave.index);cpu->halted=true;return;
     }
+#if WIILLR_MMIO_INDEXED
+    switch(mmio_device(physical)) { default:
+#endif
+    WII_MMIO_CASE(CP)
     if(physical>=0x0c000000u && physical+width<=0x0c000000u+GCN_CP_SIZE &&
        (width==2 || width==4) && !(address&(width-1))) {
         gcn_cp_write(&m->cp,cpu,physical|0xc0000000u,(u32)value,width);return;
     }
+    WII_MMIO_CASE(PE)
     if(physical>=0x0c001000u && physical+width<=0x0c001000u+GCN_PE_SIZE &&
        (width==2 || width==4) && !(address&(width-1))) {
         gcn_pe_write(&m->pe,cpu,physical|0xc0000000u,(u32)value,width);return;
     }
+    WII_MMIO_CASE(GP)
+#if WIILLR_MMIO_INDEXED
+    gather_pipe:
+#endif
     if(physical>=0x0c008000u && physical+width<=0x0c008000u+GCN_GP_SIZE &&
        (width==1 || width==2 || width==4 || width==8) && !(address&(width-1))) {
         u32 available;
@@ -101,36 +165,44 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
         else gcn_gp_write(&m->gp,cpu,address,(u32)value,width);
         return;
     }
+    WII_MMIO_CASE(SI)
     if (physical >= 0x0d006400u && physical + width <= 0x0d006400u + GCN_SI_SIZE &&
         width == 4 && !(address & 3)) {
         gcn_si_write(&m->si, cpu, GCN_SI_BASE + physical - 0x0d006400u, (u32)value, width);
         return;
     }
+    WII_MMIO_CASE(DI)
     if (physical >= 0x0d006000u && physical < 0x0d006028u && width == 4 && !(address & 3)) {
         gcn_di_write(&m->di, cpu, GCN_DI_BASE + physical - 0x0d006000u, (u32)value, width);
         return;
     }
+    WII_MMIO_CASE(EXI)
     if (physical >= 0x0d006800u && physical + width <= 0x0d006800u + GCN_EXI_REGISTER_BYTES &&
         width == 4 && !(address & 3)) {
         gcn_exi_write(&m->exi, cpu, GCN_EXI_BASE + physical - 0x0d006800u, (u32)value, width);
         return;
     }
+    WII_MMIO_CASE(AI)
     if (physical >= 0x0d006c00u && physical < 0x0d006c10u && width == 4 && !(address & 3)) {
         gcn_ai_write(&m->ai, cpu, GCN_AI_BASE + physical - 0x0d006c00u, (u32)value, width);
         return;
     }
+    WII_MMIO_CASE(DSP)
     if (physical >= 0x0c005000u && physical + width <= 0x0c005000u + GCN_DSP_SIZE &&
         wii_dsp_write(&m->dsp, physical - 0x0c005000u, width, value)) return;
+    WII_MMIO_CASE(MI)
     if (physical >= 0x0c004000u && physical + width <= 0x0c004000u + GCN_MI_SIZE &&
         (width == 1 || width == 2 || width == 4) && !(address & (width - 1))) {
         gcn_mi_write(&m->mi, cpu, physical | 0xc0000000u, (u32)value, width);
         return;
     }
+    WII_MMIO_CASE(VI)
     if (physical >= 0x0c002000u && physical + width <= 0x0c002000u + GCN_VI_SIZE &&
         (width == 1 || width == 2 || width == 4) && !(address & (width - 1))) {
         gcn_vi_write(&m->vi, cpu, physical | 0xc0000000u, (u32)value, width);
         return;
     }
+    WII_MMIO_CASE(IPC)
     if (physical >= 0x0d000000u && physical < 0x0d000040u && width == 4 && !(address & 3) &&
         wii_ipc_write(&m->ipc, physical - 0x0d000000u, (u32)value, cpu->cycles)) {
         if (!WIILLR_IOS_NATIVE && (m->ipc.x & 1)) {
@@ -142,11 +214,15 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
         }
         return;
     }
+    WII_MMIO_CASE(PI)
     if (physical >= 0x0c003000u && physical < 0x0c003000u + GCN_PI_SIZE &&
         width == 4 && !(address & 3)) {
         gcn_pi_write(&m->pi, cpu, physical | 0xc0000000u, (u32)value, width);
         return;
     }
+#if WIILLR_MMIO_INDEXED
+    }
+#endif
     m->unsupported_address = address;
     fprintf(stderr, "unimplemented write pc=%08x address=%08x width=%u value=%llx\n",
             cpu->pc, address, width, (unsigned long long)value);
@@ -208,12 +284,14 @@ void wii_machine_init(WiiMachine* m, CPUState* cpu) {
 }
 
 void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
+    const unsigned previous=gcn_cost_enter(GCN_COST_TIME);
     u64 elapsed = cpu->cycles - m->last_cycles;
     u64 delta = elapsed + m->tb_phase;
     u32 ticks = (u32)(delta / 12);
     m->tb_phase = (u32)(delta % 12);
     m->last_cycles = cpu->cycles;
     cpu->timebase += ticks;
+    gcn_cost_enter(GCN_COST_FIFO);
     while(m->cp.gp_read_enable && gcn_cp_fifo_rw_distance(&m->cp)>=32 && !gcn_cp_at_breakpoint(&m->cp)) {
         u32 available;
         const u32 address=gcn_cp_fifo_read_pointer(&m->cp);
@@ -223,24 +301,32 @@ void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
         }
         gcn_cp_gpu_consume_chunk(&m->cp);
     }
+    gcn_cost_enter(GCN_COST_TIME);
     ppc_decrementer_tick(cpu, ticks);
     const u32 audio_rate=(m->ai.control&GCN_AI_CR_AIDFR)?32000u:48000u;
     const bool audio_clock=wii_hollywood_audio_clock(&m->hollywood);
+    gcn_cost_enter(GCN_COST_DSP);
     if (!wii_dsp_tick(&m->dsp, (u32)elapsed,audio_clock?(u32)(729000000ull*8/audio_rate):0)) cpu->halted=true;
     u32 csr=m->dsp.registers.csr;
     gcn_pi_set_interrupt(&m->pi, GCN_PI_INT_DSP,
                          ((csr & 0x80u) && (csr & 0x100u)) || ((csr & 0x20u) && (csr & 0x40u)) ||
                          ((csr & GCN_DSP_CSR_AIDINT) && (csr & GCN_DSP_CSR_AIDMASK)));
+    gcn_cost_enter(GCN_COST_VIDEO);
     gcn_vi_tick(cpu->cycles);
+    gcn_cost_enter(GCN_COST_AI);
     if(audio_clock)gcn_ai_tick((u32)elapsed);
+    gcn_cost_enter(GCN_COST_DI);
     gcn_di_tick(cpu, (u32)elapsed);
+    gcn_cost_enter(GCN_COST_IOS);
     if(WIILLR_IOS_NATIVE && !wii_ios_native_tick(&m->ios,&m->ipc,cpu)) {
         fprintf(stderr,"native IOS stopped at unsupported operation pc=%08x message=%08x\n",
                 cpu->pc,m->ipc.ppc_message);
         cpu->halted=true;
     }
+    gcn_cost_enter(GCN_COST_IPC);
     wii_ipc_tick(&m->ipc, cpu->cycles);
     gcn_pi_set_interrupt(&m->pi, 0x4000, wii_ipc_ppc_interrupt(&m->ipc));
     ppc_deliver_decrementer(cpu);
     gcn_pi_deliver_external(cpu);
+    gcn_cost_leave(previous);
 }

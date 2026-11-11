@@ -7,6 +7,7 @@
 #include "wiillr/boot.h"
 #include "wiillr/gx.h"
 #include "wiillr/control.h"
+#include "debug/cost_ring.h"
 #include "host/host_audio.h"
 #include "memory/memory.h"
 #include "cpu/interpreter.h"
@@ -164,12 +165,18 @@ int main(int argc, char** argv) {
     }
 #if WIILLR_PPC_STATIC
     wii_native_install();
+    const GcnOverlayModule* native_module=wii_native_module();
+#else
+    const GcnOverlayModule* native_module=NULL;
 #endif
     u64 steps = 0, exceptions = 0;unsigned input_next=0;bool input_pending=false;
     WiiBluetoothInput input_state={0};
     input_state.accel[0]=input_state.accel[1]=512;input_state.accel[2]=616;
-    WiiControl* control=wii_control_start(&cpu,&machine,&gx,&input_state,&input_pending);
+    WiiControl* control=wii_control_start(&cpu,&machine,&gx,&input_state,&input_pending,native_module);
     if(getenv("WIILLR_CONTROL_PORT") && !control){wii_dsp_stop(&machine.dsp);wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
+#if GCN_COST_RING_ENABLED
+    gcn_cost_init(cpu.cycles);
+#endif
     while (
 #if WIILLR_PPC_STATIC
            cpu.cycles < limit &&
@@ -195,7 +202,12 @@ int main(int argc, char** argv) {
             input_pending=false;
         }
 #if WIILLR_PPC_STATIC
-        cpu.cycle_deadline=cpu.cycles+64;
+#if GCN_COST_RING_ENABLED
+        gcn_cost_begin_turn(cpu.cycles,read_be32(cpu.ram+0xe4));
+        const unsigned turn_scope=gcn_cost_enter(GCN_COST_DISPATCH);
+        const u64 field_before=machine.fields;
+#endif
+        cpu.cycle_deadline=wii_control_deadline(control,cpu.cycles+64);
         if(!wii_native_call(&cpu,cia)) {
             gcn_interpreter_note_native_miss(&cpu);
 #if WIILLR_PPC_DISCOVERY
@@ -206,12 +218,24 @@ int main(int argc, char** argv) {
 #endif
         }
 #else
+#if GCN_COST_RING_ENABLED
+        gcn_cost_begin_turn(cpu.cycles,read_be32(cpu.ram+0xe4));
+        const unsigned turn_scope=gcn_cost_enter(GCN_COST_GUEST);
+        const u64 field_before=machine.fields;
+#endif
         gcn_interpreter_note_native_miss(&cpu);
         if (!gcn_interpreter_step(&cpu)) break;
 #endif
         ++steps;
+        gcn_cost_enter(GCN_COST_TIME);
         wii_machine_tick(&machine, &cpu);
+        gcn_cost_enter(GCN_COST_GRAPHICS);
         if(!wii_gx_tick(&gx)) {fprintf(stderr,"native GX failed\n");cpu.halted=true;}
+#if GCN_COST_RING_ENABLED
+        gcn_cost_leave(turn_scope);
+        gcn_cost_end_turn(cpu.cycles);
+        if(machine.fields!=field_before)gcn_cost_finish_field(machine.fields,cpu.cycles);
+#endif
         if(gx.quit)break;
         if (cpu.exception) {
             if (exceptions < 8)
