@@ -48,13 +48,15 @@ int main(void) {
     cpu.reserve_valid=true;cpu.reserve_addr=0x90002000;
     CHECK(bp(&gx,0x52,1u<<14));CHECK(!cpu.reserve_valid);
     u8 xfb[200];memcpy(xfb,cpu.mem2+0x2000,sizeof xfb);
-    CHECK(xfb[0]!=16 && xfb[1]!=0);CHECK(cpu.ram[0x2000]==0xa5);
+    const u8 expected_yuy2[4]={116,166,116,96}; /* RGB(64,128,192), BT.601. */
+    CHECK(!memcmp(xfb,expected_yuy2,4));CHECK(cpu.ram[0x2000]==0xa5);
     CHECK(bp(&gx,0x4b,0x2000u>>5));CHECK(bp(&gx,0x52,1u<<14));
     for(unsigned row=0;row<4;row++)CHECK(!memcmp(cpu.ram+0x2000+row*64,xfb+row*64,8));
     CHECK(bp(&gx,0x4b,0x10002400u>>5));CHECK(bp(&gx,0x52,12u<<3));
     u8 texture[64];memcpy(texture,cpu.mem2+0x2400,64);
     CHECK(bp(&gx,0x4b,0x2400u>>5));CHECK(bp(&gx,0x52,12u<<3));
-    CHECK(!memcmp(texture,cpu.ram+0x2400,64));CHECK(texture[0]!=0);
+    CHECK(!memcmp(texture,cpu.ram+0x2400,64));
+    CHECK(texture[0]==255 && texture[1]==64 && texture[32]==128 && texture[33]==192);
     CHECK(bp(&gx,0x45,2));CHECK(m.pe.signal_finish_interrupt);
     m.vi.reg[GCN_VI_VTR>>1]=4u<<4;
     m.vi.reg[GCN_VI_VTO_HI>>1]=m.vi.reg[GCN_VI_VTO_LO>>1]=0;
