@@ -106,9 +106,10 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
                 for(u32 n=0;n<inputs+outputs;n++)fprintf(stderr,"ES vector%u address=%08x size=%u\n",n,
                     read_be32(vectors+n*8),read_be32(vectors+n*8+4));
             if(inputs && vectors && available>=8 && read_be32(vectors+4)==8 &&
-               (read_be32(request+12)==0x17 || read_be32(request+12)==0x18)) {
+               (read_be32(request+12)==8 || read_be32(request+12)==0x17 || read_be32(request+12)==0x18)) {
                 const u8* title=ios_memory(cpu,read_be32(vectors),&available);
-                if(title && available>=8)fprintf(stderr,"ES deletion title=%08x%08x\n",read_be32(title),read_be32(title+4));
+                if(title && available>=8)fprintf(stderr,"ES %s title=%08x%08x\n",
+                    read_be32(request+12)==8?"launch":"deletion",read_be32(title),read_be32(title+4));
             }
         }
     }
@@ -324,6 +325,23 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!wii_hollywood_video_update(ios->hollywood,set,keep,old,&flags))return 0;
         for(unsigned n=0;n<3;n++)mem_write32_cia(cpu,output+n*4,old[n],cpu->pc);
         mem_write32_cia(cpu,output+12,flags,cpu->pc);ios->result=0;return 1;
+    }
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==0x28) {
+        const u32 address=read_be32(request+16),input_size=read_be32(request+20);
+        const u32 output=read_be32(request+24),output_size=read_be32(request+28);
+        const u8* input=ios_memory(cpu,address,&available);
+        ios->result=-4;
+        if(!address || (address&3) || input_size<4 || !input || available<input_size)return 1;
+        const u32 event=read_be32(input);
+        if(output_size && (!output || (output&3) ||
+           !ios_memory(cpu,output,&available) || available<output_size))return 1;
+        /* NWC24 shutdown preparation advertises the PPC's shutdown event and
+         * drains network work; it does not reset the PPC itself. This offline
+         * provider owns no sockets, network workers or keyboard LEDs. Its
+         * queue is already empty. The completion is the IPC result, not a
+         * service-result word in the unused caller output buffer. */
+        ios->kd_shutdown_event=event;ios->kd_shutdown_requested=true;
+        ios->result=0;return 1;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 && read_be32(request+12)==0x22) {
         const u32 address=read_be32(request+16),output=read_be32(request+24);

@@ -123,6 +123,34 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-4 && !ios.led_mode && gpio==0x300);
+    /* Real asynchronous shutdown preparation accepts the original event4
+     * packet without fabricating a service-result word or resetting PPC.
+     * Invalid declared extents cannot advertise an event or damage output. */
+    wii_ios_native_init(&ios);ios.descriptors[0]=7;ios.kd_suspend_count=2;
+    for(unsigned n=0;n<9;n++) {
+        wii_ipc_init(&ipc);ios.phase=0;
+        ios.kd_shutdown_requested=false;ios.kd_shutdown_event=0x1234;
+        mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+8,0,0);
+        mem_write32_cia(&cpu,message+12,0x28,0);
+        mem_write32_cia(&cpu,message+16,0x10000400,0);mem_write32_cia(&cpu,message+20,32,0);
+        mem_write32_cia(&cpu,message+24,0x10000440,0);mem_write32_cia(&cpu,message+28,32,0);
+        mem_write32_cia(&cpu,0x10000400,n==8 ? 3:4,0);
+        memset(cpu.mem2+0x440,0x55,32);
+        if(n==1)mem_write32_cia(&cpu,message+20,3,0);
+        if(n==2)mem_write32_cia(&cpu,message+16,0x10000401,0);
+        if(n==3)mem_write32_cia(&cpu,message+16,0x13fffffc,0);
+        if(n==4)mem_write32_cia(&cpu,message+24,0,0);
+        if(n==5)mem_write32_cia(&cpu,message+24,0x10000441,0);
+        if(n==6)mem_write32_cia(&cpu,message+28,0xffffffff,0);
+        if(n==7){mem_write32_cia(&cpu,message+24,0,0);mem_write32_cia(&cpu,message+28,0,0);}
+        wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==((n>0 && n<7) ? -4:0));
+        const bool valid=n==0 || n>=7;
+        CHECK(ios.kd_shutdown_requested==valid && ios.kd_shutdown_event==(valid ? (n==8 ? 3:4):0x1234));
+        CHECK(ios.kd_suspend_count==2 && !cpu.halted);
+        for(unsigned i=0;i<32;i++)CHECK(cpu.mem2[0x440+i]==0x55);
+    }
     /* Offline KD scripts report the real disabled status, not successful
      * script activation. Invalid modes and short buffers remain errors. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=7;
