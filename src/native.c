@@ -7,6 +7,9 @@
 #if WIILLR_MENU_PICTURES
 #include "wiillr/menu_picture_hook.h"
 #endif
+#if WIILLR_MM9_RENDERER
+#include "wiillr/mm9_renderer_hook.h"
+#endif
 #include "overlay_module_tables.inc"
 static u32 resident[GCN_OVERLAY_PAGE_COUNT];
 static u32 page_index[GCN_OVERLAY_INDEX_SLOTS];
@@ -14,12 +17,18 @@ static GcnOverlayModule module={s_overlay_pages,s_overlay_variants,resident,
     GCN_OVERLAY_PAGE_COUNT,GCN_OVERLAY_VARIANT_COUNT};
 const GcnOverlayModule* wii_native_module(void){return &module;}
 bool gcn_overlay_call(CPUState* cpu,u32 address){
+#if WIILLR_MM9_RENDERER
+    if(wii_mm9_renderer_hook_dispatch(cpu,address))return true;
+#endif
 #if WIILLR_MENU_PICTURES
     if(wii_menu_picture_hook_call(cpu,address))return true;
 #endif
     return gcn_overlay_module_call(&module,cpu,address);
 }
 void gcn_overlay_icbi(u32 address,u32 size){
+#if WIILLR_MM9_RENDERER
+    wii_mm9_renderer_hook_invalidate(address,size);
+#endif
 #if WIILLR_MENU_PICTURES
     wii_menu_picture_hook_invalidate(address,size);
 #endif

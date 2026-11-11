@@ -9,6 +9,9 @@
 #if WIILLR_MENU_PICTURES
 #include "wiillr/menu_picture_hook.h"
 #endif
+#if WIILLR_MM9_RENDERER
+#include "wiillr/mm9_renderer_hook.h"
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -66,14 +69,25 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
         .cache_directory=cache,.hidden=!(window && !strcmp(window,"1")),.user=g,.bp_write=bp_write,.write_copy=write_copy,
         .resolve_memory=resolve,.locate_memory=locate};
     if(!g->api->start(&config)) {wii_gx_stop(g);return false;}
-#if WIILLR_MENU_PICTURES
+#if WIILLR_MENU_PICTURES || WIILLR_MM9_RENDERER
 #ifdef _WIN32
     GcWiiNativeRenderGetApi native_get=(GcWiiNativeRenderGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_render_get_api");
 #else
     GcWiiNativeRenderGetApi native_get=(GcWiiNativeRenderGetApi)dlsym(g->library,"gc_wii_native_render_get_api");
 #endif
     const GcWiiNativeRenderApi* native_api=native_get?native_get(GC_WII_NATIVE_RENDER_ABI):NULL;
+#if WIILLR_MENU_PICTURES
     if(!wii_menu_picture_hook_start(g,native_api)){wii_gx_stop(g);return false;}
+#endif
+#if WIILLR_MM9_RENDERER
+#ifdef _WIN32
+    GcWiiNativeFrameGetApi frame_get=(GcWiiNativeFrameGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_frame_get_api");
+#else
+    GcWiiNativeFrameGetApi frame_get=(GcWiiNativeFrameGetApi)dlsym(g->library,"gc_wii_native_frame_get_api");
+#endif
+    const GcWiiNativeFrameApi* frame_api=frame_get?frame_get(GC_WII_NATIVE_FRAME_ABI):NULL;
+    if(!wii_mm9_renderer_hook_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
+#endif
 #endif
     m->gx_fifo=fifo;m->gx_user=g;gcn_gp_set_drain_hook(&m->gp,drain,g);return true;
 }
@@ -139,6 +153,9 @@ bool wii_gx_tick(WiiGx* g) {
     return !status.failed;
 }
 void wii_gx_stop(WiiGx* g) {
+#if WIILLR_MM9_RENDERER
+    wii_mm9_renderer_hook_stop();
+#endif
 #if WIILLR_MENU_PICTURES
     wii_menu_picture_hook_stop();
 #endif

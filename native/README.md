@@ -52,13 +52,25 @@ optional shared line limit, then returns the actual 256x240 tiled RGB565
 texture. It constructs no GX commands and performs no GPU readback. Output is
 atomic on an unsupported or unreadable input.
 
-This is prepared code, not an installed live replacement. The entry/copy gate
-must establish exact row and border sampling and preserve the final texture
-publication, queue object, completion/display copies, scroll-control retirement
-and sprite-pool effects before enabling a hook. A memory dump taken after the
-original frame has retired its sprite pool or scroll tables is not an input
-oracle. The focused tests cover the independent tile/color, ordering,
+The root build's `WIILLR_MM9_RENDERER` defaults to `none`. `oracle` prepares the
+logical image at the verified entry and compares the real RGB565 target after
+the original compositor completes. It leaves original rendering active and
+stops on an unsupported input or material image mismatch. A memory dump taken
+after the original frame has retired its sprite pool or scroll tables is not an
+input oracle. The focused tests cover independent tile/color, ordering,
 transparency, scroll, line-limit and rejection contracts.
+
+`declared-slice` installs the complete compositor and matching final-screen
+hooks. The native compositor publishes the real RGB565 target, preserves the
+atlas copy-clear regions through typed EFB clears, performs the caller-visible
+display copy and completion, retires scroll/sprite controls, and retains the
+original mutex-protected queue operation. It omits internal atlases and
+scanline draw construction. The shared Frame API must expose the full physical
+528-row Wii EFB independently of VI's displayed height. Unsupported final-screen
+families are counted and retain their original body. `strict` stops on any
+unsupported hook input; backend failures stop in both modes. These are
+experimental build selections: meaningful same-entry image, route and runtime
+performance gates remain required before promotion.
 
 The title-specific boundary is WR9E `0x800e7308` (extent `0x108`), which owns the
 tile atlas, background/sprite scanline compositor and final screen copy. Its
@@ -69,11 +81,25 @@ expands to its exact original DOL SHA-1
 `8a7c0c2daa65fb3dcd5176922335cf3b999cd940`. This is a different frontend from
 the Menu's NW4R layout provider.
 
-`mm9_screen` replaces the final-screen family of `0x800d5e50`: it reads the
+`mm9_screen` replaces the queued-quad family of `0x800d5e50`: it reads the
 queued logical screen object, preserves odd rectangle sizes, UVs, depth and the
 original packed RGB565 brightness, and submits a retained native quad using the
-real `0x0039b2c0` texture identity. Its caller supplies the proven typed camera
-and inherited blend/depth state and owns submission ordering. Other queued
-texture families reject explicitly. Geometry, resource identity, brightness,
-cache ownership and failure contracts are tested separately; live entry and
-frame-effect integration remain required.
+real texture identity, including the compositor's `0x0039b2c0` target.
+Base-level I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR resources are supported;
+paletted or mipmapped resources reject explicitly. Its caller supplies the
+proven typed camera and inherited blend/depth state and owns submission
+ordering. Geometry is retained per queued object. Geometry, resource identity, brightness,
+cache ownership and failure contracts are tested separately. The hook uses the
+caller's SDK projection/viewport and drains machine-owned prior work before
+native submission. Function identities are invalidated by executable writes.
+A bounded derived entry label covers same-page compiled calls that do not
+visit external dispatch; the immutable prepared catalog and original source
+remain intact.
+
+The exercised WR9E boot/gameplay replay has 3,374 byte-identical logical
+compositor outputs and 7,415 native queued draws with no unsupported calls or
+backend failures. Final scanout, full PCM and selected caller-visible buffers
+match the original. Two earlier scanouts have small shading precision
+differences (RGB8 maximum 4 and 3; mean absolute differences 0.0391 and 0.0198).
+Frame setup and final copy operations still use the original path; this does
+not establish a completely FIFO-free workload or a runtime performance win.

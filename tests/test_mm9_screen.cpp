@@ -35,5 +35,17 @@ int main(){try {
     require(wii_mm9_screen_draw(renderer,object,31,&camera)==1 && uploads==2 && destroyed==1,"Changed packed brightness updates geometry");
     const auto original=screen;p32(object+12,0x39b2e0>>5);require(!wii_mm9_screen_prepare(memory,object,31,&camera,&screen,error,sizeof(error)) && std::memcmp(&screen,&original,sizeof(screen))==0,"Unsupported screen target is atomic");
     require(wii_mm9_screen_draw(renderer,object,31,&camera)==0 && draws==3,"Unsupported queued family cannot submit");p32(object+12,0x39b2c0>>5);fail=true;require(wii_mm9_screen_draw(renderer,object,31,&camera)==-1,"Screen backend failure is distinct from unsupported input");
-    wii_mm9_screen_destroy(renderer);require(destroyed==2,"Final-screen resources released");std::cout<<"MM9 native final-screen geometry, brightness, resource identity and failures passed; live hook pending\n";return 0;
+    wii_mm9_screen_destroy(renderer);require(destroyed==2,"Final-screen resources released");
+    p32(object+12,0x800>>5);
+    for(unsigned format: {0u,1u,2u,3u,4u,5u,6u,14u}) {
+        p32(object+8,format<<20);
+        require(wii_mm9_screen_prepare(memory,object,32,&camera,&screen,error,sizeof(error)),error);
+        require(screen.draw.material.texture.address==0x800 && screen.draw.material.texture.width==1 && screen.draw.material.texture.height==1 && screen.draw.material.texture.size==(format==6?64u:32u),"Queued texture format preserves actual storage/block size");
+    }
+    p32(object+8,8u<<20);require(!wii_mm9_screen_prepare(memory,object,32,&camera,&screen,error,sizeof(error)),"Unresolved palette is explicitly rejected");
+    p32(object+8,6u<<20);std::memcpy(ram.data()+0x180,ram.data()+0x100,64);
+    renderer=wii_mm9_screen_create(memory,&api);fail=false;
+    require(wii_mm9_screen_draw(renderer,object,32,&camera)==1 && wii_mm9_screen_draw(renderer,object+0x80,32,&camera)==1 && uploads==4,"Independent queued objects upload their own retained geometry");
+    require(wii_mm9_screen_draw(renderer,object,32,&camera)==1 && uploads==4,"Alternating queued objects retain geometry");
+    wii_mm9_screen_destroy(renderer);require(destroyed==4,"All queued resources released");std::cout<<"MM9 queued native geometry, brightness, base textures and failures passed\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
