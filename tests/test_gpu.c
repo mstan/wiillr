@@ -22,6 +22,8 @@ int main(void) {
     mem_write16_cia(&cpu,GCN_CP_BASE+GCN_CP_CTRL,GCN_CP_CTRL_GPLINK_ENABLE,0);
     memset(cpu.ram+0x1000,0xa5,64);
     for(unsigned n=0;n<8;n++)mem_write64_cia(&cpu,GCN_GP_BASE,0x0123456789abcdefull+n,0);
+    CHECK(m.gx_cpu_gather_writes==8 && m.gx_cpu_gather_bytes==64 && !m.gx_cpu_gather_rejected);
+    CHECK(!wii_machine_claim_native_graphics(&m,"too-late"));
     CHECK(gcn_cp_fifo_rw_distance(&m.cp)==64 && m.pi.reg[GCN_PI_FIFO_WPTR>>2]==base);
     for(unsigned n=0;n<64;n++)CHECK(cpu.ram[0x1000+n]==0xa5);
     CHECK(cpu.mem2[0x1000]==1 && cpu.mem2[0x1007]==0xef && cpu.mem2[0x103f]==0xf6);
@@ -38,5 +40,11 @@ int main(void) {
     mem_write32_cia(&cpu,GCN_PI_BASE+GCN_PI_FIFO_RESET,1,0);CHECK(!m.gp.count);
     m.gx_fifo=NULL;for(unsigned n=0;n<8;n++)mem_write32_cia(&cpu,GCN_GP_BASE,0,0);
     cpu.cycles+=32;wii_machine_tick(&m,&cpu);CHECK(cpu.halted && gcn_cp_fifo_rw_distance(&m.cp)==32);
+    wii_machine_init(&m,&cpu);cpu.halted=false;
+    CHECK(wii_machine_claim_native_graphics(&m,"unit-native-initializer"));
+    CHECK(!wii_machine_claim_native_graphics(&m,"second-owner"));
+    mem_write32_cia(&cpu,GCN_GP_BASE,0x61000000,0);
+    CHECK(cpu.halted && m.gx_cpu_gather_writes==1 && m.gx_cpu_gather_bytes==4 && m.gx_cpu_gather_rejected==1);
+    CHECK(!m.gp.count && !gcn_cp_fifo_rw_distance(&m.cp));
     cpu_free(&cpu);return 0;
 }

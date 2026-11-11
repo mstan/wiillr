@@ -42,6 +42,8 @@ typedef struct {
     GcnCp cp;
     GcnPe pe;
     GcnGp gp;
+    u64 gx_cpu_gather_writes,gx_cpu_gather_bytes,gx_cpu_gather_rejected;
+    const char* gx_native_owner;
     int (*gx_fifo)(void* user,const u8* bytes,u32 size);
     void* gx_user;
     CPUState* cpu;
@@ -50,6 +52,10 @@ typedef struct {
     u64 domain_max_interval[GCN_DOMAIN_COUNT];
 } WiiMachine;
 void wii_machine_init(WiiMachine* machine, CPUState* cpu);
+/* A verified whole graphics initializer may claim the FIFO-free contract.
+ * Earlier CPU ingress or pending legacy work rejects ownership. Owner must
+ * outlive the machine. Subsequent CPU gather writes count and stop. */
+bool wii_machine_claim_native_graphics(WiiMachine*,const char* owner);
 void wii_machine_tick(WiiMachine* machine, CPUState* cpu);
 /* Build-selected event owner. Lockstep keeps its original 64-cycle floor. */
 #define WII_MACHINE_EVENT_CAP 16384u
