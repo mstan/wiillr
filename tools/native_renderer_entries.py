@@ -19,7 +19,7 @@ def main():
     markers={}
     if args.frame_owner:
         pages['overlay_800D5000_hF28561AD0793EB68.c'].append(0x800d5990)
-        pages['overlay_80099000_hB4A449361DFA7467.c']=[0x80099200,0x80099394,0x800995f0]
+        pages['overlay_80099000_hB4A449361DFA7467.c']=[0x8009905c,0x80099200,0x80099394,0x800995f0]
         pages['overlay_8009D000_hD295BDE95AA6CA50.c']=[]
         pages['overlay_800E8000_hB0FDEF9B22C93FE2.c']=[0x800e8024]
         pages['overlay_80083000_h748FAA87F633CA31.c']=[0x80083730]

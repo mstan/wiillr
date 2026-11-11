@@ -30,10 +30,15 @@ static void owned_reset(void);
 static void owned_invalidate(u32,u32);
 static void owned_summary(void);
 static bool owned_active(void);
+static bool owned_read_allowed(u32,u32);
+static int owned_finish_compositor(CPUState*,const GcWiiNativeDisplayCopy*);
 #else
 void wii_mm9_renderer_frame_marker(CPUState* cpu,u32 address){(void)cpu;(void)address;}
 #endif
 static const u8* read_memory(void* user,u32 address,u32 size) {
+#if WIILLR_MM9_FRAME_MODE
+    if(!owned_read_allowed(address,size))return NULL;
+#endif
     CPUState* cpu=user;const u32 physical=address&0x1fffffffu;
     if(!(physical<cpu->ram_size || (physical>=0x10000000u && physical-0x10000000u<cpu->mem2_size)))return NULL;
     u32 available;const u8* bytes=gcn_mem_resolve(cpu,address,&available);return bytes && size<=available?bytes:NULL;
@@ -55,6 +60,12 @@ static bool attest(CPUState* cpu) {
 }
 static bool ordered_boundary(void) {
     WiiMachine* m=owner->machine;CPUState* cpu=owner->cpu;
+#if WIILLR_MM9_FRAME_MODE
+    /* Inside one graphics owner, typed operations already share recording
+     * order. Reject unexpected guest ingress instead of inserting a CPU/GPU
+     * completion barrier between each native phase. */
+    if(owned_active())return !m->gp.count && !gcn_cp_fifo_rw_distance(&m->cp);
+#endif
     if(m->gp.count){const u8 padding[32]={0};if(!gcn_gp_write_stream(&m->gp,cpu,padding,32-m->gp.count))return false;}
     while(m->cp.gp_read_enable && gcn_cp_fifo_rw_distance(&m->cp)>=32 && !gcn_cp_at_breakpoint(&m->cp)) {
         u32 available;const u8* bytes=gcn_mem_resolve(cpu,gcn_cp_fifo_read_pointer(&m->cp),&available);
@@ -189,7 +200,14 @@ int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
     if(WIILLR_MM9_RENDERER_MODE==1){if(oracle_entry)memcpy(oracle_entry,cpu->ram,cpu->ram_size);oracle_pending=true;return 0;}
     GcWiiNativeClear clear;GcWiiNativeDisplayCopy copy;if(!frame_effects(cpu,&clear,&copy))return unsupported(cpu,"frame copy settings");
     if(!ordered_boundary())return failure(cpu,"frame prior completion");
-    if(!publish(cpu,FINAL_TEXTURE,prepared->texture,WII_MM9_TEXTURE_BYTES) || !clear_retired_atlases(cpu,&clear) || !frame_api->clear(&clear) || !frame_api->display_copy(&copy) || !frame_api->complete(0,0))return failure(cpu,"frame publication/copy/clear");
+    if(!publish(cpu,FINAL_TEXTURE,prepared->texture,WII_MM9_TEXTURE_BYTES) || !clear_retired_atlases(cpu,&clear) || !frame_api->clear(&clear))return failure(cpu,"frame publication/clear");
+#if WIILLR_MM9_FRAME_MODE
+    if(owned_active()) {
+        const int retire=owned_finish_compositor(cpu,&copy);
+        if(retire<0)return failure(cpu,"native copy-clear retirement");if(!retire)return owned_stop(cpu,"intermediate copy consumer");
+    } else
+#endif
+    if(!frame_api->display_copy(&copy) || !frame_api->complete(0,0))return failure(cpu,"frame copy/completion");
     if(!retire_logical_inputs(cpu))return failure(cpu,"logical input retirement");
 #if WIILLR_MM9_FRAME_MODE
     if(!owned_active())
@@ -206,7 +224,7 @@ int wii_mm9_renderer_hook_dispatch(CPUState* cpu,u32 address) {
      * both the external dispatcher and that label. */
     const u32 p=address&0x1fffffffu;
 #if WIILLR_MM9_FRAME_MODE
-    if(p==0x99200 || p==0x99394 || p==0x995f0 || p==0xd5990 || p==0xe8024 || p==0x83730)return 0;
+    if(p==0x9905c || p==0x99200 || p==0x99394 || p==0x995f0 || p==0xd5990 || p==0xe8024 || p==0x83730)return 0;
 #endif
     return p==(SCREEN&0x1fffffffu)?0:wii_mm9_renderer_hook_call(cpu,address);
 }

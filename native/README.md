@@ -122,12 +122,34 @@ texture-object fields without issuing graphics commands. A populated separate
 overlay draw list, unsupported input or failed native submission stops visibly;
 an owned frame cannot resume an original path whose setup it omitted.
 
+The same owner replaces the verified game graphics initializer at `0x8009905c`.
+It retains the real caller FIFO object and public handle, clear values and
+queryable viewport/copy fields, and initializes the host EFB with typed frame
+operations. It omits guest command caches, gather setup and the internal
+draw-done waiter. Copy retirement still provides an ordered completion barrier.
+
 The 43-billion-cycle functional replay completes 3,374 owned frames and 7,415
-native draws with zero owned-frame FIFO bytes, zero interpreter execution,
+native draws with zero total FIFO bytes, zero interpreter execution,
 zero unresolved native misses and no unsupported cases or backend failures.
-Only 1,792 bootstrap FIFO bytes remain outside that boundary. Final video,
+The native initializer also removes the earlier 1,792 bootstrap bytes. Final video,
 the complete 1,806,344-frame stereo PCM stream and the checked caller buffers
 match the original exactly. The two earlier pictures are byte-identical to the
 draw-slice candidate, retaining its bounded shading precision differences.
-This frame-owner result is functional evidence; its separate normal timing
-comparison remains required before a performance claim.
+The preceding frame-owner comparison passed three matched output/audio
+pairs. Its median throughput improved 81.0% and CPU time per field fell 51.9%
+against the original renderer: 50.8–55.9 versus 28.6–29.0 fields/s on that host.
+This is a separate whole-application comparison, not an incremental timing win
+over the preceding draw-slice candidate.
+
+Within the enclosing owner, a work-XFB publication that the final copy will
+overwrite can be omitted while preserving its exact EFB clears. Both live VI
+state and the last scanout range must exclude that buffer; native CPU/texture
+reads reject until final publication, and active pause overlays or blocking
+queue locks reject explicitly. If VI already observes the work buffer, its
+intermediate native copy and barrier remain. The accepted replay retires 3,373
+hidden copies and retains one observable copy, reducing display copies from
+6,749 to 3,376. Final video, full audio and checked caller buffers remain exact;
+the two earlier images equal the preceding native candidate byte-for-byte.
+Typed phases share recording order without per-phase CPU/GPU completion waits.
+Normal matched timing of this startup/copy revision remains separate from the
+preceding frame-owner numbers.
