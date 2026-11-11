@@ -71,13 +71,17 @@ extern "C" void wii_mm9_screen_destroy(WiiMm9ScreenNative* renderer){if(!rendere
 extern "C" int wii_mm9_screen_draw(WiiMm9ScreenNative* renderer,uint32_t object,uint32_t level,const GcWiiNativeDraw* camera) {
     if(!renderer)return 0;WiiMm9Screen screen{};
     if(!wii_mm9_screen_prepare(renderer->memory,object,level,camera,&screen,renderer->status.error,sizeof(renderer->status.error))){++renderer->status.rejected;return 0;}
-    auto& retained=renderer->meshes[object];
+    return wii_mm9_screen_draw_prepared(renderer,object,&screen);
+}
+extern "C" int wii_mm9_screen_draw_prepared(WiiMm9ScreenNative* renderer,uint32_t key,const WiiMm9Screen* input) {
+    if(!renderer || !input)return -1;const auto& screen=*input;
+    auto& retained=renderer->meshes[key];
     if(!retained.handle || std::memcmp(retained.vertices.data(),screen.vertices,sizeof(screen.vertices))) {
         constexpr uint16_t indices[]{0,1,2,0,2,3};const GcWiiNativeMesh input{screen.vertices,indices,4,6};const auto mesh=renderer->backend->create_mesh(&input);
         if(!mesh){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen mesh creation failed");++renderer->status.rejected;return -1;}
         if(retained.handle)renderer->backend->destroy_mesh(retained.handle);retained.handle=mesh;std::copy_n(screen.vertices,4,retained.vertices.begin());++renderer->status.mesh_uploads;
     }
-    screen.draw.mesh=retained.handle;if(!renderer->backend->draw(&screen.draw)){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen draw failed");++renderer->status.rejected;return -1;}
+    auto draw=screen.draw;draw.mesh=retained.handle;if(!renderer->backend->draw(&draw)){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen draw failed");++renderer->status.rejected;return -1;}
     ++renderer->status.draws;return 1;
 }
 extern "C" void wii_mm9_screen_status(const WiiMm9ScreenNative* renderer,WiiMm9ScreenStatus* output){if(renderer && output)*output=renderer->status;}

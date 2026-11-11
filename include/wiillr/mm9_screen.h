@@ -24,6 +24,9 @@ typedef struct WiiMm9ScreenStatus {
 WiiMm9ScreenNative* wii_mm9_screen_create(WiiMm9Memory,const GcWiiNativeRenderApi*);
 void wii_mm9_screen_destroy(WiiMm9ScreenNative*);
 int wii_mm9_screen_draw(WiiMm9ScreenNative*,uint32_t object,uint32_t brightness,const GcWiiNativeDraw* camera);
+/* Frame-owned logical quads use an explicit prepared resource/geometry; the
+ * retained key never supplies a guest texture address or object to decode. */
+int wii_mm9_screen_draw_prepared(WiiMm9ScreenNative*,uint32_t retained_key,const WiiMm9Screen*);
 void wii_mm9_screen_status(const WiiMm9ScreenNative*,WiiMm9ScreenStatus*);
 #ifdef __cplusplus
 }
