@@ -8,7 +8,13 @@ Unchanged geometry is retained while poses and texture memory remain live.
 
 The initial family supports default flat or single-texture materials, vertex or
 material color sources, alpha blending, unrotated texture scale/translation and
-base-level textures. Unsupported material equations, filtering and layout cases
+base-level textures. The GUI color-range family maps one texture between live
+RGBA endpoints, clamps it, then applies pane tint/global alpha. Flat materials
+use the high endpoint times pane color. Both endpoints currently require byte
+values; wider signed colors reject explicitly. Animated endpoints stay separate
+from retained geometry. This family uses the shared native GUI material API and
+existing shader compiler/resource cache, without changing RenderAPI1.
+Unsupported custom material equations, filtering and layout cases
 reject explicitly. Backend failures are distinct from unsupported families.
 Call `forget_picture` at pane destruction; destroy the provider before shutting
 down the shared GPU service. The caller owns view selection and earlier draw

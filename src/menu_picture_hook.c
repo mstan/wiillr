@@ -48,10 +48,12 @@ static bool ordered_boundary(WiiGx* gx) {
     if(gcn_cp_fifo_rw_distance(&machine->cp))return false;
     return gx->api->drain()!=0;
 }
-bool wii_menu_picture_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* api) {
-    if(owner || !gx || !gx->cpu || !api)return false;
+bool wii_menu_picture_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* api,const GcWiiNativeGuiApi* gui) {
+    if(owner || !gx || !gx->cpu || !api || !gui)return false;
     const WiiMenuMemory memory={gx->cpu,read_memory};renderer=wii_menu_native_create(memory,api);
-    if(!renderer)return false;owner=gx;verified=false;entries=declines=failures=0;return true;
+    if(!renderer)return false;
+    if(!wii_menu_native_gui(renderer,gui)){wii_menu_native_destroy(renderer);renderer=NULL;return false;}
+    owner=gx;verified=false;entries=declines=failures=0;return true;
 }
 void wii_menu_picture_hook_invalidate(u32 address,u32 size) {
     const u32 physical=address&0x1fffffffu;

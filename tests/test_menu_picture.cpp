@@ -15,6 +15,7 @@ void require(bool b,const char* why){if(!b)throw std::runtime_error(why);}
 std::vector<uint8_t> ram(0x4000);
 constexpr uint32_t pane=0x80000100,material=0x80000400,info=0x80000600,mem=0x80000800,coords=0x80000900;
 uint64_t uploads{},draws{},destroyed{},next_handle=1;bool fail_draw{};GcWiiNativeDraw last{};
+GcWiiNativeGuiMaterial last_gui{};
 const uint8_t* read(void*,uint32_t address,uint32_t size){address&=0x1fffffffu;if(address==0x1695618)address=0xa00;return address<=ram.size() && size<=ram.size()-address?ram.data()+address:nullptr;}
 void p16(uint32_t a,uint16_t v){a&=0x1fffffff;ram.at(a)=v>>8;ram.at(a+1)=v&255;}
 void p32(uint32_t a,uint32_t v){p16(a,v>>16);p16(a+2,v&65535);}
@@ -31,6 +32,7 @@ void fixture() {
 uint64_t create(const GcWiiNativeMesh* mesh){require(mesh && mesh->vertex_count==4 && mesh->index_count==6,"Native quad topology");require(mesh->indices[0]==0 && mesh->indices[5]==3,"Native quad winding");++uploads;return next_handle++;}
 int destroy(uint64_t handle){require(handle>0,"Destroying invalid native mesh");++destroyed;return 1;}
 int draw(const GcWiiNativeDraw* job){last=*job;if(fail_draw)return 0;++draws;return 1;}
+int draw_gui(const GcWiiNativeGuiDraw* job){last_gui=job->color;return draw(&job->draw);}
 void status(GcWiiNativeRenderStatus*){}
 void units() {
     fixture();const WiiMenuMemory memory{nullptr,read};auto view=camera();WiiMenuPicture out{};char error[192]{};
@@ -64,6 +66,20 @@ void units() {
     require(result.live_meshes==0 && result.draws==3 && result.rejected==2,"Native provider accounting");
     p32(pane+0x28,0);require(wii_menu_native_draw_picture(renderer,pane,info,&view)==1,"Original null-material no-op");
     wii_menu_native_destroy(renderer);
+    fixture();view=camera();p16(material+0x24,52);p16(material+0x2c,190);
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof(error)),error);
+    require(out.needs_gui && out.color.low[0]==52 && out.color.high[0]==190 && out.vertices[0].color[0]==1,"Color endpoints must remain separate from pane tint");
+    auto* colored=wii_menu_native_create(memory,&api);require(colored,"Color provider creation");
+    require(wii_menu_native_draw_picture(colored,pane,info,&view)==0,"Unavailable native material family must reject");
+    const GcWiiNativeGuiApi gui{GC_WII_NATIVE_GUI_ABI,draw_gui};
+    require(wii_menu_native_gui(colored,&gui),"Native GUI material binding");
+    const auto before_upload=uploads;
+    require(wii_menu_native_draw_picture(colored,pane,info,&view)==1 && last_gui.high[0]==190,"Native flat tint submission");
+    p16(material+0x2c,200);
+    require(wii_menu_native_draw_picture(colored,pane,info,&view)==1 && last_gui.high[0]==200 && uploads==before_upload+1,"Animated material endpoints must reuse native geometry");
+    const auto remap_previous=out;p16(material+0x2c,1024);
+    require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof(error)) && std::memcmp(&out,&remap_previous,sizeof(out))==0,"Invalid signed endpoint must reject atomically");
+    wii_menu_native_destroy(colored);
     p32(0xa00,0x80001000);p32(0x1528,1);pf(0x152c,1);pf(0x1534,1);pf(0x153c,-1);pf(0x1540,0);
     pf(0x154c,640);pf(0x1550,480);pf(0x1558,1);p32(0x1148,(342u<<12)|342u);p32(0x114c,(981u<<12)|821u);p32(0x1220,24);
     WiiMenuView sdk{};require(wii_menu_picture_sdk_view(memory,&sdk,error,sizeof(error)),error);

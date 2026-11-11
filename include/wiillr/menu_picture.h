@@ -2,6 +2,7 @@
 #ifndef WIILLR_MENU_PICTURE_H
 #define WIILLR_MENU_PICTURE_H
 #include <gcnllr/native_render.h>
+#include <gcnllr/native_gui.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,6 +21,8 @@ typedef struct WiiMenuPicture {
     GcWiiNativeDraw draw;
     uint32_t pane,material;
     uint8_t skipped;
+    GcWiiNativeGuiMaterial color;
+    uint8_t needs_gui;
 } WiiMenuPicture;
 /* Wii Menu 4.3U NW4R Picture::DrawSelf replacement inputs.
  * This reads live pane/material data; it does not execute guest routines or
@@ -35,6 +38,7 @@ typedef struct WiiMenuNativeStatus {
     char error[192];
 } WiiMenuNativeStatus;
 WiiMenuNative* wii_menu_native_create(WiiMenuMemory,const GcWiiNativeRenderApi*);
+int wii_menu_native_gui(WiiMenuNative*,const GcWiiNativeGuiApi*);
 void wii_menu_native_destroy(WiiMenuNative*);
 int wii_menu_native_draw_picture(WiiMenuNative*,uint32_t picture,uint32_t draw_info,const WiiMenuView*);
 void wii_menu_native_forget_picture(WiiMenuNative*,uint32_t picture);
