@@ -100,16 +100,17 @@ static bool owned_work_is_hidden(u32 address,u32 size) {
 }
 static int owned_finish_compositor(CPUState* cpu,const GcWiiNativeDisplayCopy* copy) {
     /* In the attested enclosing frame, only queue insertion, the native
-     * camera/queue/empty-overlay passes and an inactive pause overlay occur
-     * before final overwrite. The work XFB is not the active VI source.
-     * Native CPU/resource reads from it reject until final publication. */
+     * camera/queue/text passes occur before final overwrite. An inactive
+     * pause overlay leaves the hidden work XFB unobserved. HOME/pause may
+     * consume that image, so retain its native publication and barrier. */
     const u32 mutex=0x8038e074,thread=r32(cpu,mutex+8),count=r32(cpu,mutex+12);
-    if(owned.deferred || r8(cpu,0x80316d2b) || r8(cpu,0x80316d29) ||
+    const bool overlay_consumer=r8(cpu,0x80316d2b) || r8(cpu,0x80316d29);
+    if(owned.deferred ||
        (thread && (thread!=r32(cpu,0x800000e4) || !count)) || input_invalid)return false;
     /* Double-buffering can temporarily expose the nominal work image to VI.
      * That publication is observable, so retain its native copy and barrier.
      * Hidden work images alone qualify for retirement. */
-    if(!owned_work_is_hidden(copy->destination,copy->stride*copy->height)) {
+    if(overlay_consumer || !owned_work_is_hidden(copy->destination,copy->stride*copy->height)) {
         if(!frame_api->display_copy(copy) || !output_complete())return -1;
         ++owned.observable_copies;return 1;
     }
