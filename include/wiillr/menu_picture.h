@@ -1,0 +1,45 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef WIILLR_MENU_PICTURE_H
+#define WIILLR_MENU_PICTURE_H
+#include <gcnllr/native_render.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+typedef struct WiiMenuMemory {
+    void* user;
+    const uint8_t* (*read)(void*,uint32_t address,uint32_t size);
+} WiiMenuMemory;
+typedef struct WiiMenuView {
+    float projection[16];
+    float x,y,width,height,near_depth,far_depth;
+    int32_t clip_x,clip_y,clip_width,clip_height;
+    uint32_t depth_flags,depth_func;
+} WiiMenuView;
+typedef struct WiiMenuPicture {
+    GcWiiNativeVertex vertices[4];
+    GcWiiNativeDraw draw;
+    uint32_t pane,material;
+    uint8_t skipped;
+} WiiMenuPicture;
+/* Wii Menu 4.3U NW4R Picture::DrawSelf replacement inputs.
+ * This reads live pane/material data; it does not execute guest routines or
+ * construct/parse a display list. Failure publishes no partial output. */
+int wii_menu_picture_prepare(WiiMenuMemory,uint32_t picture,uint32_t draw_info,
+                             const WiiMenuView*,WiiMenuPicture*,char* error,uint32_t error_size);
+/* Extract the current Menu SDK view after the original caller established it.
+ * A fully native layout caller may instead supply its own typed view. */
+int wii_menu_picture_sdk_view(WiiMenuMemory,WiiMenuView*,char* error,uint32_t error_size);
+typedef struct WiiMenuNative WiiMenuNative;
+typedef struct WiiMenuNativeStatus {
+    uint64_t draws,skipped,mesh_uploads,rejected,live_meshes;
+    char error[192];
+} WiiMenuNativeStatus;
+WiiMenuNative* wii_menu_native_create(WiiMenuMemory,const GcWiiNativeRenderApi*);
+void wii_menu_native_destroy(WiiMenuNative*);
+int wii_menu_native_draw_picture(WiiMenuNative*,uint32_t picture,uint32_t draw_info,const WiiMenuView*);
+void wii_menu_native_forget_picture(WiiMenuNative*,uint32_t picture);
+void wii_menu_native_status(const WiiMenuNative*,WiiMenuNativeStatus*);
+#ifdef __cplusplus
+}
+#endif
+#endif
