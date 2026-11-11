@@ -141,12 +141,12 @@ int main(int argc, char** argv) {
     }
     WiiGx gx={0};
     if(gx_library) {
-#if WIILLR_GX_NATIVE
+#if WIILLR_GX_NATIVE || WIILLR_GX_SOFTWARE
         if(!wii_gx_start(&gx,&machine,&cpu,gx_library,gx_data,gx_cache)) {
             fprintf(stderr,"native GX start failed\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
         }
 #else
-        fprintf(stderr,"GX needs the build-selected native provider\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+        fprintf(stderr,"GX needs a build-selected provider\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
 #endif
     }
     u8 irom[8192], coef[4096];
