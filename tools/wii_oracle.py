@@ -67,7 +67,9 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
         port = probe.getsockname()[1]
     env = dict(os.environ, WIILLR_CONTROL_PORT=str(port), WIILLR_CONTROL_PAUSED='1',
                WIILLR_INPUT_SCRIPT=str(args.inputs.resolve(strict=True)),
-               WIILLR_WINDOW='0', GCN_AUDIO='1', GCN_AUDIO_MUTE='1',
+               WIILLR_WINDOW='0',
+               GCN_AUDIO='1' if getattr(args, 'host_audio_output', True) else '0',
+               GCN_AUDIO_MUTE='1',
                GCN_AUDIO_CAPTURE=str(root / 'audio.wav'), GCN_AUDIO_CAPTURE_FRAMES='19200000',
                SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0', PYTHONDONTWRITEBYTECODE='1')
     env.pop('WIILLR_SYNC_CYCLES', None)
@@ -76,7 +78,8 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
     if os.name == 'nt':
         env['PATH'] = 'C:/msys64/mingw64/bin' + os.pathsep + env.get('PATH', '')
     result = dict(executable=identity(executable), gx_library=identity(library),
-                  inputs=identity(args.inputs), epoch=args.epoch, command=command, checkpoints=[])
+                  inputs=identity(args.inputs), epoch=args.epoch, command=command,
+                  host_audio_output=env['GCN_AUDIO'] == '1', checkpoints=[])
     process = None
     control = None
     try:
@@ -143,6 +146,8 @@ def main():
     parser.add_argument('--baseline-gx', type=Path)
     parser.add_argument('--candidate-gx', type=Path)
     parser.add_argument('--candidate-cost', action='store_true')
+    parser.add_argument('--no-host-audio', dest='host_audio_output', action='store_false',
+                        help='Disable host playback; retain DSP execution, PCM capture and fingerprints')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--cycles', type=int, nargs='+', required=True)
     parser.add_argument('--epoch', type=int, default=1794355200)
