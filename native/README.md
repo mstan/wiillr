@@ -76,6 +76,11 @@ after the original frame has retired its sprite pool or scroll tables is not an
 input oracle. The focused tests cover independent tile/color, ordering,
 transparency, scroll, line-limit and rejection contracts.
 
+`reference` retains the same provider-present bit and attested entry label but
+does no native provider startup, compositing or draw work. It runs the original
+bodies and is the matched performance reference; `oracle` computes both paths
+and is a correctness check only.
+
 `declared-slice` installs the complete compositor and matching final-screen
 hooks. The native compositor publishes the real RGB565 target, preserves the
 atlas copy-clear regions through typed EFB clears, performs the caller-visible
