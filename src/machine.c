@@ -235,8 +235,9 @@ static void vi_interrupt(void* user, int asserted) {
     gcn_pi_set_interrupt(user, GCN_PI_INT_VI, asserted);
 }
 static void vi_field(void* user, double period) {
-    (void)period;
-    ++((WiiMachine*)user)->fields;
+    WiiMachine* m=user;
+    ++m->fields;
+    wii_pacing_on_field(&m->pacing,period);
 }
 static void ai_interrupt(void* user, int asserted) {
     gcn_pi_set_interrupt(user, GCN_PI_INT_AI, asserted);

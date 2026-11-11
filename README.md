@@ -116,6 +116,14 @@ AOT and development interpreter remain available as LLE references.
 transport for protocol QA. It records at most 512 events to the existing log;
 the normal build compiles it out.
 
+`WIILLR_PACING=field` (default) paces the host at the VI device's field period.
+`WIILLR_PACING=none` builds the unpaced configuration used for throughput
+measurements. Pacing uses a monotonic clock without changing guest cycles or
+skipping frames. Resuming a paused TCP session starts a fresh host deadline;
+ordinary late fields retain the accumulated deadline to avoid timing drift.
+Windows uses a high-resolution waitable timer when available, with portable
+sleep as the fallback. The full audio and sustained pacing gate remains open.
+
 `tools/prepare_ppc.py` validates an original-title discovery's input, journal
 and code-page identities before using the shared Broadway compiler. Pass its
 private `generated` directory as `WIILLR_PPC_GENERATED_DIR` to build the native

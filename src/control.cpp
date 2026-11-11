@@ -215,12 +215,14 @@ struct WiiControl {
       if(target<=cpu->cycles || target-cpu->cycles>50000000000ull)
         throw std::runtime_error("invalid cycle target");
       stop_at=target;
+      if(paused)wii_pacing_reset(&machine->pacing);
       paused=false;
       return "{\"ok\":true}";
     }
     if(args[0]=="run" && args.size()<=2) {
       const auto budget=args.size()==2?number(args[1],10):0;
       if(budget>50000000000ull || budget>UINT64_MAX-cpu->cycles)throw std::runtime_error("invalid cycle budget");
+      if(paused)wii_pacing_reset(&machine->pacing);
       stop_at=budget?cpu->cycles+budget:0;paused=false;return "{\"ok\":true}";
     }
     if(args[0]=="quit" && args.size()==1){quit=true;paused=false;return "{\"ok\":true}";}

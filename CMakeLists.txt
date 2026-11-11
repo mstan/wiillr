@@ -45,13 +45,22 @@ if(NOT WIILLR_IOS MATCHES "^(none|native-development)$")
   message(FATAL_ERROR "Unknown IOS provider")
 endif()
 add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/ipc.c src/dsp.c src/ios.c src/ave.c src/gx.c
-  src/control.cpp
+  src/control.cpp src/pacing.cpp
   external/gc-wii-core/src/host_audio.c
   external/gc-wii-core/src/pi.c external/gc-wii-core/src/mi.c external/gc-wii-core/src/vi.c
   external/gc-wii-core/src/ai.c external/gc-wii-core/src/exi.c
   external/gc-wii-core/src/cp.c external/gc-wii-core/src/pe.c external/gc-wii-core/src/gp.c
   external/gc-wii-core/src/exi_cpu.c external/gc-wii-core/src/rtc.c
   external/gc-wii-core/src/memcard.c external/gc-wii-core/src/di.c external/gc-wii-core/src/si.c)
+set(WIILLR_PACING "field" CACHE STRING "Host field pacing: none or field")
+set_property(CACHE WIILLR_PACING PROPERTY STRINGS none field)
+if(NOT WIILLR_PACING MATCHES "^(none|field)$")
+  message(FATAL_ERROR "Unknown Wii pacing provider")
+endif()
+set_property(SOURCE src/pacing.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  WIILLR_PACING_FIELD=$<STREQUAL:${WIILLR_PACING},field>)
+find_package(Threads REQUIRED)
+target_link_libraries(wii_boot PRIVATE Threads::Threads)
 add_library(wii_fs STATIC src/fs.cpp third_party/dolphin-ios-fs/NWC24Identity.cpp third_party/dolphin-ios-fs/FileSystemCommon.cpp
   third_party/dolphin-ios-fs/FS.cpp third_party/dolphin-ios-fs/File.cpp third_party/dolphin-ios-fs/port.cpp)
 set_target_properties(wii_fs PROPERTIES CXX_STANDARD 23)

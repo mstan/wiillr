@@ -18,6 +18,7 @@
 #include "pe/pe.h"
 #include "gp/gp.h"
 #include "gcnllr/device_domains.h"
+#include "wiillr/pacing.h"
 typedef struct {
     GcnPi pi;
     WiiIpc ipc;
@@ -30,6 +31,7 @@ typedef struct {
     GcnDi di;
     GcnSi si;
     u64 last_cycles, fields;
+    WiiPacing pacing;
     u32 tb_phase;
     u64 mmio_reads, mmio_writes;
     u32 unsupported_address;
