@@ -4,14 +4,27 @@
 #include "cpu/overlay_module.h"
 #include "cpu/native_code.h"
 #include <stdio.h>
+#if WIILLR_MENU_PICTURES
+#include "wiillr/menu_picture_hook.h"
+#endif
 #include "overlay_module_tables.inc"
 static u32 resident[GCN_OVERLAY_PAGE_COUNT];
 static u32 page_index[GCN_OVERLAY_INDEX_SLOTS];
 static GcnOverlayModule module={s_overlay_pages,s_overlay_variants,resident,
     GCN_OVERLAY_PAGE_COUNT,GCN_OVERLAY_VARIANT_COUNT};
 const GcnOverlayModule* wii_native_module(void){return &module;}
-bool gcn_overlay_call(CPUState* cpu,u32 address){return gcn_overlay_module_call(&module,cpu,address);}
-void gcn_overlay_icbi(u32 address,u32 size){gcn_overlay_module_invalidate(&module,address,size);}
+bool gcn_overlay_call(CPUState* cpu,u32 address){
+#if WIILLR_MENU_PICTURES
+    if(wii_menu_picture_hook_call(cpu,address))return true;
+#endif
+    return gcn_overlay_module_call(&module,cpu,address);
+}
+void gcn_overlay_icbi(u32 address,u32 size){
+#if WIILLR_MENU_PICTURES
+    wii_menu_picture_hook_invalidate(address,size);
+#endif
+    gcn_overlay_module_invalidate(&module,address,size);
+}
 bool wii_native_call(CPUState* cpu,u32 address){return gcn_overlay_call(cpu,address);}
 static int candidate(CPUState* cpu,u32 address){return wii_native_call(cpu,address);}
 void wii_native_install(void){

@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if WIILLR_MENU_PICTURES
+#include "wiillr/menu_picture_hook.h"
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -63,6 +66,15 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
         .cache_directory=cache,.hidden=!(window && !strcmp(window,"1")),.user=g,.bp_write=bp_write,.write_copy=write_copy,
         .resolve_memory=resolve,.locate_memory=locate};
     if(!g->api->start(&config)) {wii_gx_stop(g);return false;}
+#if WIILLR_MENU_PICTURES
+#ifdef _WIN32
+    GcWiiNativeRenderGetApi native_get=(GcWiiNativeRenderGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_render_get_api");
+#else
+    GcWiiNativeRenderGetApi native_get=(GcWiiNativeRenderGetApi)dlsym(g->library,"gc_wii_native_render_get_api");
+#endif
+    const GcWiiNativeRenderApi* native_api=native_get?native_get(GC_WII_NATIVE_RENDER_ABI):NULL;
+    if(!wii_menu_picture_hook_start(g,native_api)){wii_gx_stop(g);return false;}
+#endif
     m->gx_fifo=fifo;m->gx_user=g;gcn_gp_set_drain_hook(&m->gp,drain,g);return true;
 }
 bool wii_gx_tick(WiiGx* g) {
@@ -127,6 +139,9 @@ bool wii_gx_tick(WiiGx* g) {
     return !status.failed;
 }
 void wii_gx_stop(WiiGx* g) {
+#if WIILLR_MENU_PICTURES
+    wii_menu_picture_hook_stop();
+#endif
     if(g->machine) {g->machine->gx_fifo=NULL;g->machine->gx_user=NULL;gcn_gp_set_drain_hook(&g->machine->gp,NULL,NULL);}
     if(g->api)g->api->stop();g->api=NULL;
     if(g->library) {
