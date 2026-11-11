@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
 #if WIILLR_PPC_DISCOVERY
             if(!gcn_interpreter_step(&cpu))break;
 #else
-            fprintf(stderr,"static PPC miss pc=%08x cycles=%llu\n",cia,(unsigned long long)cpu.cycles);
+            fprintf(stderr,"static PPC miss pc=%08x cycles=%llu lr=%08x ctr=%08x sp=%08x r3=%08x r4=%08x r12=%08x r30=%08x r31=%08x\n",cia,(unsigned long long)cpu.cycles,cpu.lr,cpu.ctr,cpu.gpr[1],cpu.gpr[3],cpu.gpr[4],cpu.gpr[12],cpu.gpr[30],cpu.gpr[31]);
             cpu.halted=true;break;
 #endif
         }
@@ -327,9 +327,11 @@ int main(int argc, char** argv) {
     wii_fs_unmount(machine.ios.fs);
     if(gx.api) {
         GcnllrNativeGxStatus status={0};gx.api->drain();gx.api->status(&status);
-        printf("{\"gx_fifo_bytes\":%llu,\"gx_draws\":%llu,\"gx_display_copies\":%llu,\"gx_presents\":%llu,\"gx_failed\":%u}\n",
+        printf("{\"gx_fifo_bytes\":%llu,\"gx_draws\":%llu,\"gx_display_copies\":%llu,\"gx_presents\":%llu,\"gx_failed\":%u,\"gx_cpu_gather_writes\":%llu,\"gx_cpu_gather_bytes\":%llu,\"gx_cpu_gather_rejected\":%llu,\"gx_native_owner\":\"%s\"}\n",
             (unsigned long long)status.fifo_bytes,(unsigned long long)status.draws,
-            (unsigned long long)status.display_copies,(unsigned long long)status.presents,status.failed);
+            (unsigned long long)status.display_copies,(unsigned long long)status.presents,status.failed,
+            (unsigned long long)machine.gx_cpu_gather_writes,(unsigned long long)machine.gx_cpu_gather_bytes,
+            (unsigned long long)machine.gx_cpu_gather_rejected,machine.gx_native_owner?machine.gx_native_owner:"");
         if(gx.scanout_width && gx.scanout_height) {
             const u32 size=gx.scanout_stride*(gx.scanout_height-1)+gx.scanout_width*2;
             u32 available;const u8* pixels=gcn_mem_resolve(&cpu,gx.scanout_address,&available);

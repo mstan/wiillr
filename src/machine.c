@@ -159,6 +159,12 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
 #endif
     if(physical>=0x0c008000u && physical+width<=0x0c008000u+GCN_GP_SIZE &&
        (width==1 || width==2 || width==4 || width==8) && !(address&(width-1))) {
+        ++m->gx_cpu_gather_writes;m->gx_cpu_gather_bytes+=width;
+        if(m->gx_native_owner) {
+            ++m->gx_cpu_gather_rejected;
+            fprintf(stderr,"Native graphics owner %s rejected CPU gather write pc=%08x lr=%08x address=%08x width=%u\n",m->gx_native_owner,cpu->pc,cpu->lr,address,width);
+            cpu->halted=true;return;
+        }
         u32 available;
         if(m->gp.count+width>=32 && (!gcn_mem_resolve(cpu,m->pi.reg[GCN_PI_FIFO_WPTR>>2],&available) || available<32)) {
             fprintf(stderr,"invalid GX gather address=%08x\n",m->pi.reg[GCN_PI_FIFO_WPTR>>2]);cpu->halted=true;return;
@@ -253,6 +259,12 @@ static void si_interrupt(void* user, int asserted) {
 }
 static void cp_interrupt(void* user,int asserted) {gcn_pi_set_interrupt(user,GCN_CP_INT_CAUSE,asserted);}
 static void pe_interrupt(void* user,u32 cause,int asserted) {gcn_pi_set_interrupt(user,cause,asserted);}
+
+bool wii_machine_claim_native_graphics(WiiMachine* m,const char* owner) {
+    if(!m || !owner || !*owner || m->gx_native_owner || m->gx_cpu_gather_writes ||
+       m->gp.count || gcn_cp_fifo_rw_distance(&m->cp))return false;
+    m->gx_native_owner=owner;return true;
+}
 
 void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     memset(m, 0, sizeof *m);
