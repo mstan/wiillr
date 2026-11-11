@@ -207,7 +207,18 @@ int main(int argc, char** argv) {
         const unsigned turn_scope=gcn_cost_enter(GCN_COST_DISPATCH);
         const u64 field_before=machine.fields;
 #endif
-        cpu.cycle_deadline=wii_control_deadline(control,cpu.cycles+64);
+        cpu.cycle_deadline=wii_control_deadline(control,wii_machine_deadline(&machine,cpu.cycles));
+#if WIILLR_SCHED_DEADLINE
+        if(limit<cpu.cycle_deadline)cpu.cycle_deadline=limit;
+        if(input_next<(unsigned)input_count && inputs[input_next].at<cpu.cycle_deadline)
+            cpu.cycle_deadline=inputs[input_next].at;
+        if(sync_pending && sync_at<cpu.cycle_deadline)cpu.cycle_deadline=sync_at;
+#endif
+        do {
+#if GCN_COST_RING_ENABLED
+        gcn_cost_thread_boundary(cpu.cycles,read_be32(cpu.ram+0xe4));
+#endif
+        cia=cpu.pc;
         if(!wii_native_call(&cpu,cia)) {
             gcn_interpreter_note_native_miss(&cpu);
 #if WIILLR_PPC_DISCOVERY
@@ -217,6 +228,13 @@ int main(int argc, char** argv) {
             cpu.halted=true;break;
 #endif
         }
+        ++steps;
+#if WIILLR_SCHED_DEADLINE
+        } while(cpu.cycles<cpu.cycle_deadline && !cpu.halted && !cpu.exception &&
+                (!stop || cpu.pc!=stop));
+#else
+        } while(0);
+#endif
 #else
 #if GCN_COST_RING_ENABLED
         gcn_cost_begin_turn(cpu.cycles,read_be32(cpu.ram+0xe4));
@@ -225,8 +243,8 @@ int main(int argc, char** argv) {
 #endif
         gcn_interpreter_note_native_miss(&cpu);
         if (!gcn_interpreter_step(&cpu)) break;
-#endif
         ++steps;
+#endif
         gcn_cost_enter(GCN_COST_TIME);
         wii_machine_tick(&machine, &cpu);
         gcn_cost_enter(GCN_COST_GRAPHICS);

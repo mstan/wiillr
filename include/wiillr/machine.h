@@ -17,6 +17,7 @@
 #include "cp/cp.h"
 #include "pe/pe.h"
 #include "gp/gp.h"
+#include "gcnllr/device_domains.h"
 typedef struct {
     GcnPi pi;
     WiiIpc ipc;
@@ -41,7 +42,16 @@ typedef struct {
     GcnGp gp;
     int (*gx_fifo)(void* user,const u8* bytes,u32 size);
     void* gx_user;
+    CPUState* cpu;
+    GcnDeviceDomains domains;
+    u64 domain_max_lateness;
 } WiiMachine;
 void wii_machine_init(WiiMachine* machine, CPUState* cpu);
 void wii_machine_tick(WiiMachine* machine, CPUState* cpu);
+/* Build-selected event owner. Lockstep keeps its original 64-cycle floor. */
+#define WII_MACHINE_EVENT_CAP 16384u
+void wii_machine_scheduler_init(WiiMachine*,CPUState*);
+u64 wii_machine_deadline(WiiMachine*,u64 now);
+void wii_machine_observe_register(WiiMachine*,CPUState*,u32 physical);
+bool wii_machine_service_domains(WiiMachine*,CPUState*);
 #endif

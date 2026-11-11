@@ -44,6 +44,7 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     WiiMachine* m = cpu->external_user_data;
     ++m->mmio_reads;
     u32 physical = address & 0x3fffffffu;
+    wii_machine_observe_register(m,cpu,physical);
     const u32 gpio=physical&~0x00800000u;
     u32 hollywood_value;
     if(width==4 && wii_hollywood_read(&m->hollywood,physical,&hollywood_value))return hollywood_value;
@@ -117,6 +118,7 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     WiiMachine* m = cpu->external_user_data;
     ++m->mmio_writes;
     u32 physical = address & 0x3fffffffu;
+    wii_machine_observe_register(m,cpu,physical);
     const u32 gpio=physical&~0x00800000u;
 #if WIILLR_MMIO_INDEXED
     if((physical>>10)==(0x0c008000u>>10))goto gather_pipe;
@@ -281,9 +283,15 @@ void wii_machine_init(WiiMachine* m, CPUState* cpu) {
     cpu->external_user_data = m;
     cpu->external_read = read_device;
     cpu->external_write = write_device;
+    wii_machine_scheduler_init(m,cpu);
 }
 
 void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
+#if WIILLR_SCHED_DEADLINE
+    if(!wii_machine_service_domains(m,cpu))cpu->halted=true;
+    ppc_deliver_decrementer(cpu);
+    gcn_pi_deliver_external(cpu);
+#else
     const unsigned previous=gcn_cost_enter(GCN_COST_TIME);
     u64 elapsed = cpu->cycles - m->last_cycles;
     u64 delta = elapsed + m->tb_phase;
@@ -329,4 +337,5 @@ void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
     ppc_deliver_decrementer(cpu);
     gcn_pi_deliver_external(cpu);
     gcn_cost_leave(previous);
+#endif
 }

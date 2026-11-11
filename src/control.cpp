@@ -173,6 +173,18 @@ struct WiiControl {
     }
     if(args[0]=="pause" && args.size()==1){paused=true;stop_at=0;return "{\"ok\":true}";}
     if(args[0]=="fingerprint" && args.size()==1)return fingerprint();
+    if(args[0]=="scheduler" && args.size()==1) {
+      const auto& domains=machine->domains;
+      std::ostringstream out;
+      out << "{\"ok\":true,\"provider\":\"" << (WIILLR_SCHED_DEADLINE?"deadline":"lockstep")
+          << "\",\"cap\":" << (WIILLR_SCHED_DEADLINE?WII_MACHINE_EVENT_CAP:64)
+          << ",\"max_event_lateness\":" << machine->domain_max_lateness
+          << ",\"failed\":" << (domains.failed?"true":"false")
+          << ",\"credits\":" << domains.credits << ",\"observations\":" << domains.observations
+          << ",\"services\":[";
+      for(unsigned i=0;i<GCN_DOMAIN_COUNT;++i)out << (i?",":"") << domains.services[i];
+      out << "]}";return out.str();
+    }
     if(args[0]=="cost" && args.size()<=2) {
       const auto limit=args.size()==2?number(args[1],10):120;
       if(!limit || limit>GCN_COST_RING_CAPACITY)throw std::runtime_error("invalid field limit");
