@@ -10,10 +10,10 @@ typedef struct WiiMm9Screen {
     GcWiiNativeVertex vertices[4];
     GcWiiNativeDraw draw;
 } WiiMm9Screen;
-/* Final-screen family of WR9E 800D5E50: logical object rectangle/UV, native
- * RGB565 resource and RGB565 vertex brightness. The caller supplies the typed
+/* Queued-quad family of WR9E 800D5E50: logical object rectangle/UV, native
+ * base-level nonpaletted resources and RGB565 vertex brightness. The caller supplies the typed
  * camera and proven inherited blend/depth state, and orders preceding work.
- * Other queued texture families reject explicitly. No GX operation executes. */
+ * Paletted/mipmapped texture families reject explicitly. No GX operation executes. */
 int wii_mm9_screen_prepare(WiiMm9Memory,uint32_t object,uint32_t brightness,
     const GcWiiNativeDraw* camera,WiiMm9Screen*,char*,uint32_t);
 typedef struct WiiMm9ScreenNative WiiMm9ScreenNative;

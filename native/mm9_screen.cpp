@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 namespace {
 void need(bool b,const char* why){if(!b)throw std::runtime_error(why);}
 void message(char* p,uint32_t n,const char* why){if(p && n)std::snprintf(p,n,"%s",why);}
@@ -28,8 +29,16 @@ WiiMm9Screen prepare(const Reader& r,uint32_t object,uint32_t level,const GcWiiN
     auto& texture=out.draw.material.texture;texture={};const auto image=r.u32(object+8),sampler=r.u32(object);
     texture.width=(image&1023)+1;texture.height=((image>>10)&1023)+1;texture.format=(image>>20)&15;
     texture.address=(r.u32(object+12)&0xffffffu)<<5;
-    need(texture.format==4 && texture.width==256 && texture.height==240 && texture.address==0x0039b2c0,"Unbound MM9 queued texture family");
-    texture.size=WII_MM9_TEXTURE_BYTES;texture.wrap_s=sampler&3;texture.wrap_t=(sampler>>2)&3;texture.linear=(sampler>>4)&1;
+    unsigned block_width=4,block_height=4,block_bytes=32;
+    switch(texture.format) {
+    case 0:case 14:block_width=block_height=8;break;
+    case 1:case 2:block_width=8;break;
+    case 3:case 4:case 5:break;
+    case 6:block_bytes=64;break;
+    default:need(false,"MM9 queued palette/texture family needs qualification");
+    }
+    texture.size=((texture.width+block_width-1)/block_width)*((texture.height+block_height-1)/block_height)*block_bytes;
+    texture.wrap_s=sampler&3;texture.wrap_t=(sampler>>2)&3;texture.linear=(sampler>>4)&1;
     need(texture.wrap_s<=2 && texture.wrap_t<=2 && (((sampler>>5)&7)==0 || ((sampler>>5)&7)==4) && (((sampler>>7)&1)==texture.linear) && !(sampler&0x19fe00),"MM9 screen sampler needs qualification");
     r.bytes(texture.address,texture.size);
     const int x=int16_t(r.u16(object+0x20)),y=int16_t(r.u16(object+0x22)),w=int16_t(r.u16(object+0x24)),h=int16_t(r.u16(object+0x26));
@@ -51,22 +60,24 @@ extern "C" int wii_mm9_screen_prepare(WiiMm9Memory memory,uint32_t object,uint32
 }
 struct WiiMm9ScreenNative {
     WiiMm9Memory memory{};const GcWiiNativeRenderApi* backend{};
-    uint64_t mesh{};std::array<GcWiiNativeVertex,4> vertices{};WiiMm9ScreenStatus status{};
+    struct Mesh {uint64_t handle{};std::array<GcWiiNativeVertex,4> vertices{};};
+    std::unordered_map<uint32_t,Mesh> meshes;WiiMm9ScreenStatus status{};
 };
 extern "C" WiiMm9ScreenNative* wii_mm9_screen_create(WiiMm9Memory memory,const GcWiiNativeRenderApi* api) {
     if(!memory.read || !api || api->abi!=GC_WII_NATIVE_RENDER_ABI || !api->create_mesh || !api->destroy_mesh || !api->draw)return nullptr;
     auto out=std::make_unique<WiiMm9ScreenNative>();out->memory=memory;out->backend=api;return out.release();
 }
-extern "C" void wii_mm9_screen_destroy(WiiMm9ScreenNative* renderer){if(!renderer)return;if(renderer->mesh)renderer->backend->destroy_mesh(renderer->mesh);delete renderer;}
+extern "C" void wii_mm9_screen_destroy(WiiMm9ScreenNative* renderer){if(!renderer)return;for(const auto& [object,mesh]:renderer->meshes)if(mesh.handle)renderer->backend->destroy_mesh(mesh.handle);delete renderer;}
 extern "C" int wii_mm9_screen_draw(WiiMm9ScreenNative* renderer,uint32_t object,uint32_t level,const GcWiiNativeDraw* camera) {
     if(!renderer)return 0;WiiMm9Screen screen{};
     if(!wii_mm9_screen_prepare(renderer->memory,object,level,camera,&screen,renderer->status.error,sizeof(renderer->status.error))){++renderer->status.rejected;return 0;}
-    if(!renderer->mesh || std::memcmp(renderer->vertices.data(),screen.vertices,sizeof(screen.vertices))) {
+    auto& retained=renderer->meshes[object];
+    if(!retained.handle || std::memcmp(retained.vertices.data(),screen.vertices,sizeof(screen.vertices))) {
         constexpr uint16_t indices[]{0,1,2,0,2,3};const GcWiiNativeMesh input{screen.vertices,indices,4,6};const auto mesh=renderer->backend->create_mesh(&input);
         if(!mesh){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen mesh creation failed");++renderer->status.rejected;return -1;}
-        if(renderer->mesh)renderer->backend->destroy_mesh(renderer->mesh);renderer->mesh=mesh;std::copy_n(screen.vertices,4,renderer->vertices.begin());++renderer->status.mesh_uploads;
+        if(retained.handle)renderer->backend->destroy_mesh(retained.handle);retained.handle=mesh;std::copy_n(screen.vertices,4,retained.vertices.begin());++renderer->status.mesh_uploads;
     }
-    screen.draw.mesh=renderer->mesh;if(!renderer->backend->draw(&screen.draw)){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen draw failed");++renderer->status.rejected;return -1;}
+    screen.draw.mesh=retained.handle;if(!renderer->backend->draw(&screen.draw)){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen draw failed");++renderer->status.rejected;return -1;}
     ++renderer->status.draws;return 1;
 }
 extern "C" void wii_mm9_screen_status(const WiiMm9ScreenNative* renderer,WiiMm9ScreenStatus* output){if(renderer && output)*output=renderer->status;}
