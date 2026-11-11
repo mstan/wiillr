@@ -3,6 +3,8 @@
 #include "gx/gx.h"
 #include "gx/gx_raster.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /* This facade shares only the host observation interface with the native
  * provider. Commands execute in the original CPU rasterizer; no GPU service
@@ -44,6 +46,21 @@ static int peek(u32 depth, u16 x, u16 y, u32* value) {
         0x08000000u | (depth ? 0x00400000u : 0) | ((u32)y << 12) | ((u32)x << 2), value);
 }
 static void stop(void) {
+    const char* dump = getenv("WIILLR_SOFTWARE_GX_STATE");
+    if (started && dump && *dump) {
+        char* json = malloc(4u*1024u*1024u);
+        FILE* file = fopen(dump,"wb");
+        if (json && file) {
+            const u32* bp = gcn_gx_bp();
+            fprintf(file,"{\"copy_registers\":[%u,%u,%u,%u,%u,%u,%u,%u,%u],\"draw_state\":",
+                    bp[0x43],bp[0x49],bp[0x4a],bp[0x4b],bp[0x4d],bp[0x4e],bp[0x52],bp[0x53],bp[0x54]);
+            int size = gx_raster_debug_draw_state_json(json,4u*1024u*1024u);
+            if (size > 0 && size < 4*1024*1024) fwrite(json,1,(size_t)size,file); else fputs("null",file);
+            fputs("}\n",file);
+        }
+        if (file) fclose(file);
+        free(json);
+    }
     if (started) gcn_gx_pipeline_shutdown();
     started = 0;
 }

@@ -1,11 +1,17 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/gx.h"
 #include "gx/gx.h"
+#include "gx/gx_raster.h"
 #include "gx/gx_memory.h"
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x); return 1; } } while (0)
 static void be32(u8* p,u32 v) { p[0]=v>>24;p[1]=v>>16;p[2]=v>>8;p[3]=v; }
+static u32 float_word(float v) {u32 word;memcpy(&word,&v,4);return word;}
+static void vertex(u8* p,float x,float y,float u,float v) {
+    be32(p,float_word(x));be32(p+4,float_word(y));be32(p+8,0);
+    be32(p+12,float_word(u));be32(p+16,float_word(v));
+}
 static int bp(WiiGx* gx,u32 reg,u32 value) {
     u8 command[5]={0x61,(u8)reg,(u8)(value>>16),(u8)(value>>8),(u8)value};
     /* Exercise commands crossing individual FIFO submissions. */
@@ -57,6 +63,41 @@ int main(void) {
     CHECK(bp(&gx,0x4b,0x2400u>>5));CHECK(bp(&gx,0x52,12u<<3));
     CHECK(!memcmp(texture,cpu.ram+0x2400,64));
     CHECK(texture[0]==255 && texture[1]==64 && texture[32]==128 && texture[33]==192);
+    /* The Menu alternates register/konst writes to the same BP addresses.
+     * A stage writing C0 must not feed that result into the next fragment. */
+    u32 xf[0x1058]={0};xf[0]=xf[5]=xf[10]=float_word(1);
+    xf[0x1020]=xf[0x1022]=float_word(1);xf[0x1025]=float_word(-.5f);xf[0x1026]=1;
+    xf[0x101a]=float_word(2);xf[0x101b]=float_word(-2);xf[0x101c]=float_word(1);
+    xf[0x101d]=xf[0x101e]=float_word(344);xf[0x101f]=float_word(1);
+    xf[0x103f]=1;xf[0x1040]=5u<<7;gcn_gx_set_xf(xf,0x1058);
+    CHECK(cp(&gx,0x30,0));CHECK(cp(&gx,0x50,1u<<9));CHECK(cp(&gx,0x60,1));
+    CHECK(cp(&gx,0x70,1u|(4u<<1)|(1u<<21)|(4u<<22)));
+    CHECK(bp(&gx,0x00,1));CHECK(bp(&gx,0x20,(342u<<12)|342u));
+    CHECK(bp(&gx,0x21,(345u<<12)|345u));CHECK(bp(&gx,0x59,(171u<<10)|171u));
+    CHECK(bp(&gx,0x30,7));CHECK(bp(&gx,0x31,3));CHECK(bp(&gx,0x80,0));
+    CHECK(bp(&gx,0x88,(1u<<20)|(3u<<10)|7u));CHECK(bp(&gx,0x94,0x10002800u>>5));
+    for(unsigned i=0;i<32;i++)cpu.mem2[0x2800+i]=(i&1)?0:128;
+    CHECK(bp(&gx,0x28,0x3c0));CHECK(bp(&gx,0x40,0));CHECK(bp(&gx,0x43,1));
+    CHECK(bp(&gx,0xf3,0x3f0000));
+    CHECK(bp(&gx,0xe2,255u<<12));CHECK(bp(&gx,0xe3,0));
+    CHECK(bp(&gx,0xe4,(255u<<12)|255u));CHECK(bp(&gx,0xe5,(255u<<12)|255u));
+    for(unsigned reg=0xe2;reg<=0xe5;reg++)CHECK(bp(&gx,reg,0x800000u|(37u<<12)|37u));
+    CHECK(bp(&gx,0xf6,29u<<9)); /* K1 alpha, independently retained as37. */
+    CHECK(bp(&gx,0xc0,0x48248f));CHECK(bp(&gx,0xc1,0x08ffe0));
+    u8 quad[83]={0x80,0,4};vertex(quad+3,-1,1,0,0);vertex(quad+23,1,1,.5f,0);
+    vertex(quad+43,1,-1,.5f,1);vertex(quad+63,-1,-1,0,1);
+    CHECK(gx.api->fifo(quad,sizeof quad));
+    CHECK(bp(&gx,0x4b,0x10002c00u>>5));CHECK(bp(&gx,0x52,12u<<3));
+    CHECK(cpu.mem2[0x2c00]==36 && cpu.mem2[0x2c01]==130 && cpu.mem2[0x2c03]==0);
+    CHECK(gx.api->fifo(quad,sizeof quad));CHECK(bp(&gx,0x52,12u<<3));
+    CHECK(cpu.mem2[0x2c00]==36 && cpu.mem2[0x2c01]==130 && cpu.mem2[0x2c03]==0);
+    u32 saved_bp[256],saved_tev[16];memcpy(saved_bp,gcn_gx_bp(),sizeof saved_bp);
+    memcpy(saved_tev,gx_raster_tev_state(),sizeof saved_tev);
+    CHECK(bp(&gx,0xe2,0x800000u|(74u<<12)|55u));
+    gcn_gx_set_bp(saved_bp);gx_raster_set_tev_state(saved_tev);
+    CHECK(!memcmp(saved_tev,gx_raster_tev_state(),sizeof saved_tev));
+    CHECK(gx.api->fifo(quad,sizeof quad));CHECK(bp(&gx,0x52,12u<<3));
+    CHECK(cpu.mem2[0x2c00]==36 && cpu.mem2[0x2c01]==130 && cpu.mem2[0x2c03]==0);
     CHECK(bp(&gx,0x45,2));CHECK(m.pe.signal_finish_interrupt);
     m.vi.reg[GCN_VI_VTR>>1]=4u<<4;
     m.vi.reg[GCN_VI_VTO_HI>>1]=m.vi.reg[GCN_VI_VTO_LO>>1]=0;
@@ -69,7 +110,7 @@ int main(void) {
     CHECK(gx.scanout_address==0x10002000 && gx.scanout_width==16 &&
           gx.scanout_height==4 && gx.scanout_stride==64);
     GcnllrNativeGxStatus status;gx.api->status(&status);
-    CHECK(!status.failed && status.display_copies==3 && status.texture_copies==2 && status.presents==1);
+    CHECK(!status.failed && status.display_copies==3 && status.texture_copies==5 && status.presents==1);
     CHECK(gx.api->drain());wii_gx_stop(&gx);cpu_free(&cpu);
     return 0;
 }
