@@ -13,10 +13,10 @@ int main(void) {
     CHECK(m.vi.core_clock == 729000000u);
     cpu.cycles = 11;
     wii_machine_tick(&m, &cpu);
-    CHECK(cpu.timebase == 0);
+    CHECK(ppc_mftb(&cpu,268,cpu.pc) == 0);
     cpu.cycles = 12;
     wii_machine_tick(&m, &cpu);
-    CHECK(cpu.timebase == 1);
+    CHECK(ppc_mftb(&cpu,268,cpu.pc) == 1);
     mem_write32(&cpu, 0xcc00401c, 0x11223344, 0x3400);
     CHECK(mem_read16(&cpu, 0x0c00401c, 0x3400) == 0x1122);
     CHECK(mem_read16(&cpu, 0xcc00401e, 0x3400) == 0x3344);
