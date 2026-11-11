@@ -176,3 +176,19 @@ These earlier timing runs retained muted host audio playback. Its queue can
 throttle execution, so the rates describe observed throughput rather than an
 unpaced headroom limit. Unpaced qualification must disable host playback while
 retaining DSP emulation and complete PCM validation.
+
+`WIILLR_IDLE_SKIP=ON` removes repeated execution of admitted pure RAM waits
+through the armed machine deadline. It requires the generated idle ABI, enabled
+interrupts, no pending exception, a real first load, no current guest thread
+and explicit owner-only RAM writes. No-current-thread accounting alone does
+not establish admission. The portable build without the pass remains available.
+
+On the same full native MM9 package with AOT DSP, deadline scheduling and the
+cost ring enabled, all six fixed-cycle fingerprints and complete memory,
+video and PCM outputs match through 43 billion cycles. All 56 component tests
+pass. Three alternating pairs with host playback disabled, actual DSP execution
+and PCM validation retained measured 86.4–93.0 versus 49.7–52.9 fields/s;
+median throughput increased 74.8% and process CPU time per field fell 51.3%.
+The measured window skipped 95.3% of guest cycles. That cycle share is distinct
+from the host speedup. These results qualify the measured MM9 package and do
+not meet the 130-field/s target or establish other consumers' performance.
