@@ -322,7 +322,10 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
            !ios_memory(cpu,output,&available) || available<32)return 1;
         u32 set[3],keep[3],old[3],flags;
         for(unsigned n=0;n<3;n++){set[n]=read_be32(data+n*4);keep[n]=read_be32(data+16+n*4);}
-        if(!wii_hollywood_video_update(ios->hollywood,set,keep,old,&flags))return 0;
+        if(!wii_hollywood_video_update(ios->hollywood,set,keep,old,&flags)) {
+            fprintf(stderr,"native IOS unsupported video control set=%08x/%08x/%08x keep=%08x/%08x/%08x\n",
+                set[0],set[1],set[2],keep[0],keep[1],keep[2]);return 0;
+        }
         for(unsigned n=0;n<3;n++)mem_write32_cia(cpu,output+n*4,old[n],cpu->pc);
         mem_write32_cia(cpu,output+12,flags,cpu->pc);ios->result=0;return 1;
     }

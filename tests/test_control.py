@@ -50,6 +50,9 @@ def main():
                 assert command('clock 1794355200')['ok']
                 original = command('fingerprint')
                 assert original['ok'] and original['mem2_bytes'] == 64 * 1024 * 1024
+                assert command('video') == {'ok':True,'vidim':0}
+                assert not command('video 0 0')['ok']  # no renderer/scanout attached
+                assert not command('video 65536 65536')['ok']
                 assert command('fingerprint') == original
                 assert command('write 80005000 12345678')['ok']
                 changed = command('fingerprint')

@@ -249,6 +249,16 @@ struct WiiControl {
       std::vector<u8> bytes;for(size_t n=0;n<value.size();n+=2)bytes.push_back(u8(number(value.substr(n,2),16)));
       for(size_t n=0;n<bytes.size();n++)mem_write8_cia(cpu,u32(address+n),bytes[n],cpu->pc);return "{\"ok\":true}";
     }
+    if(args[0]=="video" && (args.size()==1 || args.size()==3)) {
+      std::string result="{\"ok\":true,\"vidim\":"+std::to_string(machine->hollywood.video_regs[0]);
+      if(args.size()==3) {
+        const auto x=number(args[1],10),y=number(args[2],10);u32 value=0;
+        if(!paused || x>=gx->scanout_width || y>=gx->scanout_height || !gx->api ||
+           !gx->api->peek(2,u16(x),u16(y),&value))throw std::runtime_error("presented pixel unavailable");
+        result+=",\"x\":"+std::to_string(x)+",\"y\":"+std::to_string(y)+",\"argb\":"+std::to_string(value);
+      }
+      return result+"}";
+    }
     if(args[0]=="frame" && args.size()==1) {
       const auto frame=scanout();
       return "{\"ok\":true,\"width\":"+std::to_string(frame.width)+",\"height\":"+std::to_string(frame.height)+",\"stride\":"+

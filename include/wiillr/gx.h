@@ -3,10 +3,12 @@
 #define WIILLR_GX_H
 #include "wiillr/machine.h"
 #include "gcnllr/native_gx.h"
+#include "gcnllr/native_video.h"
 typedef struct {
     void* library;
     void* output;
     const GcnllrNativeGxApi* api;
+    const GcWiiNativeVideoApi* video;
     WiiMachine* machine;
     CPUState* cpu;
     u64 copies,scanouts,last_service;

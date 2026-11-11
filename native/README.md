@@ -209,3 +209,20 @@ the two earlier images equal the preceding native candidate byte-for-byte.
 Typed phases share recording order without per-phase CPU/GPU completion waits.
 Normal matched timing of this startup/copy revision remains separate from the
 preceding frame-owner numbers.
+
+The optional shared NativeVideo API implements the Wii SDK's idle-dim preset
+(`HW_VIDIM=0x92`) as 25% host presentation brightness. STM and direct register
+access use the same atomic mask/set contract: the display provider must accept
+the effect before the register and IPC output change. Original controller
+activity clears dimming normally. Other enabled presets and unsupported video
+controls still stop explicitly. Libraries without this optional API retain the
+existing normal-output route and cannot acknowledge an enabled dimming preset.
+
+The original five-minute idle request now completes through MM9 without a halt,
+CPU/DSP interpretation or native misses, or CPU gather/FIFO traffic. Actual
+colored display pixels verify dimming and exact restoration while guest XFB
+bytes remain intact; the normal gameplay replay retains all six state
+fingerprints and byte-identical video/PCM. These bounded checks do not establish
+full-game, cross-consumer or performance acceptance. The loopback `video` query
+reports the register; paused `video X Y` observes an actual displayed ARGB pixel.
+The existing `frame` command continues to return the guest XFB image.

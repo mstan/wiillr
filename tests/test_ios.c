@@ -3,6 +3,11 @@
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do {if(!(x)) {fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
+typedef struct {bool enabled,reject;u32 calls;} VideoTest;
+static bool set_idle_dimming(void* user,bool enabled) {
+    VideoTest* video=user;++video->calls;if(video->reject)return false;
+    video->enabled=enabled;return true;
+}
 int main(void) {
     CPUState cpu;WiiIpc ipc;WiiIosNative ios;
     CHECK(cpu_init(&cpu) && cpu_alloc_mem2(&cpu,0x4000000));
@@ -286,6 +291,28 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(!wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.x==1 && !ipc.y && !hollywood.video_regs[0]);
+    /* The original idle request must have a real presentation effect. Missing
+     * or failing providers leave the request, register and output untouched. */
+    VideoTest video={0};hollywood.video_user=&video;
+    for(unsigned n=0;n<4;n++) {
+        ios.phase=0;wii_ipc_init(&ipc);
+        hollywood.idle_dimming=n?set_idle_dimming:NULL;video.reject=n==1;
+        mem_write32_cia(&cpu,0x10000400,n==3?0:0x92,0);
+        mem_write32_cia(&cpu,0x10000440,0x11223344,0);
+        wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+        CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+        const bool handled=wii_ios_native_tick(&ios,&ipc,&cpu);
+        CHECK(handled==(n>=2));
+        if(n<2)CHECK(ipc.x==1 && !ipc.y && !hollywood.video_regs[0] && !video.enabled &&
+            mem_read32_cia(&cpu,0x10000440,0)==0x11223344);
+        else CHECK(ipc.y==2 && !ios.result && hollywood.video_regs[0]==(n==2?0x92:0) &&
+            video.enabled==(n==2) && mem_read32_cia(&cpu,0x10000440,0)==(n==3?0x92:0));
+    }
+    CHECK(video.calls==3 && !video.enabled);
+    CHECK(wii_hollywood_write(&hollywood,0x0d80001c,0x92) && video.enabled);
+    u32 dimming=0;CHECK(wii_hollywood_read(&hollywood,0x0d00001c,&dimming) && dimming==0x92);
+    CHECK(!wii_hollywood_write(&hollywood,0x0d80001c,0x80) && video.enabled && hollywood.video_regs[0]==0x92);
+    CHECK(wii_hollywood_write(&hollywood,0x0d00001c,0) && !video.enabled && video.calls==5);
     /* An empty keyboard bus accepts event reads asynchronously and leaves the
      * caller's message/output untouched while no USB keyboard is attached. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);

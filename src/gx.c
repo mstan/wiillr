@@ -18,6 +18,9 @@
 #else
 #include <dlfcn.h>
 #endif
+static bool idle_dimming(void* user,bool enabled) {
+    WiiGx* g=user;return g->video && g->video->idle_dimming(enabled?1u:0u);
+}
 static int resolve(void* user,u32 address,u32 size,GcnllrNativeGxMemory* range) {
     WiiGx* g=user;const u32 physical=address&0x1fffffffu;
     /* GPU clients may only resolve physical main RAM, never MMIO or locked L1. */
@@ -88,6 +91,13 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     } else fprintf(stderr,"Native output ownership unavailable; retaining eager copy floor\n");
 #endif
     if(!g->api->start(&config)) {wii_gx_stop(g);return false;}
+#ifdef _WIN32
+    GcWiiNativeVideoGetApi video_get=g->library?(GcWiiNativeVideoGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_video_get_api"):NULL;
+#else
+    GcWiiNativeVideoGetApi video_get=g->library?(GcWiiNativeVideoGetApi)dlsym(g->library,"gc_wii_native_video_get_api"):NULL;
+#endif
+    g->video=video_get?video_get(GC_WII_NATIVE_VIDEO_ABI):NULL;
+    if(g->video){m->hollywood.idle_dimming=idle_dimming;m->hollywood.video_user=g;}
 #if WIILLR_MENU_PICTURES || WIILLR_MM9_RENDERER
 #ifdef _WIN32
     GcWiiNativeRenderGetApi native_get=(GcWiiNativeRenderGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_render_get_api");
@@ -207,6 +217,10 @@ bool wii_gx_tick(WiiGx* g) {
     return !status.failed;
 }
 void wii_gx_stop(WiiGx* g) {
+    if(g->machine && g->machine->hollywood.video_user==g) {
+        g->machine->hollywood.idle_dimming=NULL;g->machine->hollywood.video_user=NULL;
+    }
+    g->video=NULL;
 #if WIILLR_MM9_RENDERER
     wii_mm9_renderer_hook_stop();
 #endif
