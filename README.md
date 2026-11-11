@@ -83,6 +83,14 @@ Analog output conversion and register-driven presentation are not yet qualified.
 CP/PE and the gather pipe feed the same shared native GX service using explicit
 MEM1/MEM2 callbacks. `WIILLR_GX=native-development` and `--gx-library` enable
 that development composition; the default build stops when it needs a renderer.
+`WIILLR_GX=software` with `--gx-software` selects the independent CPU GX
+command decoder and rasterizer. This reference build consumes the actual FIFO,
+resolves textures, palettes, arrays and display lists in MEM1 or MEM2, and writes
+EFB copies to their physical RAM bank before PE completion. VI selects the real
+RAM scanout; the existing TCP `frame` command captures it without a GPU service.
+It runs serially, ignores GPU backend environment selections and supports a
+portable scalar path. It is a headless correctness reference rather than an
+interactive performance configuration.
 Audio DMA uses shared paced transfers and records retired PCM. The shared host
 sink supports opt-in output and bounded WAV capture for the exercised 32 kHz
 route. A rate change with this sink attached stops explicitly. Headless runs

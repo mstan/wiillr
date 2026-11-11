@@ -81,13 +81,16 @@ def discover(args):
         command += [str(args.dsp_rom.resolve()), str(args.dsp_coef.resolve())]
     if args.nand_profile:
         command += [str(args.nand_profile.absolute()), str(uid), str(metadata['group_id'])]
-    if args.gx_library:
+    if args.gx_library or args.gx_software:
         if starlet:
-            raise ValueError('Native GX belongs to PPC discovery')
-        paths['gx_library'] = args.gx_library.resolve(strict=True)
+            raise ValueError('GX belongs to PPC execution')
+        if args.gx_library and args.gx_software:
+            raise ValueError('Choose either a native GX library or software GX')
+        if args.gx_library:
+            paths['gx_library'] = args.gx_library.resolve(strict=True)
         data, cache = work / 'gx-data', work / 'gx-cache'
         data.mkdir(); cache.mkdir()
-        command += ['--gx', str(paths['gx_library']), str(data), str(cache)]
+        command += ['--gx', str(paths['gx_library']) if args.gx_library else 'software', str(data), str(cache)]
         env['WIILLR_WINDOW']='1' if args.interactive else '0'
         menu_title='Wii Startup Menu' if metadata['version']==1 else 'Wii Menu'
         env['WIILLR_WINDOW_TITLE']=args.window_title or (menu_title if args.title=='0000000100000002' else 'Wii')
@@ -142,6 +145,7 @@ def main():
     p.add_argument('--dsp-coef', type=Path)
     p.add_argument('--nand-profile', type=Path, help='Create or reuse an isolated writable NAND copy')
     p.add_argument('--gx-library', type=Path, help='Wii-selected shared native GX service library')
+    p.add_argument('--gx-software', action='store_true', help='Use an executable built with WIILLR_GX=software (headless reference scanout)')
     p.add_argument('--interactive',action='store_true',help='Normal visible window and normal audio by default')
     p.add_argument('--window-title',help='Clean game/window caption')
     p.add_argument('--audio-output',choices=('off','muted','on'),help='Actual host output policy; unattended default is off')

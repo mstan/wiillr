@@ -51,6 +51,12 @@ static int fifo(void* user,const u8* bytes,u32 size) {WiiGx* g=user;return g->ap
 static void drain(void* user) {WiiGx* g=user;if(!g->api->drain())g->cpu->halted=true;}
 bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const char* data,const char* cache) {
     memset(g,0,sizeof *g);g->machine=m;g->cpu=cpu;
+#if WIILLR_GX_SOFTWARE
+    extern const GcnllrNativeGxApi* wii_gx_software_api(WiiMachine*,CPUState*);
+    if(library && strcmp(library,"software"))return false;
+    g->api=wii_gx_software_api(m,cpu);
+#else
+    if(library && !strcmp(library,"software"))return false;
 #ifdef _WIN32
     g->library=(void*)LoadLibraryExA(library,NULL,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     GcnllrNativeGxGetApi get=g->library?(GcnllrNativeGxGetApi)GetProcAddress((HMODULE)g->library,"gcnllr_native_gx_get_api"):NULL;
@@ -59,8 +65,13 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     GcnllrNativeGxGetApi get=g->library?(GcnllrNativeGxGetApi)dlsym(g->library,"gcnllr_native_gx_get_api"):NULL;
 #endif
     if(!get || !(g->api=get(GCNLLR_NATIVE_GX_ABI))) {wii_gx_stop(g);return false;}
+#endif
     const char* title=getenv("WIILLR_WINDOW_TITLE"),*window=getenv("WIILLR_WINDOW");
     g->visible=window && !strcmp(window,"1");
+#if WIILLR_GX_SOFTWARE
+    /* Reference scanout is available through the machine's TCP interface. */
+    g->visible=false;
+#endif
     g->input=(WiiBluetoothInput){0,{512,512,616},512,280,false,true,false};
     const GcnllrNativeGxConfig config={.abi=GCNLLR_NATIVE_GX_ABI,.title=title?title:"Wii",.data_directory=data,
         .cache_directory=cache,.hidden=!(window && !strcmp(window,"1")),.user=g,.bp_write=bp_write,.write_copy=write_copy,
