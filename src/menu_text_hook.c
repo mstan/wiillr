@@ -40,7 +40,8 @@ void wii_menu_text_hook_invalidate(u32 address,u32 size) {
 }
 static int decline(CPUState* cpu,const char* why) {
     ++declines;
-    if(WIILLR_MENU_TEXT==2){fprintf(stderr,"Native Menu TextBox rejected: %s\n",why);cpu->halted=true;return 1;}
+    WiiMenuView view;
+    if(WIILLR_MENU_TEXT==2 || wii_menu_frame_current_view(cpu,&view)!=0){fprintf(stderr,"Native Menu TextBox rejected: %s\n",why);cpu->halted=true;return 1;}
     return 0;
 }
 int wii_menu_text_hook_call(CPUState* cpu,u32 address) {
@@ -57,6 +58,7 @@ int wii_menu_text_hook_call(CPUState* cpu,u32 address) {
     const int native_view=wii_menu_frame_current_view(cpu,&view);
     if(native_view<0){++declines;fprintf(stderr,"Native Menu TextBox has no supported owned view\n");cpu->halted=true;return 1;}
     if(!native_view && !wii_menu_picture_sdk_view(memory,&view,error,sizeof error))return decline(cpu,error);
+    if(native_view && (!view.clip_width || !view.clip_height)){cpu->pc=cpu->lr;++cpu->cycles;return 1;}
     if(!wii_menu_native_boundary(owner)) {
         ++failures;fprintf(stderr,"Native Menu TextBox could not drain previous work\n");cpu->halted=true;return 1;
     }

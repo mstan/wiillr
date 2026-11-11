@@ -3,6 +3,7 @@
 #define WIILLR_MENU_PICTURE_H
 #include <gcnllr/native_render.h>
 #include <gcnllr/native_gui.h>
+#include <gcnllr/native_gui_effects.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,7 +28,18 @@ typedef struct WiiMenuPicture {
     uint8_t needs_layers;
     GcWiiNativeGuiMaskDraw mask;
     uint8_t needs_mask;
+    uint8_t effect; /* 1 cutoff, 2 additive pair, 3 alpha product */
+    GcWiiNativeGuiCutoutDraw cutout;
+    GcWiiNativeGuiAddDraw addition;
+    float extra_uv[4][2],primary_uv[2][3];
+    uint8_t paired_uv;
 } WiiMenuPicture;
+typedef struct WiiMenuWindow {
+    WiiMenuPicture quads[9]; /* content, then the authored four/eight borders */
+    uint32_t count;
+} WiiMenuWindow;
+int wii_menu_window_prepare(WiiMenuMemory,uint32_t window,uint32_t draw_info,
+                            const WiiMenuView*,WiiMenuWindow*,char* error,uint32_t error_size);
 /* Wii Menu 4.3U NW4R Picture::DrawSelf replacement inputs.
  * This reads live pane/material data; it does not execute guest routines or
  * construct/parse a display list. Failure publishes no partial output. */
@@ -45,8 +57,10 @@ WiiMenuNative* wii_menu_native_create(WiiMenuMemory,const GcWiiNativeRenderApi*)
 int wii_menu_native_gui(WiiMenuNative*,const GcWiiNativeGuiApi*);
 int wii_menu_native_gui_layers(WiiMenuNative*,const GcWiiNativeGuiLayersApi*);
 int wii_menu_native_gui_mask(WiiMenuNative*,const GcWiiNativeGuiMaskApi*);
+int wii_menu_native_gui_effects(WiiMenuNative*,const GcWiiNativeGuiEffectsApi*);
 void wii_menu_native_destroy(WiiMenuNative*);
 int wii_menu_native_draw_picture(WiiMenuNative*,uint32_t picture,uint32_t draw_info,const WiiMenuView*);
+int wii_menu_native_draw_window(WiiMenuNative*,uint32_t window,uint32_t draw_info,const WiiMenuView*);
 void wii_menu_native_forget_picture(WiiMenuNative*,uint32_t picture);
 void wii_menu_native_status(const WiiMenuNative*,WiiMenuNativeStatus*);
 #ifdef __cplusplus

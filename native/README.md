@@ -74,6 +74,43 @@ submission failure always stops rather than rendering the original a second
 time. This text adapter has frontend and portable contract checks; live GPU
 image qualification remains pending.
 
+## Menu frame owner candidate
+
+`WIILLR_MENU_FRAME=none|reference|native` selects the enclosing 4.3U graphics
+owner independently of the original frame body. `reference` retains the same
+derived entry seams and native pane providers while executing the original
+frame body. `native` replaces graphics initialization, view/layout setup,
+channel-thumbnail clipping, utility/fader quads, display copies and completion.
+It publishes typed view state to Picture and Text instead of reconstructing
+the SDK's command caches. The original scene traversal, visibility changes,
+keyboard draw, controller reads, animation, sound calculation and VI wait/order
+remain in place. The normal original and software renderer selections remain
+available separately.
+
+The Window kit replaces the complete NW4R `Window::DrawSelf`: content inflation,
+live material/pose/alpha and authored one/four/eight-image borders with all six
+texture flips. It shares the native material/resource service with Picture;
+it constructs neither GX commands nor temporary guest objects. Portable tests
+cover border extents, repetition, flips and atomic unsupported-input rejection.
+
+The exercised NTSC interlaced 640x456 health-screen-to-channel-grid route passes
+495 fields with one verified native initializer, 477 frame copies, 44,991 native
+draws and no unsupported inputs or backend failures. A machine-owned contract
+counts every CPU gather write and rejects any after native initialization;
+this route has zero CPU gather writes/bytes and zero backend FIFO bytes, with
+zero CPU/DSP interpreter execution or native misses. Its same-source reference
+performs 127,259 CPU gather writes and produces the same draw/copy counts.
+
+Full 214,416-frame stereo PCM is byte-identical to that reference. Full-image
+shading differences have RGB8 maximum 10 and mean absolute difference 0.26974;
+347 of 291,840 pixels exceed 5, and two exceed 8. YUY2 maximum difference is 8.
+The captured pair has no geometry or clipping defect. This is a bounded image
+qualification under the project's permitted minute HLE rendering tradeoff,
+not an exact-image or performance claim. Alternate error screens, Mii rendering,
+active keyboard rendering, other video modes and later scene transitions are
+not established by this route; unsupported guest FIFO ingress stops visibly.
+Matched application timing and interactive pointer/channel checks remain due.
+
 ## Mega Man 9 compositor candidate
 
 `mm9_compositor` prepares the whole logical 224-line game screen directly from

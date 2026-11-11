@@ -8,6 +8,7 @@
 #include <string.h>
 #if WIILLR_MENU_PICTURES
 #include "wiillr/menu_picture_hook.h"
+#include "wiillr/menu_frame_hook.h"
 #endif
 #if WIILLR_MM9_RENDERER
 #include "wiillr/mm9_renderer_hook.h"
@@ -92,24 +93,32 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     GcWiiNativeGuiGetApi gui_get=(GcWiiNativeGuiGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_get_api");
     GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_layers_get_api");
     GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_mask_get_api");
+    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_effects_get_api");
 #else
     GcWiiNativeGuiGetApi gui_get=(GcWiiNativeGuiGetApi)dlsym(g->library,"gc_wii_native_gui_get_api");
     GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)dlsym(g->library,"gc_wii_native_gui_layers_get_api");
     GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)dlsym(g->library,"gc_wii_native_gui_mask_get_api");
+    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)dlsym(g->library,"gc_wii_native_gui_effects_get_api");
 #endif
     const GcWiiNativeGuiApi* gui_api=gui_get?gui_get(GC_WII_NATIVE_GUI_ABI):NULL;
     if(!wii_menu_picture_hook_start(g,native_api,gui_api)){wii_gx_stop(g);return false;}
     if(layers_get)wii_menu_picture_hook_layers(layers_get(GC_WII_NATIVE_GUI_LAYERS_ABI));
     if(mask_get)wii_menu_picture_hook_mask(mask_get(GC_WII_NATIVE_GUI_MASK_ABI));
+    if(effects_get)wii_menu_picture_hook_effects(effects_get(GC_WII_NATIVE_GUI_EFFECTS_ABI));
 #endif
-#if WIILLR_MM9_RENDERER
+#if WIILLR_MM9_RENDERER || WIILLR_MENU_FRAME_ACTIVE
 #ifdef _WIN32
     GcWiiNativeFrameGetApi frame_get=(GcWiiNativeFrameGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_frame_get_api");
 #else
     GcWiiNativeFrameGetApi frame_get=(GcWiiNativeFrameGetApi)dlsym(g->library,"gc_wii_native_frame_get_api");
 #endif
     const GcWiiNativeFrameApi* frame_api=frame_get?frame_get(GC_WII_NATIVE_FRAME_ABI):NULL;
+#if WIILLR_MM9_RENDERER
     if(!wii_mm9_renderer_hook_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
+#endif
+#if WIILLR_MENU_FRAME_ACTIVE
+    if(!wii_menu_frame_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
+#endif
 #endif
 #endif
     m->gx_fifo=fifo;m->gx_user=g;gcn_gp_set_drain_hook(&m->gp,drain,g);return true;
@@ -180,6 +189,7 @@ void wii_gx_stop(WiiGx* g) {
     wii_mm9_renderer_hook_stop();
 #endif
 #if WIILLR_MENU_PICTURES
+    wii_menu_frame_stop();
     wii_menu_picture_hook_stop();
 #endif
     if(g->machine) {g->machine->gx_fifo=NULL;g->machine->gx_user=NULL;gcn_gp_set_drain_hook(&g->machine->gp,NULL,NULL);}

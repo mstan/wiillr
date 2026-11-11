@@ -18,6 +18,7 @@ uint64_t uploads{},draws{},destroyed{},next_handle=1;bool fail_draw{};GcWiiNativ
 GcWiiNativeGuiMaterial last_gui{};
 GcWiiNativeGuiLayersDraw last_layers{};
 GcWiiNativeGuiMaskDraw last_mask{};
+GcWiiNativeGuiCutoutDraw last_cutout{};GcWiiNativeGuiAddDraw last_add{};GcWiiNativeGuiProductDraw last_product{};
 const uint8_t* read(void*,uint32_t address,uint32_t size){address&=0x1fffffffu;if(address==0x1695618)address=0xa00;return address<=ram.size() && size<=ram.size()-address?ram.data()+address:nullptr;}
 void p16(uint32_t a,uint16_t v){a&=0x1fffffff;ram.at(a)=v>>8;ram.at(a+1)=v&255;}
 void p32(uint32_t a,uint32_t v){p16(a,v>>16);p16(a+2,v&65535);}
@@ -37,6 +38,10 @@ int draw(const GcWiiNativeDraw* job){last=*job;if(fail_draw)return 0;++draws;ret
 int draw_gui(const GcWiiNativeGuiDraw* job){last_gui=job->color;return draw(&job->draw);}
 int draw_layers(const GcWiiNativeGuiLayersDraw* job){last_layers=*job;return draw(&job->draw);}
 int draw_mask(const GcWiiNativeGuiMaskDraw* job){last_mask=*job;return draw(&job->draw);}
+uint64_t create_gui(const GcWiiNativeGuiMesh* mesh){require(mesh && mesh->extra_uv && mesh->extra_uv_count==1,"Paired native UV creation");return create(&mesh->mesh);}
+int cutout(const GcWiiNativeGuiCutoutDraw* job){last_cutout=*job;return draw(&job->image.draw);}
+int add(const GcWiiNativeGuiAddDraw* job){last_add=*job;return draw(&job->image.draw);}
+int product(const GcWiiNativeGuiProductDraw* job){last_product=*job;return draw(&job->image.draw);}
 void custom_stage(uint32_t address,unsigned slot,std::array<unsigned,4> color,std::array<unsigned,4> alpha) {
     p32(address,(slot<<24)|(4u<<16)|(slot<<8));
     p32(address+4,((color[0]|(color[1]<<4))<<24)|((color[2]|(color[3]<<4))<<16)|0x61);
@@ -61,6 +66,14 @@ void units() {
     require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof(error)),error);
     require(out.draw.material.texture.address==0x10000100 && out.draw.material.texture.size==32 && out.draw.material.texture.width==8,"MEM2 texture identity/layout");
     require(out.vertices[0].uv[0]==-.25f && out.vertices[2].uv[0]==1.75f && out.vertices[0].uv[1]==.75f && out.vertices[2].uv[1]==1.25f,"Native texture scale/translation");
+    pf(mem+32,0);pf(mem+36,0);pf(mem+40,90);pf(mem+44,1);pf(mem+48,1);
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.vertices[0].uv[0]==1 && out.vertices[0].uv[1]==0 && out.vertices[1].uv[0]==1 && out.vertices[1].uv[1]==1,"Native quarter-turn texture rotation around center");
+    pf(mem+40,-90);require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.vertices[0].uv[0]==0 && out.vertices[0].uv[1]==1,"Native reverse quarter-turn texture rotation");
+    pf(mem+40,180);require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.vertices[0].uv[0]==1 && out.vertices[0].uv[1]==1,"Native half-turn texture rotation");
+    pf(mem+32,.25f);pf(mem+36,.5f);pf(mem+40,0);pf(mem+44,2);pf(mem+48,.5f);
     const GcWiiNativeRenderApi api{1,create,destroy,draw,status};auto* renderer=wii_menu_native_create(memory,&api);require(renderer,"Native provider creation");
     require(wii_menu_native_draw_picture(renderer,pane,info,&view)==1,"Initial native picture draw");
     pf(pane+0x84+3*4,12);require(wii_menu_native_draw_picture(renderer,pane,info,&view)==1,"Animated pose draw");
@@ -135,6 +148,13 @@ void units() {
     ram[(pane&0x1fffffff)+0xce]=1;p16(material+0x2a,80);
     require(wii_menu_native_draw_picture(shadow,pane,info,&view)==1 && uploads==shadow_uploads+1 && last_gui.high[3]==80,"Shadow opacity and unused pane animation must reuse geometry");
     wii_menu_native_destroy(shadow);
+    custom_stage(mem+76,0,{2,4,8,15},{7,7,7,2});
+    p16(material+0x24,20);p16(material+0x2c,200);p16(material+0x2a,10);p16(material+0x32,180);
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.color.low[0]==20 && out.color.high[0]==200 && out.color.low[3]==180 && out.color.high[3]==180 && out.vertices[0].color[3]==1,"Opaque source ignores texture and pane alpha before color remap");
+    custom_stage(mem+76,0,{15,15,15,4},{1,2,4,7});ram[0x84d]=0xff;ram[0x853]=ram[0x857]=0xf8;
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.color.low[0]==200 && out.color.high[0]==200 && out.color.low[3]==10 && out.color.high[3]==180 && out.vertices[0].color[1]==1,"Bounded unclamped source color and alpha-range material");
     fixture();view=camera();
     constexpr uint32_t mask_count=(2u<<28)|(2u<<24)|(2u<<20)|(1u<<14)|(2u<<9)|(1u<<8)|(1u<<7)|(1u<<6)|(1u<<5);
     p32(material+0x4c,mask_count);p32(material+0x50,mask_count);p32(material+0x58,mem);
@@ -164,11 +184,66 @@ void units() {
     require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),"Equivalent direct-alpha coverage material");
     const auto mask_previous=out;ram[0x884+6]=1;
     require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&mask_previous,sizeof out),"Unsupported mask operation must reject atomically");
+    // The same one-image allocation can select the authored threshold effect.
+    fixture();view=camera();const auto one_pair=mask_count-(1u<<28)-(1u<<24)-(1u<<20);
+    p32(material+0x4c,one_pair);p32(material+0x50,one_pair);p32(material+0x58,mem);
+    p32(mem,0);p32(mem+8,(1u<<20)|(3u<<10)|7);p32(mem+12,0x10000100>>5);
+    pf(mem+44,1);pf(mem+48,1);p32(mem+52,0x01041e00);p32(mem+56,0x01010000);p32(mem+64,0xe4e4e4e4);p32(mem+68,0x77000000);p32(mem+72,0x01040500);
+    ram[(pane&0x1fffffff)+0xe5]=1;p32(pane+0xe8,coords);for(unsigned n=0;n<8;++n)pf(coords+n*4,uv[n]);
+    custom_stage(mem+76,0,{2,4,8,15},{4,6,4,7});ram[0x853]=0xf8;ram[0x856]=14;
+    custom_stage(mem+92,0,{15,15,15,0},{7,5,0,7});p32(material+0x3c,0xffffffbe);
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.effect==1 && out.cutout.cutoff==190 && out.vertices[0].color[1]==1 && out.vertices[0].color[3]==128.f/255,"Texture cutoff with independent pane alpha");
+    const GcWiiNativeGuiEffectsApi effects{1,create_gui,cutout,add,product};auto* effect=wii_menu_native_create(memory,&api);
+    require(wii_menu_native_draw_picture(effect,pane,info,&view)==0,"Missing effect backend declines before upload");
+    require(wii_menu_native_gui_effects(effect,&effects) && wii_menu_native_draw_picture(effect,pane,info,&view)==1 && last_cutout.cutoff==190,"Cutoff semantic submission");
+    wii_menu_native_destroy(effect);
+    p32(material+0x4c,mask_count);p32(material+0x50,mask_count);
+    for(unsigned t=0;t<2;++t){p32(mem+t*32,0);p32(mem+t*32+8,(1u<<20)|(3u<<10)|7);p32(mem+t*32+12,(0x10000100+t*0x100)>>5);pf(mem+64+t*20,0);pf(mem+64+t*20+4,0);pf(mem+64+t*20+8,0);pf(mem+64+t*20+12,1);pf(mem+64+t*20+16,1);p32(mem+104+t*4,(1u<<24)|((4+t)<<16)|((30+t*3)<<8));}
+    p32(mem+112,0x01010000);p32(mem+120,0xe4e4e4e4);p32(mem+124,0x77000000);p32(mem+128,0x01040500);
+    ram[(pane&0x1fffffff)+0xe5]=2;for(unsigned t=0;t<2;++t)for(unsigned n=0;n<8;++n)pf(coords+t*32+n*4,uv[n]);
+    for(unsigned c=0;c<4;++c){p16(material+0x24+c*2,0);p16(material+0x2c+c*2,40);p16(material+0x34+c*2,15);}
+    custom_stage(mem+132,0,{4,2,8,15},{5,7,7,7});custom_stage(mem+148,1,{15,6,8,0},{5,7,7,7});
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.effect==2 && out.addition.image.color.low[0]==40 && out.addition.image.color.high[0]==0 && out.addition.weight[0]==15 && out.vertices[0].color[3]==128.f/255,"Two-image additive ordering and pane alpha");
+    custom_stage(mem+132,0,{15,15,15,15},{7,7,7,4});custom_stage(mem+148,1,{15,15,15,8},{7,4,0,7});
+    pf(coords+32+8,1.33f);pf(coords+32+24,1.333f);pf(mem+84,1);
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.effect==3 && out.paired_uv && out.vertices[1].uv[0]==1.33f && out.vertices[2].uv[0]==1.333f && out.primary_uv[0][2]==1,"Non-affine independent raw UVs retained");
+    effect=wii_menu_native_create(memory,&api);require(wii_menu_native_gui_effects(effect,&effects),"Paired effect binding");
+    const auto paired_uploads=uploads;require(wii_menu_native_draw_picture(effect,pane,info,&view)==1,"Paired product submission");
+    pf(mem+84,2);require(wii_menu_native_draw_picture(effect,pane,info,&view)==1 && uploads==paired_uploads+1 && last_product.primary_uv[0][2]==2,"Paired material transform animation retains geometry");
+    wii_menu_native_destroy(effect);
     p32(0xa00,0x80001000);p32(0x1528,1);pf(0x152c,1);pf(0x1534,1);pf(0x153c,-1);pf(0x1540,0);
     pf(0x154c,640);pf(0x1550,480);pf(0x1558,1);p32(0x1148,(342u<<12)|342u);p32(0x114c,(981u<<12)|821u);p32(0x1220,24);
     WiiMenuView sdk{};require(wii_menu_picture_sdk_view(memory,&sdk,error,sizeof(error)),error);
     require(sdk.width==640 && sdk.height==480 && sdk.clip_width==640 && sdk.clip_height==480 && sdk.projection[15]==1,"Original SDK view layout");
     std::cout<<"Native Menu pane geometry, alpha, pose, textures, cache and explicit failures passed\n";
+}
+void windows() {
+    fixture();p32(pane,0x81671a20);pf(pane+0x4c,100);pf(pane+0x50,80);ram[(pane&0x1fffffff)+0xce]=255;
+    pf(pane+0xd4,2);pf(pane+0xd8,3);pf(pane+0xdc,4);pf(pane+0xe0,5);
+    for(unsigned c=0;c<4;++c)p32(pane+0xe4+c*4,0xffffffff);
+    ram[(pane&0x1fffffff)+0xf5]=1;p32(pane+0xf8,coords);p32(pane+0xfc,0x80000c00);ram[(pane&0x1fffffff)+0x100]=1;
+    p32(material+0x4c,0x11100000);p32(material+0x50,0x11100000);p32(material+0x58,mem);
+    p32(mem,0);p32(mem+8,(1u<<20)|(3u<<10)|7);p32(mem+12,0x10000100u>>5);
+    pf(mem+44,1);pf(mem+48,1);p32(mem+52,0x01043cff);
+    constexpr float uv[]{0,0,1,0,0,1,1,1};for(unsigned n=0;n<8;++n)pf(coords+n*4,uv[n]);
+    for(unsigned frame=0;frame<8;++frame){p32(0x80000c00+frame*8,0);p32(0x80000c04+frame*8,material);}
+    const WiiMenuMemory memory{nullptr,read};auto view=camera();WiiMenuWindow out{};char error[192]{};
+    require(wii_menu_window_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.count==5 && out.quads[0].vertices[0].position[0]==-44 && out.quads[0].vertices[0].position[1]==-40 && out.quads[0].vertices[2].position[0]==45,"Window content inflation and pane origin");
+    require(out.quads[1].vertices[1].uv[0]==11.5f && out.quads[1].vertices[2].uv[1]==1,"Single-image Window border repeats");
+    require(out.quads[2].vertices[0].uv[0]==1 && out.quads[2].vertices[1].uv[0]==0 && out.quads[2].vertices[2].uv[1]==19,"Single-image Window mirrored right border");
+    ram[(pane&0x1fffffff)+0x100]=4;ram[0xc00+3*8]=3;
+    require(wii_menu_window_prepare(memory,pane,info,&view,&out,error,sizeof error) && out.count==5,error);
+    require(out.quads[3].vertices[0].uv[0]==.5f && out.quads[3].vertices[0].uv[1]==23,"Four-image Window clockwise border flip");
+    ram[(pane&0x1fffffff)+0x100]=8;
+    require(wii_menu_window_prepare(memory,pane,info,&view,&out,error,sizeof error) && out.count==9,error);
+    require(out.quads[2].vertices[0].position[0]==-42 && out.quads[2].vertices[1].position[0]==42,"Eight-image Window top edge extent");
+    const auto previous=out;ram[(pane&0x1fffffff)+0x100]=2;
+    require(!wii_menu_window_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&previous,sizeof out),"Unsupported Window must not publish partial geometry");
+    std::cout<<"Native Window content, four/eight borders and flips passed\n";
 }
 struct Fixture {std::vector<uint8_t> mem1,mem2;};
 const uint8_t* fixture_read(void* user,uint32_t address,uint32_t size) {
@@ -194,4 +269,4 @@ void snapshot(const char* mem1,const char* mem2) {
     require(accepted>0,"No real original Picture object reached native preparation");
 }
 }
-int main(int argc,char** argv){try{units();if(argc==3)snapshot(argv[1],argv[2]);return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){try{units();windows();if(argc==3)snapshot(argv[1],argv[2]);return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
