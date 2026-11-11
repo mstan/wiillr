@@ -4,6 +4,7 @@
 #include "wiillr/dsp.h"
 #include "cpu/native_code.h"
 #include "memory/memory.h"
+#include "debug/cost_ring.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -116,11 +117,16 @@ static bool read16(WiiDsp* d, u32 offset, u16* value) {
 bool wii_dsp_read(WiiDsp* d, u32 offset, u8 size, u64* value) {
     if (!d->engine || (size != 2 && size != 4) || (offset & (size-1)) || offset+size > GCN_DSP_SIZE)
         return false;
+    const unsigned previous=gcn_cost_enter(GCN_COST_DSP);
     u16 high, low;
-    if (!read16(d, offset, &high)) return false;
-    if (size == 2) *value=high;
-    else { if (!read16(d, offset+2, &low)) return false; *value=(u32)high<<16 | low; }
-    return true;
+    bool ok=read16(d, offset, &high);
+    if (ok && size == 2) *value=high;
+    else if(ok) {
+        ok=read16(d, offset+2, &low);
+        if(ok)*value=(u32)high<<16 | low;
+    }
+    gcn_cost_leave(previous);
+    return ok;
 }
 static bool write16(WiiDsp* d, u32 offset, u16 value) {
     if (offset < 4) {
@@ -150,8 +156,13 @@ static bool write16(WiiDsp* d, u32 offset, u16 value) {
 bool wii_dsp_write(WiiDsp* d, u32 offset, u8 size, u64 value) {
     if (!d->engine || (size != 2 && size != 4) || (offset & (size-1)) || offset+size > GCN_DSP_SIZE)
         return false;
-    if (size == 2) return write16(d, offset, (u16)value);
-    return write16(d, offset, (u16)(value >> 16)) && write16(d, offset+2, (u16)value);
+    /* HLE tasks can mix synchronously while receiving a mailbox write.  The
+     * outer device tick alone therefore does not cover the DSP's host work. */
+    const unsigned previous=gcn_cost_enter(GCN_COST_DSP);
+    const bool ok=size == 2 ? write16(d, offset, (u16)value) :
+        write16(d, offset, (u16)(value >> 16)) && write16(d, offset+2, (u16)value);
+    gcn_cost_leave(previous);
+    return ok;
 }
 bool wii_dsp_tick(WiiDsp* d, u32 cpu_cycles,u32 audio_period) {
     if(audio_period && d->output_sink && d->output_rate!=(u32)(729000000ull*8/audio_period)) {
