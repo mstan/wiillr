@@ -2,6 +2,7 @@
 #include "wiillr/menu_picture_hook.h"
 #include "wiillr/menu_picture.h"
 #include "wiillr/menu_text_hook.h"
+#include "wiillr/menu_frame_hook.h"
 #include "memory/memory.h"
 #include <stdio.h>
 #include <string.h>
@@ -90,7 +91,9 @@ int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
     ++entries;
     if(cpu->cycles>=cpu->cycle_deadline)return 0;
     const WiiMenuMemory memory={cpu,read_memory};WiiMenuView view;char error[192];
-    if(!wii_menu_picture_sdk_view(memory,&view,error,sizeof error)) {
+    const int native_view=wii_menu_frame_current_view(cpu,&view);
+    if(native_view<0){++declines;fprintf(stderr,"Native Menu Picture has no supported owned view\n");cpu->halted=true;return 1;}
+    if(!native_view && !wii_menu_picture_sdk_view(memory,&view,error,sizeof error)) {
         ++declines;if(WIILLR_MENU_PICTURES==2){fprintf(stderr,"Native Menu Picture rejected view: %s\n",error);cpu->halted=true;return 1;}return 0;
     }
     /* Reject unsupported material families before changing shared GPU order. */
