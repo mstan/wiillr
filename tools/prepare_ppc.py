@@ -1,22 +1,61 @@
 # SPDX-License-Identifier: MIT
 """Compile verified discovery pages; they are code inputs, never boot state."""
-import argparse, hashlib, json, os
+import argparse, hashlib, json, os, struct
 from pathlib import Path
 import subprocess, sys, zlib
 
 ROOT=Path(__file__).resolve().parents[1]
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def dol_text_pages(path):
+    """Original initialized DOL bytes, not an execution/boot-state capture.
+
+    Fill page-sharing data sections too: the runtime verifies the complete
+    page. Zero padding describes the original image only; changed live pages
+    still need their own captured identity and never match by address alone.
+    """
+    data=path.read_bytes()
+    if len(data)<0x100:raise ValueError('Short DOL header')
+    word=lambda offset:struct.unpack_from('>I',data,offset)[0]
+    sections=[];loaded={};text=[]
+    for index in range(18):
+        offset,address,size=word(index*4),word(0x48+index*4),word(0x90+index*4)
+        if not size:continue
+        physical=address&0x3fffffff
+        capacity=0x1800000-physical if physical<0x1800000 else 0x14000000-physical if 0x10000000<=physical<0x14000000 else 0
+        if address&0xc0000000==0x40000000 or offset<0x100 or offset>len(data) or size>len(data)-offset or size>capacity or address+size>0x100000000:
+            raise ValueError('DOL section outside original file/main RAM')
+        if index<7 and (address|size)&3:raise ValueError('Unaligned DOL text')
+        if any(physical<old['physical']+old['size'] and old['physical']<physical+size for old in sections):
+            raise ValueError('Overlapping DOL sections/aliases')
+        section=dict(index=index,address=address,physical=physical,size=size,offset=offset);sections.append(section)
+        if index<7:text.append(section)
+        at=0
+        while at<size:
+            position=physical+at;base=position&~4095;within=position-base;length=min(size-at,4096-within)
+            loaded.setdefault(base,bytearray(4096))[within:within+length]=data[offset+at:offset+at+length];at+=length
+    entry=word(0xe0)
+    if entry&3 or not any(s['address']<=entry<s['address']+s['size'] for s in text):raise ValueError('DOL entry outside text')
+    pages={}
+    for section in text:
+        for address in range(section['address']&~4095,(section['address']+section['size']+4095)&~4095,4096):
+            page=bytes(loaded[address&0x3fffffff]);name=f'{address:08x}_{zlib.crc32(page):08x}.bin'
+            pages[name]=(page,hashlib.sha256(page).hexdigest())
+    return pages,dict(path=str(path),sha256=sha(path),entry=entry,text_sections=text,pages=len(pages))
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--capture',type=Path,required=True,action='append',
+    p.add_argument('--capture',type=Path,action='append',default=[],
                    help='Verified original execution; repeat to retain earlier loader variants')
+    p.add_argument('--dol',type=Path,action='append',default=[],help='Original DOL: union every initialized text page with captured variants')
     p.add_argument('--compiler',type=Path,required=True)
     p.add_argument('--work-root',type=Path,required=True)
     args=p.parse_args();compiler=args.compiler.resolve(strict=True)
-    pages={};captures=[];journals=[];title_identity=None
+    if not args.capture and not args.dol:p.error('Supply an original DOL or verified capture')
+    pages={};captures=[];journals=[];title_identity=None;dols=[]
     for source in args.capture:
         capture=source.resolve();run=json.loads((capture/'run.json').read_text())
-        if run.get('execution') not in ('PPC-discovery-interpreter','PPC-native-with-discovery','PPC-static-native') or run.get('exit_code') not in (0,1):
+        strict_stop=run.get('execution')=='PPC-static-native' and run.get('exit_code')==2
+        if run.get('execution') not in ('PPC-discovery-interpreter','PPC-native-with-discovery','PPC-static-native') or (run.get('exit_code') not in (0,1) and not strict_stop):
             raise ValueError('Expected an original-title execution with explicit miss capture')
         for key in ('log','mem1'):
             path=Path(run[key]['path'])
@@ -28,12 +67,17 @@ def main():
         if title_identity is not None and current!=title_identity:raise ValueError('Mixed title/profile identities')
         title_identity=current
         journal=(capture/'native-misses.jsonl').read_text();journals.append(journal.rstrip()+'\n')
+        if strict_stop:
+            summaries=[json.loads(line) for line in journal.splitlines() if line.strip() and json.loads(line).get('event')=='summary']
+            if not summaries or summaries[-1].get('instructions')!=0 or not summaries[-1].get('unique_misses',0):
+                raise ValueError('Strict-stop capture must record zero interpretation and a real native miss')
         captures.append(dict(capture=str(capture),run_sha256=sha(capture/'run.json'),journal_sha256=sha(capture/'native-misses.jsonl')))
         blobs={p.name.lower():p for p in (capture/'pages').glob('*.bin')}
-        validated=set()
+        validated=set();misses=0
         for line in journal.splitlines():
             row=json.loads(line)
             if row.get('event')!='native_miss':continue
+            misses+=1
             address=row['page'];crc=row['page_crc32'];name=f'{address:08x}_{crc}.bin'
             path=blobs.get(name)
             if path is None:raise ValueError('Missing captured code page '+name)
@@ -46,6 +90,15 @@ def main():
             offset=row['pc']-address
             if offset<0 or offset>4092 or data[offset:offset+4].hex()!=row['raw']:
                 raise ValueError('Miss instruction/page identity differs')
+        if strict_stop and not misses:raise ValueError('Strict-stop capture contains no original code miss')
+    for source in args.dol:
+        original,record=dol_text_pages(source.resolve(strict=True));dols.append(record)
+        for name,value in original.items():
+            if name in pages and pages[name][0]!=value[0]:raise ValueError('Conflicting original DOL page identity')
+            pages[name]=value
+            # The existing generator ranks all records with a PC. Mark static
+            # inputs honestly; these are never execution/miss claims.
+            journals.append(json.dumps(dict(event='static_text_page',pc=int(name[:8],16),source_sha256=record['sha256']))+'\n')
     if not pages:raise ValueError('No captured instructions')
     work=args.work_root.resolve();work.mkdir(parents=True,exist_ok=False)
     (work/'temp').mkdir()
@@ -66,7 +119,7 @@ def main():
         subprocess.run(command,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
     chunks=sorted((work/'generated/chunks').glob('*.c'))
     if len(chunks)!=len(pages):raise ValueError('Some original code variants were not compiled')
-    identity=dict(captures=captures,journal_sha256=sha(journal_path),
+    identity=dict(captures=captures,dol_inputs=dols,journal_sha256=sha(journal_path),
         compiler=dict(path=str(compiler),sha256=sha(compiler)),
         generator_sha256=sha(generator),pages={name:v[1] for name,v in pages.items()},
         generated={str(path.relative_to(work)):sha(path) for path in sorted((work/'generated').glob('**/*')) if path.is_file()},
