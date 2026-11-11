@@ -46,6 +46,7 @@ typedef struct {
     GcnDeviceDomains domains;
     u64 domain_max_lateness;
     u64 domain_max_interval[GCN_DOMAIN_COUNT];
+    bool idle_memory_serial;
 } WiiMachine;
 void wii_machine_init(WiiMachine* machine, CPUState* cpu);
 void wii_machine_tick(WiiMachine* machine, CPUState* cpu);
