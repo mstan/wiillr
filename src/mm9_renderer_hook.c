@@ -121,6 +121,7 @@ static int compare_oracle(CPUState* cpu) {
     if(maximum>5)return failure(cpu,"same-entry compositor image mismatch");return 0;
 }
 bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcWiiNativeFrameApi* frame) {
+    if(WIILLR_MM9_RENDERER_MODE==0)return true;
     if(owner || !gx || !render || !frame || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
     const WiiMm9Memory memory={gx->cpu,read_memory};screen_renderer=wii_mm9_screen_create(memory,render);prepared=calloc(1,sizeof *prepared);
     if(!screen_renderer || !prepared){wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;free(prepared);prepared=NULL;return false;}
@@ -131,6 +132,7 @@ void wii_mm9_renderer_hook_invalidate(u32 address,u32 size) {
     const u32 a=address&0x1fffffffu;if(((u64)a+size>(COMPOSITOR&0x1fffffffu) && a<(COMPOSITOR&0x1fffffffu)+0x108) || ((u64)a+size>(SCREEN&0x1fffffffu) && a<(SCREEN&0x1fffffffu)+0x21c))verified=false;
 }
 int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
+    if(WIILLR_MM9_RENDERER_MODE==0)return 0;
     if(!owner || owner->cpu!=cpu)return 0;const u32 physical=address&0x1fffffffu;
     if(WIILLR_MM9_RENDERER_MODE==1 && oracle_pending && physical==(AFTER_COMPOSITOR&0x1fffffffu))return compare_oracle(cpu);
     if(physical!=(COMPOSITOR&0x1fffffffu) && physical!=(SCREEN&0x1fffffffu))return 0;
