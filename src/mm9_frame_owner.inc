@@ -121,7 +121,7 @@ static int owned_initialize(CPUState* cpu) {
     if(owned.initialized || !identity(cpu,0x8009905c,0x1a4,UINT64_C(0xd0a755b54ed9b1b8)) ||
        cpu->lr!=0x8009db64 || !owned_mode(cpu))return owned_stop(cpu,"graphics initialization identity/mode");
     const u32 base=cpu->gpr[3],size=cpu->gpr[4],sdk=r32(cpu,0x804ef8e0),index=r8(cpu,0x803b9304);
-    if((base&31) || (size&31) || size<0x4000 || !read_memory(cpu,base,size) || index>1 ||
+    if(!sdk || (sdk&3) || (base&31) || (size&31) || size<0x4000 || !read_memory(cpu,base,size) || index>1 ||
        !read_memory(cpu,sdk,0x600))return owned_stop(cpu,"graphics initialization storage");
     if(!ordered_boundary())return failure(cpu,"graphics initialization prior work");
     /* Preserve the actual SDK FIFO object's CPU ABI and the handle returned
