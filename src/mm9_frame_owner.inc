@@ -3,11 +3,18 @@
  * Input, logical palette updates, VRAM transfers and VI handoff stay original.
  * No graphics SDK routine, gather encoding or FIFO replay is used here. */
 static struct {
-    bool scope,active,view_ready,attested;
+    bool scope,active,view_ready,attested,initialized,deferred;
+    u32 work_address,work_size;
     GcWiiNativeDraw view;
-    u64 frames,setups,queues,palettes,overlays,submits,fifo_bytes,fifo_start;
+    u64 initializations,frames,setups,queues,palettes,overlays,submits,retired_copies,observable_copies,fifo_bytes,fifo_start;
 } owned;
 static bool owned_active(void){return owned.active;}
+static bool owned_overlap(u32 a,u32 n,u32 b,u32 m) {
+    a&=0x1fffffff;b&=0x1fffffff;return (u64)a+n>b && (u64)b+m>a;
+}
+static bool owned_read_allowed(u32 address,u32 size) {
+    return !owned.deferred || !owned_overlap(address,size,owned.work_address,owned.work_size);
+}
 static void owned_reset(void){memset(&owned,0,sizeof owned);}
 static int owned_stop(CPUState* cpu,const char* why){++uncovered;fprintf(stderr,"Native MM9 frame unsupported: %s\n",why);cpu->halted=true;return 1;}
 static void owned_invalidate(u32 address,u32 size) {
@@ -31,7 +38,11 @@ void wii_mm9_renderer_frame_marker(CPUState* cpu,u32 address) {
         if(!owned.attested){owned_stop(cpu,"original frame identity");return;}
         owned.scope=true;owned.active=owned.view_ready=false;
     } else if(address==0x8009de3c) {
-        if(owned.active){GcnllrNativeGxStatus s;owner->api->status(&s);owned.fifo_bytes+=s.fifo_bytes-owned.fifo_start;}
+        if(owned.deferred)owned_stop(cpu,"unfinished frame publication");
+        if(owned.active) {
+            GcnllrNativeGxStatus s;owner->api->status(&s);const u64 bytes=s.fifo_bytes-owned.fifo_start;owned.fifo_bytes+=bytes;
+            if(bytes || owner->machine->gp.count || gcn_cp_fifo_rw_distance(&owner->machine->cp))owned_stop(cpu,"unowned graphics in frame");
+        }
         owned.scope=owned.active=owned.view_ready=false;
     }
 }
@@ -79,6 +90,62 @@ static bool owned_view(CPUState* cpu) {
     owned.view_ready=!input_invalid;return owned.view_ready;
 }
 static void owned_put32(u8* b,u32 v){b[0]=v>>24;b[1]=v>>16;b[2]=v>>8;b[3]=v;}
+static bool owned_work_is_hidden(u32 address,u32 size) {
+    u32 vi,width,height,stride;
+    if(gcn_vi_xfb_info(&vi,&width,&height,&stride) && width && height &&
+       owned_overlap(address,size,vi,(height-1)*stride+width*2))return false;
+    return !owner->scanout_width || !owner->scanout_height ||
+        !owned_overlap(address,size,owner->scanout_address,(owner->scanout_height-1)*owner->scanout_stride+owner->scanout_width*2);
+}
+static int owned_finish_compositor(CPUState* cpu,const GcWiiNativeDisplayCopy* copy) {
+    /* In the attested enclosing frame, only queue insertion, the native
+     * camera/queue/empty-overlay passes and an inactive pause overlay occur
+     * before final overwrite. The work XFB is not the active VI source.
+     * Native CPU/resource reads from it reject until final publication. */
+    const u32 mutex=0x8038e074,thread=r32(cpu,mutex+8),count=r32(cpu,mutex+12);
+    if(owned.deferred || r8(cpu,0x80316d2b) || r8(cpu,0x80316d29) ||
+       (thread && (thread!=r32(cpu,0x800000e4) || !count)) || input_invalid)return false;
+    /* Double-buffering can temporarily expose the nominal work image to VI.
+     * That publication is observable, so retain its native copy and barrier.
+     * Hidden work images alone qualify for retirement. */
+    if(!owned_work_is_hidden(copy->destination,copy->stride*copy->height)) {
+        if(!frame_api->display_copy(copy) || !frame_api->complete(0,0))return -1;
+        ++owned.observable_copies;return 1;
+    }
+    GcWiiNativeClear clear=copy->clear_value;clear.x=copy->x;clear.y=copy->y;clear.width=copy->width;clear.height=copy->height;
+    if(!frame_api->clear(&clear))return -1;
+    owned.work_address=copy->destination;owned.work_size=copy->stride*copy->height;owned.deferred=true;++owned.retired_copies;return true;
+}
+static int owned_initialize(CPUState* cpu) {
+    input_invalid=false;
+    if(owned.initialized || !identity(cpu,0x8009905c,0x1a4,UINT64_C(0xd0a755b54ed9b1b8)) ||
+       cpu->lr!=0x8009db64 || !owned_mode(cpu))return owned_stop(cpu,"graphics initialization identity/mode");
+    const u32 base=cpu->gpr[3],size=cpu->gpr[4],sdk=r32(cpu,0x804ef8e0),index=r8(cpu,0x803b9304);
+    if((base&31) || (size&31) || size<0x4000 || !read_memory(cpu,base,size) || index>1 ||
+       !read_memory(cpu,sdk,0x600))return owned_stop(cpu,"graphics initialization storage");
+    if(!ordered_boundary())return failure(cpu,"graphics initialization prior work");
+    /* Preserve the actual SDK FIFO object's CPU ABI and the handle returned
+     * to the title. It describes the caller's real storage; the native owner
+     * never binds it to command construction, gather or replay. */
+    u8 fifo[32]={0};owned_put32(fifo,base);owned_put32(fifo+4,base+size-4);owned_put32(fifo+8,size);
+    owned_put32(fifo+12,size-0x4000);owned_put32(fifo+16,(size/2)&~31u);
+    owned_put32(fifo+20,base);owned_put32(fifo+24,base);
+    if(!publish(cpu,0x80458fe0,fifo,sizeof fifo))return owned_stop(cpu,"graphics FIFO object");
+    mem_write32(cpu,0x80316358,0x80458fe0);mem_write32(cpu,0x8031638c,0);mem_write32(cpu,0x80316390,0);
+    /* These are caller-queryable SDK values, not commands. Pipeline state is
+     * supplied by the native draw descriptors, independent of this cache. */
+    mem_write32(cpu,sdk+0x22c,0x43000001);mem_write32(cpu,sdk+0x230,0x49000000);
+    mem_write32(cpu,sdk+0x234,0x4a077e7f);mem_write32(cpu,sdk+0x238,0x4d000028);mem_write32(cpu,sdk+0x23c,0x52004803);
+    const u32 viewport[6]={0,0,0x44200000,0x43f00000,0,0x3f800000};
+    for(u32 n=0;n<6;n++)mem_write32(cpu,sdk+0x544+n*4,viewport[n]);
+    const GcWiiNativeClear clear={.width=640,.height=528,.depth=0xffffff,.flags=7};
+    GcWiiNativeDisplayCopy copy={.destination=r32(cpu,0x803b92fc+((index+1)&1)*4),.stride=1280,
+        .width=640,.height=480,.scale_y=256,.flags=GC_WII_NATIVE_COPY_CLAMP_TOP|GC_WII_NATIVE_COPY_CLAMP_BOTTOM|GC_WII_NATIVE_COPY_CLEAR,.clear_value=clear};
+    for(u32 n=0;n<7;n++)copy.filter[n]=r8(cpu,0x803b92f2+n);
+    if(input_invalid)return owned_stop(cpu,"graphics initial copy settings");
+    if(!frame_api->clear(&clear) || !frame_api->display_copy(&copy) || !frame_api->complete(0,0))return failure(cpu,"native graphics initialization");
+    owned.initialized=true;++owned.initializations;cpu->pc=cpu->lr;++cpu->cycles;return 1;
+}
 static bool owned_textures(CPUState* cpu) {
     const u32 q=0x8038e038,n=r32(cpu,q+0xd4);if(n>4)return false;
     for(u32 i=0;i<n;i++) {
@@ -119,7 +186,9 @@ static int owned_queues(CPUState* cpu) {
     return !input_invalid;
 }
 static int owned_call(CPUState* cpu,u32 address) {
-    const u32 p=address&0x1fffffff;if(!owned.scope || WIILLR_MM9_RENDERER_MODE<2)return 0;
+    const u32 p=address&0x1fffffff;if(WIILLR_MM9_RENDERER_MODE<2)return 0;
+    if(p==0x9905c){if(cpu->cycles>=cpu->cycle_deadline)return 1;return owned_initialize(cpu);}
+    if(!owned.scope)return 0;
     if(p!=0x99200 && p!=0x99394 && p!=0x995f0 && p!=0xd5990 && p!=0xe8024 && p!=0x83730)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;
     if(p==0x99200) {
@@ -141,13 +210,20 @@ static int owned_call(CPUState* cpu,u32 address) {
         if(queue<0)return failure(cpu,"native queued submission");if(!queue)return owned_stop(cpu,"queued graphics contract");++owned.queues;
     }
     else if(p==0x995f0) {
+        if(owned.deferred) {
+            if(!owned_work_is_hidden(owned.work_address,owned.work_size) ||
+               r32(cpu,0x803b92fc+r8(cpu,0x803b9304)*4)!=owned.work_address || input_invalid)return owned_stop(cpu,"work XFB became observable");
+            owned.deferred=false;
+        }
         GcWiiNativeClear clear;GcWiiNativeDisplayCopy copy;
         if(owned_effects(cpu,&clear,&copy,true)!=1)return owned_stop(cpu,"final copy settings");
-        if(!ordered_boundary() || !frame_api->display_copy(&copy) || !frame_api->complete(GC_WII_NATIVE_COMPLETE_DRAW_DONE,0))return failure(cpu,"native final submission");
+        /* With native startup there is no SDK draw-done waiter/interrupt to
+         * wake. The typed barrier retires the same ordered copy effects. */
+        if(!ordered_boundary() || !frame_api->display_copy(&copy) || !frame_api->complete(owned.initialized?0:GC_WII_NATIVE_COMPLETE_DRAW_DONE,0))return failure(cpu,"native final submission");
         ++owned.submits;cpu->pc=0x800e766c;++cpu->cycles;return 1;
     }
     cpu->pc=cpu->lr;++cpu->cycles;return 1;
 }
 static void owned_summary(void) {
-    printf("{\"native_mm9_frame_owner\":1,\"frames\":%llu,\"setups\":%llu,\"queue_passes\":%llu,\"palette_groups\":%llu,\"overlay_passes\":%llu,\"submissions\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)owned.frames,(unsigned long long)owned.setups,(unsigned long long)owned.queues,(unsigned long long)owned.palettes,(unsigned long long)owned.overlays,(unsigned long long)owned.submits,(unsigned long long)owned.fifo_bytes);
+    printf("{\"native_mm9_frame_owner\":1,\"initializations\":%llu,\"frames\":%llu,\"setups\":%llu,\"queue_passes\":%llu,\"palette_groups\":%llu,\"overlay_passes\":%llu,\"submissions\":%llu,\"retired_intermediate_copies\":%llu,\"observable_intermediate_copies\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)owned.initializations,(unsigned long long)owned.frames,(unsigned long long)owned.setups,(unsigned long long)owned.queues,(unsigned long long)owned.palettes,(unsigned long long)owned.overlays,(unsigned long long)owned.submits,(unsigned long long)owned.retired_copies,(unsigned long long)owned.observable_copies,(unsigned long long)owned.fifo_bytes);
 }
