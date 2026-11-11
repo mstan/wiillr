@@ -103,6 +103,9 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     if(!wii_mm9_renderer_hook_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
 #endif
 #endif
+    /* The current unowned synchronous renderer publishes on this machine
+     * thread. Deferred providers need memory ownership before idle admission. */
+    m->idle_memory_serial=(g->api->capabilities&GCNLLR_NATIVE_GX_SERIAL_RAM_WRITES)!=0;
     m->gx_fifo=fifo;m->gx_user=g;gcn_gp_set_drain_hook(&m->gp,drain,g);return true;
 }
 bool wii_gx_tick(WiiGx* g) {

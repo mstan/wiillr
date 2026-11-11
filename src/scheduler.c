@@ -6,6 +6,21 @@
 #include "memory/memory.h"
 #include <limits.h>
 
+#if WIILLR_IDLE_SKIP
+static bool idle_ram(CPUState* cpu,u32 address,void* user) {
+    const WiiMachine* m=user;
+    const u32 physical=address&0x3fffffffu;
+    /* No guest thread is running in the SDK idle context. Device work and
+     * memory publication remain on this owner until its armed deadline.
+     * Providers with asynchronous RAM writes must revoke this admission. */
+    return m->idle_memory_serial && !cpu->halted && !(address&3u) &&
+        !read_be32(cpu->ram+0xe4) &&
+        ((physical<cpu->ram_size && cpu->ram_size-physical>=4) ||
+         (physical>=0x10000000u && physical-0x10000000u<cpu->mem2_size &&
+          cpu->mem2_size-(physical-0x10000000u)>=4));
+}
+#endif
+
 #if WIILLR_SCHED_DEADLINE
 static u64 distance(u64 event,u64 cursor) {return event>cursor?event-cursor:1;}
 static u64 earlier(u64 a,u64 b) {return a<b?a:b;}
@@ -132,6 +147,12 @@ static void observe_time(CPUState* cpu,void* user,bool changed) {
 
 void wii_machine_scheduler_init(WiiMachine* m,CPUState* cpu) {
     m->cpu=cpu;
+    m->idle_memory_serial=true;
+#if WIILLR_IDLE_SKIP
+    ppc_idle_set_admission(cpu,idle_ram,m);
+#else
+    ppc_idle_set_admission(NULL,NULL,NULL);
+#endif
 #if WIILLR_SCHED_DEADLINE
     if(!gcn_domains_init_mask(&m->domains,cpu->cycles,GCN_DOMAIN_WII_ALL,
                              advance,domain_deadline,m))cpu->halted=true;

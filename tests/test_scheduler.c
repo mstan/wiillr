@@ -8,6 +8,17 @@ int main(void) {
     CPUState cpu;CHECK(cpu_init(&cpu));
     WiiMachine m;wii_machine_init(&m,&cpu);
     CHECK(!cpu.halted);
+#if WIILLR_IDLE_SKIP
+    cpu.msr|=0x8000;
+    CHECK(ppc_idle_can_skip(&cpu,0x80001000));
+    write_be32(cpu.ram+0xe4,0x80002000);
+    CHECK(!ppc_idle_can_skip(&cpu,0x80001000));
+    write_be32(cpu.ram+0xe4,0);
+    m.idle_memory_serial=false;CHECK(!ppc_idle_can_skip(&cpu,0x80001000));
+    m.idle_memory_serial=true;
+    CHECK(!ppc_idle_can_skip(&cpu,0xcc005000));
+    cpu.msr&=~0x8000u;CHECK(!ppc_idle_can_skip(&cpu,0x80001000));
+#endif
 #if WIILLR_SCHED_DEADLINE
     CHECK(wii_machine_deadline(&m,0)>0 && wii_machine_deadline(&m,0)<=WII_MACHINE_EVENT_CAP);
     cpu.cycles=11;CHECK(ppc_mftb(&cpu,268,0)==0);
