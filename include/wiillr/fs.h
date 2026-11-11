@@ -7,6 +7,16 @@
 extern "C" {
 #endif
 typedef struct WiiFs WiiFs;
+typedef struct WiiTitleLaunch {
+    uint64_t title,ios;
+    uint32_t uid,size;
+    uint16_t gid;
+    uint8_t* image; /* owned immutable boot content; release after handoff */
+} WiiTitleLaunch;
+/* Validate an installed ticket view, UID, TMD and exact boot-content hash
+ * before any launch effects. False means an unsupported ticket contract. */
+bool wii_es_prepare_launch(WiiFs*,uint64_t title,const uint8_t view[0xd8],WiiTitleLaunch*,int32_t* result);
+void wii_es_release_launch(WiiTitleLaunch*);
 /* The marked profile must be an isolated writable copy, never the input NAND. */
 WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid);
 void wii_fs_unmount(WiiFs*);

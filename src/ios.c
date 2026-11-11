@@ -30,7 +30,7 @@ void wii_ios_native_init(WiiIosNative* ios) {
         if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"native IOS UTC seed=%llu epoch=unix clock=729000000\n",(unsigned long long)ios->kd_utc);
     }
 }
-void wii_ios_native_destroy(WiiIosNative* ios){wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
+void wii_ios_native_destroy(WiiIosNative* ios){wii_es_release_launch(&ios->launch);wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
 static void di_registers(WiiIosNative* ios,CPUState* cpu) {
     gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,
         GCN_DI_SR_TCINT|GCN_DI_SR_DEINT|GCN_DI_SR_TCINTMASK|GCN_DI_SR_DEINTMASK,4);
@@ -425,6 +425,24 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==6 && ios->fs) {
         const u32 operation=read_be32(request+12);
+        if(operation==8) {
+            ios->result=-1017;
+            if(read_be32(request+16)!=2 || read_be32(request+20))return 1;
+            const u32 table=read_be32(request+24);
+            const u8* vectors=ios_memory(cpu,table,&available);
+            if((table&3) || !vectors || available<16 || read_be32(vectors+4)!=8 || read_be32(vectors+12)!=0xd8)return 1;
+            const u8* id=ios_memory(cpu,read_be32(vectors),&available);if(!id || available<8)return 1;
+            const u64 title=(u64)read_be32(id)<<32|read_be32(id+4);
+            const u8* view=ios_memory(cpu,read_be32(vectors+8),&available);if(!view || available<0xd8)return 1;
+            if(!ios->validate_launch)return 0;
+            WiiTitleLaunch launch={0};
+            if(!wii_es_prepare_launch(ios->fs,title,view,&launch,&ios->result))return 0;
+            if(ios->result)return 1;
+            if(!ios->validate_launch(ios->launch_user,&launch)){wii_es_release_launch(&launch);return 0;}
+            ios->launch=launch;ios->launch_pending=true;
+            cpu->cycle_deadline=cpu->cycles;
+            return 3; /* ACK only; the owner bootstraps the new PPC title */
+        }
         if(operation==0x45) {
             // This provider has no Korean common-key slot. IOS reports
             // ES_EINVAL for that provisioning query; it is not a region test
@@ -758,6 +776,7 @@ bool wii_ios_native_stm_event(WiiIosNative* ios,CPUState* cpu,u32 event) {
     return true;
 }
 bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
+    if(ios->launch_pending)return true;
     if(ios->kd_utc_set && ios->kd_utc_cycles==UINT64_MAX)ios->kd_utc_cycles=cpu->cycles;
     if(ios->bluetooth && !ipc->y) {
         u32 message;s32 result;bool ready;
@@ -800,7 +819,7 @@ bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
         if(!status)return false;
         wii_ipc_write(ipc,8,ios->message,cpu->cycles);
         wii_ipc_write(ipc,12,12,cpu->cycles); /* clear X1, raise Y2 ACK */
-        ios->ready_at=cpu->cycles+6000;ios->phase=status==2 ? 0:2;
+        ios->ready_at=cpu->cycles+6000;ios->phase=status>=2 ? 0:2;
         return true;
     }
     if(ipc->y)return true; /* receiver must consume the previous mailbox */

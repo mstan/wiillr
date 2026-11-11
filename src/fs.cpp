@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <random>
 #include <sstream>
+#include <bit>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -577,6 +578,80 @@ extern "C" int32_t wii_es_title_content_open(WiiFs* s,uint64_t title,const uint8
   }catch(const std::exception&){return -117;}
 }
 static bool content_handle(WiiFs* s,uint32_t handle){return handle<32 && (s->content_handles&(1u<<handle));}
+
+static std::array<uint8_t,20> content_sha1(const std::vector<uint8_t>& bytes) {
+  uint32_t h[]{0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
+  const size_t padded=(bytes.size()+9+63)&~size_t(63);
+  for(size_t offset=0;offset<padded;offset+=64) {
+    std::array<uint8_t,64> block{};
+    for(size_t n=0;n<64;n++) {
+      const size_t at=offset+n;
+      if(at<bytes.size())block[n]=bytes[at];else if(at==bytes.size())block[n]=0x80;
+    }
+    if(offset+64==padded) {
+      uint64_t bits=uint64_t(bytes.size())*8;
+      for(int n=63;n>=56;--n){block[n]=uint8_t(bits);bits>>=8;}
+    }
+    uint32_t w[80];for(unsigned n=0;n<16;n++)w[n]=be32(block.data()+4*n);
+    for(unsigned n=16;n<80;n++)w[n]=std::rotl(w[n-3]^w[n-8]^w[n-14]^w[n-16],1);
+    uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4];
+    for(unsigned n=0;n<80;n++) {
+      const uint32_t f=n<20 ? (b&c)|(~b&d):n<40 ? b^c^d:n<60 ? (b&c)|(b&d)|(c&d):b^c^d;
+      const uint32_t k=n<20?0x5a827999:n<40?0x6ed9eba1:n<60?0x8f1bbcdc:0xca62c1d6;
+      const uint32_t t=std::rotl(a,5)+f+e+k+w[n];e=d;d=c;c=std::rotl(b,30);b=a;a=t;
+    }
+    h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;
+  }
+  std::array<uint8_t,20> hash{};for(unsigned n=0;n<5;n++)put32(hash.data()+4*n,h[n]);return hash;
+}
+extern "C" void wii_es_release_launch(WiiTitleLaunch* launch) {
+  if(!launch)return;std::free(launch->image);*launch={};
+}
+extern "C" bool wii_es_prepare_launch(WiiFs* s,uint64_t title,const uint8_t* view,WiiTitleLaunch* out,int32_t* status) {
+  if(!status)return false;*status=-1017;
+  try {
+    if(!s || !view || !out || out->image)return true;
+    uint32_t count=0;*status=wii_es_ticket_views(s,title,nullptr,0,&count);if(*status)return true;
+    if(!count){*status=-1028;return true;}
+    std::vector<uint8_t> views(count*0xd8);*status=wii_es_ticket_views(s,title,views.data(),count,&count);if(*status)return true;
+    bool found=false;for(uint32_t n=0;n<count;n++)if(!std::memcmp(view,views.data()+n*0xd8,0xd8))found=true;
+    if(!found){*status=-1017;return true;}
+    for(unsigned n=0;n<8;n++)if(be32(view+0x98+n*8))return false; // usage accounting not implemented
+    InstalledTmd tmd;*status=read_installed_tmd(s,title,tmd);if(*status)return true;
+    const auto* header=tmd.bytes.data()+tmd.base;
+    const uint32_t boot=uint32_t(header[0xa0])<<8|header[0xa1];
+    const uint8_t* content=nullptr;
+    for(uint32_t n=0;n<tmd.count;n++) {
+      const auto* entry=header+0xa4+n*36;
+      if((uint32_t(entry[4])<<8|entry[5])==boot){if(content){*status=-1017;return true;}content=entry;}
+    }
+    if(!content){*status=-1017;return true;}
+    const uint64_t size=uint64_t(be32(content+8))<<32|be32(content+12);
+    if(!size || size>64*1024*1024){*status=-1017;return true;}
+    check_path(s,"/sys/uid.sys");File::IOFile users((s->root/"sys/uid.sys").generic_string(),"rb");
+    const auto users_size=users?users.GetSize():0;
+    if(!users || users_size%12 || users_size>0x100000){*status=-1009;return true;}
+    std::map<uint32_t,uint64_t> uids;std::map<uint64_t,uint32_t> titles;uint8_t record[12];
+    for(uint64_t n=0;n<users_size;n+=12) {
+      if(!users.ReadArray(record,12)){*status=-1009;return true;}
+      const uint64_t id=uint64_t(be32(record))<<32|be32(record+4);const auto uid=be32(record+8);
+      if(!uids.emplace(uid,id).second || !titles.emplace(id,uid).second){*status=-1009;return true;}
+    }
+    if(!titles.contains(title)){*status=-1009;return true;}
+    std::vector<uint8_t> image(size);const auto handle=open_installed_content(s,title,boot);
+    if(handle<0){*status=handle;return true;}
+    const auto got=wii_es_content_read(s,handle,image.data(),uint32_t(size));
+    const auto closed=wii_es_content_close(s,handle);
+    if(got!=int32_t(size) || closed){*status=-117;return true;}
+    const auto hash=content_sha1(image);
+    if(std::memcmp(hash.data(),content+16,20)){*status=-1022;return true;}
+    auto* owned=static_cast<uint8_t*>(std::malloc(image.size()));if(!owned){*status=-117;return true;}
+    std::memcpy(owned,image.data(),image.size());
+    *out={title,uint64_t(be32(header+0x44))<<32|be32(header+0x48),titles.at(title),uint32_t(size),
+          uint16_t(uint16_t(header[0x58])<<8|header[0x59]),owned};
+    *status=0;return true;
+  }catch(const std::exception&){*status=-117;return true;}
+}
 extern "C" int32_t wii_es_content_read(WiiFs* s,uint32_t handle,uint8_t* data,uint32_t size) {
   return content_handle(s,handle)?wii_fs_read(s,handle,data,size):-1017;
 }

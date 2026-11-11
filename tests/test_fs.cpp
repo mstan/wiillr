@@ -35,6 +35,59 @@ int main(int argc,char** argv) {
   std::memcpy(ticket.data()+0x1dc,uid_record,8);ticket[0x1f1]=152;ticket[0x2a3]=0x7b;
   std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   auto* nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  // Launch preparation checks the actual installed view, boot index, UID and
+  // content digest without changing active credentials or persistent data.
+  auto launch_tmd=tmd;launch_tmd[0x187]=1;launch_tmd[0x18b]=37;launch_tmd[0x1e1]=3;
+  constexpr uint8_t title_sha1[]{0x3c,0x6d,0xe1,0xb7,0xdd,0x91,0x46,0x5d,0x43,0x7e,
+      0xf4,0x15,0xf9,0x4f,0x36,0xaf,0xc1,0xfb,0xc8,0xa8};
+  std::memcpy(launch_tmd.data()+0x1f4,title_sha1,20);
+  const auto launch_tmd_path=root/"title/00010001/41424344/content/title.tmd";
+  const auto launch_content_path=root/"title/00010001/41424344/content/00000001.app";
+  std::ofstream(launch_tmd_path,std::ios::binary).write(reinterpret_cast<const char*>(launch_tmd.data()),launch_tmd.size());
+  std::array<uint8_t,0xd8> launch_view{};uint32_t launch_views=0;int32_t launch_result=99;
+  CHECK(!wii_es_ticket_views(nand,0x0001000141424344ull,launch_view.data(),1,&launch_views) && launch_views==1);
+  WiiTitleLaunch launch{};
+  CHECK(wii_es_prepare_launch(nand,0x0001000141424344ull,launch_view.data(),&launch,&launch_result) && !launch_result);
+  CHECK(launch.title==0x0001000141424344ull && launch.ios==0x100000025ull && !launch.uid && !launch.gid);
+  CHECK(launch.size==5 && !std::memcmp(launch.image,"title",5) && !wii_fs_uid(nand));
+  wii_es_release_launch(&launch);CHECK(!launch.image && !launch.size);
+  launch_view[20]^=1;
+  CHECK(wii_es_prepare_launch(nand,0x0001000141424344ull,launch_view.data(),&launch,&launch_result) && launch_result==-1017 && !launch.image);
+  launch_view[20]^=1;std::ofstream(launch_content_path,std::ios::binary)<<"Title";
+  CHECK(wii_es_prepare_launch(nand,0x0001000141424344ull,launch_view.data(),&launch,&launch_result) && launch_result==-1022 && !launch.image);
+  std::ofstream(launch_content_path,std::ios::binary)<<"title";
+  {
+    CPUState handoff_cpu;WiiIosNative handoff;WiiIpc mailbox;
+    CHECK(cpu_init(&handoff_cpu) && cpu_alloc_mem2(&handoff_cpu,0x4000000));
+    constexpr uint32_t request=0x10000200,vectors=0x10000300,id=0x10000400,view=0x10000500;
+    const auto put=[&](uint32_t at,uint32_t value){mem_write32_cia(&handoff_cpu,at,value,0);};
+    for(unsigned n=0;n<3;n++) {
+      wii_ios_native_init(&handoff);wii_ipc_init(&mailbox);handoff.fs=nand;handoff.descriptors[3]=6;
+      if(n)handoff.validate_launch=[](void*,const WiiTitleLaunch* title) {
+        return title->title==0x0001000141424344ull && title->size==5 && !std::memcmp(title->image,"title",5);
+      };
+      put(request,7);put(request+4,0x11223344);put(request+8,3);put(request+12,8);
+      put(request+16,2);put(request+20,0);put(request+24,vectors);
+      put(vectors,id);put(vectors+4,8);put(vectors+8,view);put(vectors+12,n==1?215:216);
+      put(id,0x00010001);put(id+4,0x41424344);
+      std::memcpy(handoff_cpu.mem2+0x500,launch_view.data(),launch_view.size());
+      wii_ipc_write(&mailbox,0,request,handoff_cpu.cycles);wii_ipc_write(&mailbox,4,0x31,handoff_cpu.cycles);
+      CHECK(wii_ios_native_tick(&handoff,&mailbox,&handoff_cpu));handoff_cpu.cycles+=6000;
+      const bool handled=wii_ios_native_tick(&handoff,&mailbox,&handoff_cpu);
+      if(!n)CHECK(!handled && !handoff.launch_pending && mailbox.x==1 && !mailbox.y);
+      else if(n==1)CHECK(handled && !handoff.launch_pending && handoff.result==-1017 && mailbox.y==2);
+      else {
+        CHECK(handled && handoff.launch_pending && handoff.launch.title==0x0001000141424344ull && mailbox.y==2);
+        CHECK(mem_read32_cia(&handoff_cpu,request,0)==7 && mem_read32_cia(&handoff_cpu,request+4,0)==0x11223344);
+        wii_ipc_write(&mailbox,4,0x32,handoff_cpu.cycles);handoff_cpu.cycles+=10000;
+        CHECK(wii_ios_native_tick(&handoff,&mailbox,&handoff_cpu) && !mailbox.y && handoff.launch_pending);
+        CHECK(mem_read32_cia(&handoff_cpu,request,0)==7 && !wii_fs_uid(nand));
+      }
+      wii_ios_native_destroy(&handoff);
+    }
+    cpu_free(&handoff_cpu);
+  }
+  std::ofstream(launch_tmd_path,std::ios::binary).write(reinterpret_cast<const char*>(tmd.data()),tmd.size());
   CHECK(fs::is_directory(root/"tmp"));
   uint8_t mac[6]{},mac_copy[6]{};
   CHECK(wii_fs_network_mac(nand,mac) && (mac[0]&3)==2);

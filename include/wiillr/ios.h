@@ -24,6 +24,10 @@ typedef struct {
     u32 kd_suspend_count; /* local KD scheduler gate; no network workers installed */
     u32 kd_shutdown_event;
     bool kd_shutdown_requested; /* offline KD has no sockets or worker queue to drain */
+    WiiTitleLaunch launch;
+    bool launch_pending;
+    bool (*validate_launch)(void*,const WiiTitleLaunch*);
+    void* launch_user;
     GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
     bool di_initialized;
     bool di_waiting;

@@ -166,9 +166,16 @@ RGB-level shading tolerance and complete PCM is byte-identical, with zero
 CPU/DSP interpreter execution or misses, zero actual CPU gather writes and
 zero backend FIFO bytes. The standard 43-billion-cycle MM9 replay also retains
 identical checkpoint fingerprints, scanout and PCM. These checks do not qualify
-all HOME actions or title lifecycle: confirming Reset completes offline WC24
-shutdown preparation but still reaches an unimplemented ES title handoff, and a separate non-HOME modal fade
-remains explicitly unsupported. Cross-consumer and performance qualification
+all HOME actions or title lifecycle. Reset now completes offline WC24 shutdown
+preparation and an ACK-only ES title handoff, validating the installed ticket
+view, UID, TMD, boot index and boot-content SHA-1 before retiring old GPU memory
+ownership, IOS descriptors and DSP state. It restarts the original title entry
+and preserves native progress. The actual reset/reload route restores Hornet's
+clear and weapon, with matching original/native images within the same RGB
+tolerance and an unchanged native save. Two short UI sound differences on that
+longer route remain unresolved; full-route audio is not accepted. Returning to
+the Wii Menu and a separate non-HOME modal fade remain unqualified.
+Cross-consumer and performance qualification
 remain required before promoting the shared-core changes.
 
 The same owner replaces the verified game graphics initializer at `0x8009905c`.

@@ -15,7 +15,7 @@ static u8* ram_span(CPUState* cpu, u32 address, u32 size) {
     return result && size <= available ? result : NULL;
 }
 
-bool wii_dol_load(CPUState* cpu, const u8* data, size_t size, u32* entry) {
+static bool dol(CPUState* cpu, const u8* data, size_t size, u32* entry,bool load) {
     if (!cpu || !data || !entry || size < 0x100)
         return false;
     u32 pc = read_be32(data + 0xe0);
@@ -51,6 +51,7 @@ bool wii_dol_load(CPUState* cpu, const u8* data, size_t size, u32* entry) {
     u8* bss = bss_size ? ram_span(cpu, read_be32(data + 0xd8), bss_size) : NULL;
     if (!executable_entry || (bss_size && !bss))
         return false;
+    if(!load){*entry=pc;return true;}
     if (bss_size) memset(bss, 0, bss_size);
     for (unsigned i = 0; i < 18; ++i) {
         u32 length = read_be32(data + 0x90 + i * 4);
@@ -60,3 +61,5 @@ bool wii_dol_load(CPUState* cpu, const u8* data, size_t size, u32* entry) {
     *entry = pc;
     return true;
 }
+bool wii_dol_validate(CPUState* cpu,const u8* data,size_t size,u32* entry){return dol(cpu,data,size,entry,false);}
+bool wii_dol_load(CPUState* cpu,const u8* data,size_t size,u32* entry){return dol(cpu,data,size,entry,true);}

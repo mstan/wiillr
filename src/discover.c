@@ -60,6 +60,61 @@ static int load_inputs(InputEvent* events,unsigned capacity) {
     }
     if(ferror(file))valid=false;fclose(file);return valid?(int)count:-1;
 }
+static bool validate_launch(void* user,const WiiTitleLaunch* launch) {
+    u32 entry;
+    return launch->ios>>32==1 && (launch->ios==0x100000004ull ||
+        launch->ios==0x100000025ull || launch->ios==0x100000050ull) &&
+        wii_dol_validate(user,launch->image,launch->size,&entry);
+}
+static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* profile,
+    const char* library,const char* data,const char* cache,const u8* irom,const u8* coef) {
+    WiiTitleLaunch launch=m->ios.launch;memset(&m->ios.launch,0,sizeof m->ios.launch);
+    const u64 cycles=cpu->cycles,timebase=cpu->timebase,fields=m->fields;
+    const u64 reads=m->mmio_reads,writes=m->mmio_writes,operations=m->ios.operations+1;
+    const u64 gather_writes=m->gx_cpu_gather_writes,gather_bytes=m->gx_cpu_gather_bytes;
+    const u64 gather_rejected=m->gx_cpu_gather_rejected;
+    const u64 utc=m->ios.kd_utc,utc_cycles=m->ios.kd_utc_cycles;
+    const bool utc_set=m->ios.kd_utc_set;
+    void (*sink)(void*,const u8*,u32)=m->dsp.output_sink;
+    void* sink_user=m->dsp.output_user;const u32 rate=m->dsp.output_rate;
+    const bool dsp=m->dsp.engine!=NULL;
+    if(gx->api && !gx->api->drain()){wii_es_release_launch(&launch);return false;}
+    GcnllrNativeGxStatus graphics={0};if(gx->api)gx->api->status(&graphics);
+    GcnDspEngineStats sound={0};if(dsp)sound=gcn_dsp_engine_stats(m->dsp.engine);
+    printf("{\"native_title_retire\":1,\"cycles\":%llu,\"gx_fifo_bytes\":%llu,"
+           "\"gx_cpu_gather_writes\":%llu,\"gx_cpu_gather_rejected\":%llu,\"gx_failed\":%u,"
+           "\"dsp_interpreter\":%llu,\"dsp_misses\":%llu,\"dsp_failed\":%u}\n",
+        (unsigned long long)cycles,(unsigned long long)graphics.fifo_bytes,
+        (unsigned long long)gather_writes,(unsigned long long)gather_rejected,graphics.failed,
+        (unsigned long long)sound.interpreter_instructions,(unsigned long long)sound.misses,sound.failed);
+    /* The old title never receives a success reply: ES_Launch bootstraps PPC.
+     * Retire all old GPU ownership before replacing RAM, descriptors or DSP. */
+    wii_gx_stop(gx);if(cpu->halted){wii_es_release_launch(&launch);return false;}
+    wii_dsp_stop(&m->dsp);wii_ios_native_destroy(&m->ios);wii_fs_unmount(m->ios.fs);
+    cpu_reset(cpu);cpu->cycles=cycles;cpu->timebase=timebase;cpu->spr[287]=PPC_BROADWAY_PVR;
+    u32 entry;
+    bool ok=wii_native_ios_boot_memory(cpu,(u32)launch.ios) &&
+        wii_dol_load(cpu,launch.image,launch.size,&entry);
+    wii_machine_init(m,cpu);
+    m->fields=fields;m->mmio_reads=reads;m->mmio_writes=writes;
+    m->gx_cpu_gather_writes=gather_writes;m->gx_cpu_gather_bytes=gather_bytes;
+    m->gx_cpu_gather_rejected=gather_rejected;
+    m->vi.now_cycles=m->vi.last_cycles=m->vi.ticks_last_line_start=cycles;
+    m->ios.operations=operations;m->ios.kd_utc=utc;m->ios.kd_utc_cycles=utc_cycles;m->ios.kd_utc_set=utc_set;
+    m->ios.validate_launch=validate_launch;m->ios.launch_user=cpu;
+    m->ios.fs=wii_fs_mount(profile,launch.uid,launch.gid);ok=ok && m->ios.fs;
+    if(ok && library)ok=wii_gx_start(gx,m,cpu,library,data,cache);
+    if(ok && dsp)ok=wii_dsp_start(&m->dsp,cpu,irom,coef);
+    m->dsp.output_sink=sink;m->dsp.output_user=sink_user;m->dsp.output_rate=rate;
+#if WIILLR_PPC_STATIC
+    if(ok)wii_native_install();
+#endif
+    if(ok)cpu->pc=entry;
+    printf("{\"native_title_bootstrap\":\"%016llx\",\"ios\":%u,\"cycles\":%llu,\"success\":%s}\n",
+        (unsigned long long)launch.title,(u32)launch.ios,(unsigned long long)cycles,ok?"true":"false");
+    fflush(stdout);
+    wii_es_release_launch(&launch);return ok;
+}
 int main(int argc, char** argv) {
     InputEvent inputs[1024];const int input_count=load_inputs(inputs,1024);
     if(input_count<0){fprintf(stderr,"invalid virtual remote input script\n");return 2;}
@@ -140,6 +195,7 @@ int main(int argc, char** argv) {
 #if WIILLR_IOS_NATIVE
         machine.ios.fs=wii_fs_mount(argv[argc-3],(u32)uid,(u16)gid);
         if(!machine.ios.fs) {fprintf(stderr,"invalid copied NAND profile\n");cpu_free(&cpu);return 2;}
+        machine.ios.validate_launch=validate_launch;machine.ios.launch_user=&cpu;
 #else
         fprintf(stderr,"filesystem needs the build-selected native IOS provider\n");cpu_free(&cpu);return 2;
 #endif
@@ -257,6 +313,13 @@ int main(int argc, char** argv) {
 #endif
         gcn_cost_enter(GCN_COST_TIME);
         wii_machine_tick(&machine, &cpu);
+        if(machine.ios.launch_pending && !cpu.halted) {
+            if(!bootstrap_launch(&cpu,&machine,&gx,argv[argc-3],gx_library,gx_data,gx_cache,irom,coef)) {
+                fprintf(stderr,"native title bootstrap failed\n");cpu.halted=true;
+            }
+            input_pending=true;
+            continue;
+        }
 #if GCN_COST_RING_ENABLED
         gcn_cost_owner_boundary(GCN_COST_OWNER_GRAPHICS);
 #endif

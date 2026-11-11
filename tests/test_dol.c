@@ -18,6 +18,8 @@ int main(void) {
     memset(image+0x100, 0xa5, 0x20);
     memset(cpu.ram+0x3400, 0xff, 0x40);
     u32 entry = 0xffffffff;
+    CHECK(wii_dol_validate(&cpu,image,sizeof image,&entry) && entry==0x3400);
+    CHECK(cpu.ram[0x3400]==0xff && cpu.ram[0x343f]==0xff);
     CHECK(wii_dol_load(&cpu, image, sizeof image, &entry));
     CHECK(entry == 0x3400 && cpu.ram[0x3400] == 0xa5 && cpu.ram[0x341f] == 0xa5);
     CHECK(cpu.ram[0x3420] == 0 && cpu.ram[0x343f] == 0);
