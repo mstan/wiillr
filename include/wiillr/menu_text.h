@@ -33,6 +33,9 @@ typedef struct {
 } WiiMenuTextStatus;
 WiiMenuTextNative* wii_menu_text_create(WiiMenuMemory,const GcWiiNativeRenderApi*,const GcWiiNativeGuiApi*);
 void wii_menu_text_destroy(WiiMenuTextNative*);
+/* Validate a scene's text resources/layout before any native submission. */
+int wii_menu_text_validate(WiiMenuMemory,uint32_t pane,uint32_t draw_info,
+    const WiiMenuView*,char* error,uint32_t error_size);
 /* 1: submitted; 0: unsupported input before any upload/submission;
  * -1: resource/backend failure, which must not invoke the original renderer. */
 int wii_menu_text_draw(WiiMenuTextNative*,uint32_t pane,uint32_t draw_info,const WiiMenuView*);

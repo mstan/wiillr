@@ -126,11 +126,12 @@ extern "C" int wii_menu_font_glyph(WiiMenuMemory memory,uint32_t font,uint16_t c
     if(!memory.read || !out){message("Missing font resource input");return 0;}
     try{
         const Reader r{memory};const auto vtable=r.u32(font);
-        need(vtable==0x8166fe88 || vtable==0x8166ff70,"Unbound Menu font class");
+        const auto classes=wii_menu_classes(memory);
+        need(vtable==classes->resource_font || (classes->archive_font && vtable==classes->archive_font),"Unbound Menu font class");
         const auto info=r.u32(r.at(font,0x14));
         need(r.u8(r.at(info,7))==1,"Menu text requires UTF-16 font encoding");
-        const auto offsets=vtable==0x8166ff70?r.u32(r.at(font,0x18)):0;
-        need(vtable!=0x8166ff70 || offsets,"Missing archive font sheet offsets");
+        const auto offsets=vtable==classes->archive_font?r.u32(r.at(font,0x18)):0;
+        need(vtable!=classes->archive_font || offsets,"Missing archive font sheet offsets");
         const auto prepared=glyph(r,info,code,offsets);*out=prepared;message("");return 1;
     }
     catch(const std::exception& e){message(e.what());return 0;}

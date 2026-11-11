@@ -3,6 +3,7 @@
 #include <wiillr/mm9_compositor.h>
 #include <wiillr/mm9_screen.h>
 #include <wiillr/mm9_overlay.h>
+#include <wiillr/mm9_hbm.h>
 #include <memory/memory.h>
 #include <cpu/native_code.h>
 #include <stdio.h>
@@ -21,6 +22,7 @@ void wii_mm9_renderer_bind_output(const GcWiiNativeOutputApi* api) {output_api=a
 static int output_complete(void) {return output_api?output_api->submit():frame_api->complete(0,0);}
 static WiiMm9ScreenNative* screen_renderer;
 static WiiMm9OverlayNative* overlay_renderer;
+static WiiMm9Hbm* hbm_renderer;
 static WiiMm9Frame* prepared;
 static u8* oracle_entry;
 static bool verified,oracle_pending,input_invalid;
@@ -125,6 +127,17 @@ static bool publish(CPUState* cpu,u32 address,const u8* bytes,u32 size) {
     if(cpu->reserve_valid){const u32 reservation=gcn_reservation_key(cpu->reserve_addr)&~31u;if((u64)reservation+32>physical && reservation<(u64)physical+size)cpu->reserve_valid=false;}return true;
 }
 static void overlay_write_byte(void* user,u32 address,u8 value){mem_write8(user,address,value);}
+bool wii_mm9_renderer_bind_hbm(const GcWiiNativeRenderApi* render,const GcWiiNativeGuiApi* gui,
+    const GcWiiNativeGuiLayersApi* layers,const GcWiiNativeGuiMaskApi* mask,const GcWiiNativeGuiEffectsApi* effects) {
+#if WIILLR_MM9_FRAME_MODE
+    if(WIILLR_MM9_RENDERER_MODE>=2) {
+        if(!owner || hbm_renderer)return false;
+        hbm_renderer=wii_mm9_hbm_create((WiiMenuMemory){owner->cpu,read_memory},render,gui,layers,mask,effects);
+        return hbm_renderer!=NULL;
+    }
+#endif
+    return true;
+}
 #if WIILLR_MM9_FRAME_MODE
 #include "mm9_frame_owner.inc"
 #endif
@@ -237,6 +250,9 @@ int wii_mm9_renderer_hook_dispatch(CPUState* cpu,u32 address) {
 }
 void wii_mm9_renderer_hook_stop(void) {
     if(!owner)return;WiiMm9ScreenStatus status={0};wii_mm9_screen_status(screen_renderer,&status);
+    WiiMm9HbmStatus hbm={0};wii_mm9_hbm_status(hbm_renderer,&hbm);
+    printf("{\"native_mm9_hbm\":1,\"scenes\":%llu,\"rejected\":%llu}\n",(unsigned long long)hbm.scenes,(unsigned long long)hbm.rejected);
+    wii_mm9_hbm_destroy(hbm_renderer);hbm_renderer=NULL;
     WiiMm9OverlayStatus overlay={0};wii_mm9_overlay_status(overlay_renderer,&overlay);
     printf("{\"native_mm9_overlay\":1,\"entries\":%llu,\"nodes\":%llu,\"glyphs\":%llu,\"draws\":%llu,\"mesh_uploads\":%llu,\"rejected\":%llu}\n",(unsigned long long)overlay.entries,(unsigned long long)overlay.nodes,(unsigned long long)overlay.glyphs,(unsigned long long)overlay.draws,(unsigned long long)overlay.mesh_uploads,(unsigned long long)overlay.rejected);
 #if WIILLR_MM9_FRAME_MODE

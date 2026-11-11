@@ -152,6 +152,25 @@ five-level shading tolerance. Menu-font and overlay component tests also run on
 Windows and Linux. These checks do not establish full-game or performance
 acceptance.
 
+MM9's native frame owner also replaces the complete HOME scene draw at
+`0x8009b6fc`, using version-verified title bindings for the shared NW4R Picture,
+Window, material and RFNT readers. It validates the ordered pane tree and its
+resources before submission, retains independent texture coordinates and GUI
+color/alpha planes, and draws the original fade. The original HOME logic,
+pointer input and animation continue to run. Signed Window content extents are
+preserved, including a 31-pixel pane with two 16-pixel borders.
+
+Bounded original/native comparisons cover opening and closing HOME, pointer
+hover and the Reset confirmation text. Images stay within the existing five
+RGB-level shading tolerance and complete PCM is byte-identical, with zero
+CPU/DSP interpreter execution or misses, zero actual CPU gather writes and
+zero backend FIFO bytes. The standard 43-billion-cycle MM9 replay also retains
+identical checkpoint fingerprints, scanout and PCM. These checks do not qualify
+all HOME actions or title lifecycle: confirming Reset still reaches an
+unimplemented native IOS shutdown request, and a separate non-HOME modal fade
+remains explicitly unsupported. Cross-consumer and performance qualification
+remain required before promoting the shared-core changes.
+
 The same owner replaces the verified game graphics initializer at `0x8009905c`.
 It retains the real caller FIFO object and public handle, clear values and
 queryable viewport/copy fields, and initializes the host EFB with typed frame

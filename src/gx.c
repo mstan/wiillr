@@ -95,13 +95,13 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     GcWiiNativeRenderGetApi native_get=(GcWiiNativeRenderGetApi)dlsym(g->library,"gc_wii_native_render_get_api");
 #endif
     const GcWiiNativeRenderApi* native_api=native_get?native_get(GC_WII_NATIVE_RENDER_ABI):NULL;
-#if WIILLR_MENU_PICTURES
 #ifdef _WIN32
     GcWiiNativeGuiGetApi gui_get=(GcWiiNativeGuiGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_get_api");
 #else
     GcWiiNativeGuiGetApi gui_get=(GcWiiNativeGuiGetApi)dlsym(g->library,"gc_wii_native_gui_get_api");
 #endif
     const GcWiiNativeGuiApi* gui_api=gui_get?gui_get(GC_WII_NATIVE_GUI_ABI):NULL;
+#if WIILLR_MENU_PICTURES
     if(!wii_menu_picture_hook_start(g,native_api,gui_api)){wii_gx_stop(g);return false;}
 #endif
 #if WIILLR_MM9_RENDERER
@@ -112,6 +112,19 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
 #endif
     const GcWiiNativeFrameApi* frame_api=frame_get?frame_get(GC_WII_NATIVE_FRAME_ABI):NULL;
     if(!wii_mm9_renderer_hook_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
+#ifdef _WIN32
+    GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_layers_get_api");
+    GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_mask_get_api");
+    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_effects_get_api");
+#else
+    GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)dlsym(g->library,"gc_wii_native_gui_layers_get_api");
+    GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)dlsym(g->library,"gc_wii_native_gui_mask_get_api");
+    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)dlsym(g->library,"gc_wii_native_gui_effects_get_api");
+#endif
+    if(!wii_mm9_renderer_bind_hbm(native_api,gui_api,
+        layers_get?layers_get(GC_WII_NATIVE_GUI_LAYERS_ABI):NULL,
+        mask_get?mask_get(GC_WII_NATIVE_GUI_MASK_ABI):NULL,
+        effects_get?effects_get(GC_WII_NATIVE_GUI_EFFECTS_ABI):NULL)){wii_gx_stop(g);return false;}
 #if WIILLR_NATIVE_OUTPUT
     if(g->output) {
 #ifdef _WIN32

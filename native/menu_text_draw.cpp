@@ -99,10 +99,10 @@ void camera(const WiiMenuView& view,GcWiiNativeDraw& out) {
     if(view.depth_func==7)out.material.flags|=GC_WII_NATIVE_DEPTH_ALWAYS;
 }
 Plan prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenuView& view) {
-    need(r.u32(pane)==0x8167192c,"Unbound Menu TextBox class");r.bytes(pane,0x100);r.bytes(info,0x54);
+    need(r.u32(pane)==wii_menu_classes(r.memory)->textbox,"Unbound Menu TextBox class");r.bytes(pane,0x100);r.bytes(info,0x54);
     const auto pointer=r.u32(pane+0xd4),font=r.u32(pane+0xe0),material=r.u32(pane+0x28);
     if(!pointer || !font || !material)return {};
-    need(r.u32(material)==0x81671b48,"Unbound Menu text material");
+    need(r.u32(material)==wii_menu_classes(r.memory)->material,"Unbound Menu text material");
     r.bytes(material,0x34);
     need(r.u32(pane+0xf4)==0,"Custom Menu text tags require a native adapter");
     const auto length=r.u16(pane+0xfa);need(uint32_t(length)*2<=r.u16(pane+0xf8),"Text length exceeds buffer");
@@ -196,6 +196,16 @@ bool same(const Stored& old,const Batch& next) {
     return old.vertices.size()==next.vertices.size() && old.indices==next.indices &&
         std::memcmp(old.vertices.data(),next.vertices.data(),old.vertices.size()*sizeof(GcWiiNativeVertex))==0;
 }
+}
+extern "C" int wii_menu_text_validate(WiiMenuMemory memory,uint32_t pane,uint32_t info,
+    const WiiMenuView* view,char* error,uint32_t size) {
+    try {
+        need(memory.read && view,"Missing Menu text input");
+        (void)prepare(Reader{memory},pane,info,*view);
+        if(error && size)error[0]=0;return 1;
+    } catch(const std::exception& e) {
+        if(error && size)std::snprintf(error,size,"%s",e.what());return 0;
+    }
 }
 struct WiiMenuTextNative {
     WiiMenuMemory memory;const GcWiiNativeRenderApi* meshes;const GcWiiNativeGuiApi* gui;

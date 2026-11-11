@@ -20,10 +20,15 @@ static int owned_stop(CPUState* cpu,const char* why){++uncovered;fprintf(stderr,
 static void owned_invalidate(u32 address,u32 size) {
     const u32 a=address&0x1fffffff;const u64 end=(u64)a+size;
     if((a<0x840f8 && end>0x83730)||(a<0x99650 && end>0x99200)||(a<0x9de40 && end>0x9dcb8)||
+       (a<0x99784 && end>0x99650)||(a<0x9b7b4 && end>0x9b6fc)||
+       (a<0x1dfd14 && end>0x1b9b58)||
        (a<0xd5b90 && end>0xd5990)||(a<0xe8204 && end>0xe8024)||(a<0x1e1eac && end>0x1e1800))owned.attested=false;
 }
 static bool owned_attest(CPUState* cpu) {
     return identity(cpu,0x80083730,0x9c8,UINT64_C(0xe88b23cf449d4c9f)) &&
+        identity(cpu,0x8009b6fc,0xb8,UINT64_C(0x2be4a7308bcdc827)) &&
+        identity(cpu,0x80099650,0x134,UINT64_C(0xf3adeed57f2b7aef)) &&
+        identity(cpu,0x801b9b58,0x261bc,UINT64_C(0x1d90cf3b582d5de3)) &&
         identity(cpu,0x801e1800,0x6ac,UINT64_C(0xa03767f1e3a73d42)) &&
         identity(cpu,0x8009dcb8,0x188,UINT64_C(0x2651ec4888522db1)) &&
         identity(cpu,0x80099200,0x194,UINT64_C(0x1425568b3744f92e)) &&
@@ -189,6 +194,33 @@ static int owned_queues(CPUState* cpu) {
     }
     return !input_invalid;
 }
+static int owned_hbm(CPUState* cpu) {
+    input_invalid=false;
+    if(!r8(cpu,0x80316d2b)) {
+        if(r8(cpu,0x80316d29))return owned_stop(cpu,"modal screen fade");
+        return 0; /* The original predicate-only void method has no graphics. */
+    }
+    if(!owned.active || !owned.attested || !hbm_renderer || cpu->lr!=0x8009dd5c ||
+       (cpu->fpscr&3u) || (r32(cpu,0x803b92c0)>>2)!=0)return owned_stop(cpu,"HBM draw binding/mode");
+    if(cpu->cycles>=cpu->cycle_deadline)return 1;
+    const u32 wide=r8(cpu,cpu->gpr[13]-0x5dc8);
+    const float height=(float)r16(cpu,0x803b92d0)/rf(cpu,cpu->gpr[2]-0x7d7c);
+    const float top=rf(cpu,cpu->gpr[2]-0x7d78)*height;
+    const float right=wide?rf(cpu,cpu->gpr[2]-0x7d90):
+        rf(cpu,cpu->gpr[2]-0x7d70)*((float)r16(cpu,0x803b92ce)/rf(cpu,cpu->gpr[2]-0x7d74));
+    const float near=rf(cpu,cpu->gpr[2]-0x7db0),far=rf(cpu,cpu->gpr[2]-0x7d98);
+    if(wide>1 || !(top>0 && right>0 && far>near))return owned_stop(cpu,"HBM projection");
+    WiiMenuView view={0};view.projection[0]=1/right;view.projection[5]=1/top;
+    view.projection[10]=-1/(far-near);view.projection[11]=-far/(far-near);view.projection[15]=1;
+    view.width=view.clip_width=640;view.height=view.clip_height=480;view.far_depth=1;view.depth_func=7;
+    const u32 object=r32(cpu,0x804a6d30);
+    if(input_invalid || !object)return owned_stop(cpu,"HBM scene storage");
+    if(!ordered_boundary())return failure(cpu,"HBM prior work");
+    const int result=wii_mm9_hbm_draw(hbm_renderer,object,&view);
+    if(result<0)return failure(cpu,"HBM native scene submission");
+    if(!result){WiiMm9HbmStatus status={0};wii_mm9_hbm_status(hbm_renderer,&status);return owned_stop(cpu,status.error);}
+    cpu->pc=cpu->lr;++cpu->cycles;return 1;
+}
 static int owned_call(CPUState* cpu,u32 address) {
     const u32 p=address&0x1fffffff;if(WIILLR_MM9_RENDERER_MODE<2)return 0;
     if(p==0x9905c){if(cpu->cycles>=cpu->cycle_deadline)return 1;return owned_initialize(cpu);}
@@ -207,6 +239,7 @@ static int owned_call(CPUState* cpu,u32 address) {
         mem_write16(cpu,sdk+2,0);cpu->pc=cpu->lr;++cpu->cycles;return 1;
     }
     if(!owned.scope)return 0;
+    if(p==0x9b6fc)return owned_hbm(cpu);
     if(p!=0x99200 && p!=0x99394 && p!=0x995f0 && p!=0xd5990 && p!=0xe8024 && p!=0x83730)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;
     if(p==0x99200) {
