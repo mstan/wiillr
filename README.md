@@ -29,9 +29,11 @@ coordinates for margin sprites. The health meter retains its left-edge inset
 in widened views, using the original HUD wrapper's queue provenance. The host
 view follows the original screen color level, including fades; Original mode
 retains the original layout. The weapon screen stays centered, and modal layer
-reuse releases the parked world's camera binding. Other layer types, broader
-world/bounds coverage,
-actor activation/culling and additional HUD/menu routes still need qualification.
+reuse releases the parked world's camera binding. The stage scanner widens its
+horizontal admission, retention and respawn bounds with the selected view,
+preserving vertical/room bounds, once-only flags, allocation and original AI.
+Other layer types, broader world/bounds coverage, actor-specific culling and
+additional HUD/menu routes still need qualification.
 Rasterization uses prepared native atlas/map spans and per-frame RGB565 palettes;
 it resolves guest addresses before the pixel loops and observes next-frame edits.
 The Internal resolution setting selects an independent GPU raster for native

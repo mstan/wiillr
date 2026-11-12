@@ -45,6 +45,9 @@ static u32 hud_anchor_count;
 static int sprite_anchor;
 static bool hud_attested;
 static u64 hud_calls,hud_records;
+static bool spawn_attested;
+static u64 spawn_scans,spawn_bounds;
+static u32 spawn_radius=144;
 bool wii_mm9_renderer_view_supported(void) {
     return WIILLR_MM9_RENDERER_MODE>=2 && WIILLR_MM9_FRAME_MODE;
 }
@@ -60,6 +63,15 @@ bool wii_mm9_renderer_set_view(WiiGx* gx,WiiMm9View mode) {
 }
 static const u8* read_memory(void*,u32,u32);
 static u32 r32(CPUState*,u32);
+static bool current_view_width(u32* width) {
+    *width=view_enabled?view_fixed_width:256;
+    if(*width)return true;
+    u32 w,h;if(!owner->presentation->window_size(&w,&h) || !h)return false;
+    const double desired=256.0*0.75*(double)w/(double)h;
+    *width=desired>=WII_MM9_VIEW_MAX_WIDTH?WII_MM9_VIEW_MAX_WIDTH:
+        desired<=256?256:2u*(u32)(desired/2.0+0.5);
+    return true;
+}
 static bool prepare_view(CPUState* cpu) {
     view_ready=false;
     char error[192];const WiiMm9Memory memory={cpu,read_memory};
@@ -67,13 +79,7 @@ static bool prepare_view(CPUState* cpu) {
         if(wii_mm9_composite_prepare(memory,prepared,error,sizeof error))return true;
         fprintf(stderr,"Native MM9 compositor: %s\n",error);return false;
     }
-    u32 width=view_fixed_width;
-    if(!width) {
-        u32 w,h;if(!owner->presentation->window_size(&w,&h) || !h)return false;
-        const double desired=256.0*0.75*(double)w/(double)h;
-        width=desired>=WII_MM9_VIEW_MAX_WIDTH?WII_MM9_VIEW_MAX_WIDTH:
-            desired<=256?256:2u*(u32)(desired/2.0+0.5);
-    }
+    u32 width;if(!current_view_width(&width))return false;
     view_width=width;if(width==256) {
         if(wii_mm9_composite_prepare(memory,prepared,error,sizeof error))return true;
         fprintf(stderr,"Native MM9 compositor: %s\n",error);return false;
@@ -152,6 +158,23 @@ static int unsupported(CPUState* cpu,const char* why) {
     if(WIILLR_MM9_RENDERER_MODE!=2){cpu->halted=true;return 1;}return 0;
 }
 static int failure(CPUState* cpu,const char* why){++failed;fprintf(stderr,"Native MM9 failed: %s\n",why);cpu->halted=true;return 1;}
+u32 wii_mm9_renderer_spawn_radius(void) {
+    if(spawn_radius>144)++spawn_bounds;
+    return spawn_radius;
+}
+static int spawn_view(CPUState* cpu,u32 physical) {
+    if(physical!=0xea2e4)return 0;
+    spawn_radius=144;
+    if(!WIILLR_MM9_FRAME_MODE || WIILLR_MM9_RENDERER_MODE<2 ||
+       owner->title!=0x0001000157523945ull || !view_enabled)return 0;
+    u32 width;if(!current_view_width(&width))return failure(cpu,"stage activation view");
+    if(width<=256)return 0;
+    if(!spawn_attested)spawn_attested=identity(cpu,0x800ea2e4,0x58c,UINT64_C(0xdd263cb2aa60d5bc));
+    if(!spawn_attested)return failure(cpu,"stage activation function identity");
+    // Retain the original sixteen-pixel admission padding, vertical bounds,
+    // once-only flags, pool allocation and actor-specific activation/AI.
+    spawn_radius=width/2+16;++spawn_scans;return 0;
+}
 static bool frame_effects(CPUState* cpu,GcWiiNativeClear* clear,GcWiiNativeDisplayCopy* copy) {
 #if WIILLR_MM9_FRAME_MODE
     const int native=owned_effects(cpu,clear,copy,false);if(native)return native>0;
@@ -311,6 +334,7 @@ bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,co
     margin_sprite_count=0;sprite_attested=sprite_pending=false;
     sprite_calls=sprite_records=sprite_margins=sprite_oracle_checked=0;
     hud_anchor_count=0;hud_attested=false;sprite_anchor=0;hud_calls=hud_records=0;
+    spawn_attested=false;spawn_radius=144;spawn_scans=spawn_bounds=0;
     const char* sprite_check=getenv("WIILLR_MM9_SPRITES_ORACLE");
     sprite_oracle=sprite_check && !strcmp(sprite_check,"1");
 #if WIILLR_MM9_FRAME_MODE
@@ -325,11 +349,13 @@ void wii_mm9_renderer_hook_invalidate(u32 address,u32 size) {
     const u32 a=address&0x1fffffffu;if(((u64)a+size>(COMPOSITOR&0x1fffffffu) && a<(COMPOSITOR&0x1fffffffu)+0x108) || ((u64)a+size>(SCREEN&0x1fffffffu) && a<(SCREEN&0x1fffffffu)+0x21c))verified=false;
     if(a<0xe88e4 && (u64)a+size>0xe8700)sprite_attested=false;
     if(a<0x24748 && (u64)a+size>0x24620)hud_attested=false;
+    if(a<0xea870 && (u64)a+size>0xea2e4)spawn_attested=false;
 }
 int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
     if(WIILLR_MM9_RENDERER_MODE==0)return 0;
     if(!owner || owner->cpu!=cpu)return 0;const u32 physical=address&0x1fffffffu;
     const int sprite=sprite_call(cpu,physical);if(sprite)return sprite;
+    const int activation=spawn_view(cpu,physical);if(activation)return activation;
 #if WIILLR_MM9_FRAME_MODE
     const int frame=owned_call(cpu,address);if(frame)return frame;
 #endif
@@ -382,12 +408,14 @@ int wii_mm9_renderer_hook_dispatch(CPUState* cpu,u32 address) {
     const u32 p=address&0x1fffffffu;
 #if WIILLR_MM9_FRAME_MODE
     if(p==0x9905c || p==0x99200 || p==0x99394 || p==0x995f0 || p==0xd5990 || p==0xe8024 || p==0x83730 ||
-       p==0xe8700 || p==0xe88d8 || p==0xa7764 || p==0xa77c4)return 0;
+       p==0xe8700 || p==0xe88d8 || p==0xa7764 || p==0xa77c4 || p==0xea2e4)return 0;
 #endif
     return p==(SCREEN&0x1fffffffu)?0:wii_mm9_renderer_hook_call(cpu,address);
 }
 void wii_mm9_renderer_hook_stop(void) {
     if(!owner)return;WiiMm9ScreenStatus status={0};wii_mm9_screen_status(screen_renderer,&status);
+    printf("{\"native_mm9_activation\":1,\"wide_scans\":%llu,\"wide_bounds\":%llu,\"radius\":%u}\n",
+        (unsigned long long)spawn_scans,(unsigned long long)spawn_bounds,spawn_radius);
     printf("{\"native_mm9_sprites\":1,\"calls\":%llu,\"guest_records\":%llu,\"margin_records\":%llu,\"oracle_checked\":%llu}\n",
         (unsigned long long)sprite_calls,(unsigned long long)sprite_records,(unsigned long long)sprite_margins,(unsigned long long)sprite_oracle_checked);
     printf("{\"native_mm9_hud\":1,\"calls\":%llu,\"records\":%llu}\n",(unsigned long long)hud_calls,(unsigned long long)hud_records);

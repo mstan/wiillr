@@ -22,6 +22,7 @@ def main():
         pages['overlay_80099000_hB4A449361DFA7467.c']=[0x8009905c,0x80099200,0x80099394,0x800995f0]
         pages['overlay_8009D000_hD295BDE95AA6CA50.c']=[]
         pages['overlay_800E8000_hB0FDEF9B22C93FE2.c']=[0x800e8024,0x800e8700,0x800e88d8]
+        pages['overlay_800EA000_hA12005351E132861.c']=[0x800ea2e4]
         pages['overlay_800A7000_hF8A0C39E65D5F103.c']=[0x800a7764,0x800a77c4]
         pages['overlay_80083000_h748FAA87F633CA31.c']=[0x80083730]
         pages['overlay_80113000_hB4BBDB2F39E5B955.c']=[0x801131a8]
@@ -49,6 +50,41 @@ def main():
         marker=f'\nlabel_{address:08X}:\n'
         if text.count(marker)!=1:raise ValueError('Native frame marker missing or duplicated')
         text=text.replace(marker,marker+f'    wii_mm9_renderer_frame_marker(ctx,0x{address:08X}u);\n',1)
+    if source.name=='overlay_800EA000_hA12005351E132861.c':
+        # Preserve scan/allocation/flags and the original instruction clock.
+        # Admission, retention and respawn share the selected horizontal view.
+        for address,register,immediate,operator in (
+                (0x800ea358,0,-144,'-'),(0x800ea374,0,-144,'-'),(0x800ea394,15,144,'+')):
+            marker=f'\nlabel_{address:08X}:\n'
+            begin=text.index(marker)+len(marker);end=text.index('\nlabel_',begin)
+            original=f'ctx->gpr[{register}] = ctx->gpr[4] + (u32)(s32)({immediate});'
+            section=text[begin:end]
+            if section.count(original)!=1:raise ValueError('Original stage spawn bound differs')
+            section=section.replace(original,
+                f'ctx->gpr[{register}] = ctx->gpr[4] {operator} wii_mm9_renderer_spawn_radius();')
+            text=text[:begin]+section+text[end:]
+        for address,original,replacement in (
+            (0x800ea66c,'ctx->gpr[8] = ctx->gpr[10] + (u32)(s32)(384);',
+                'ctx->gpr[8] = ctx->gpr[10] + wii_mm9_renderer_spawn_radius() + 240u;'),
+            (0x800ea670,'u32 val_b = (u32)(0x0300u);',
+                'u32 val_b = 2u * (wii_mm9_renderer_spawn_radius() + 240u);'),
+            (0x800ea690,'ctx->gpr[8] = ctx->gpr[10] + (u32)(s32)(152);',
+                'ctx->gpr[8] = ctx->gpr[10] + wii_mm9_renderer_spawn_radius() + 8u;'),
+            (0x800ea694,'u32 val_b = (u32)(0x0130u);',
+                'u32 val_b = 2u * (wii_mm9_renderer_spawn_radius() + 8u);'),
+            (0x800ea6c0,'ctx->gpr[5] = ctx->gpr[5] + (u32)(s32)(152);',
+                'ctx->gpr[5] = ctx->gpr[5] + wii_mm9_renderer_spawn_radius() + 8u;'),
+            (0x800ea6c8,'u32 val_b = (u32)(0x0130u);',
+                'u32 val_b = 2u * (wii_mm9_renderer_spawn_radius() + 8u);'),
+            (0x800ea758,'ctx->gpr[0] = ctx->gpr[3] + (u32)(s32)(144);',
+                'ctx->gpr[0] = ctx->gpr[3] + wii_mm9_renderer_spawn_radius();'),
+            (0x800ea75c,'u32 val_b = (u32)(0x0120u);',
+                'u32 val_b = 2u * wii_mm9_renderer_spawn_radius();')):
+            marker=f'\nlabel_{address:08X}:\n'
+            begin=text.index(marker)+len(marker);end=text.index('\nlabel_',begin)
+            section=text[begin:end]
+            if section.count(original)!=1:raise ValueError('Original stage retention bound differs')
+            text=text[:begin]+section.replace(original,replacement)+text[end:]
     output.parent.mkdir(parents=True,exist_ok=True)
     encoded=text.encode('utf-8')
     if not output.exists() or output.read_bytes()!=encoded:output.write_bytes(encoded)
