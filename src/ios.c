@@ -557,6 +557,8 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
             u8* data=extent?ios_memory(cpu,output,&available):NULL;
             if(extent && (!data || available<extent))return 1;
             u32 actual=0;ios->result=wii_es_ticket_views(ios->fs,title,inputs==2?data:NULL,maximum,&actual);
+            if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"ES ticket views title=%016llx count=%u result=%d\n",
+                (unsigned long long)title,actual,ios->result);
             if(!ios->result) {
                 if(inputs==1)mem_write32_cia(cpu,output,actual,cpu->pc);
                 else for(u32 n=0;n<(actual<maximum?actual:maximum)*0xd8;n++)mem_write8_cia(cpu,output+n,data[n],cpu->pc);
