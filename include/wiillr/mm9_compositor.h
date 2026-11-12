@@ -25,8 +25,10 @@ typedef struct WiiMm9Frame {
  * This is an unqualified candidate until the original entry/copy gate passes. */
 int wii_mm9_composite_prepare(WiiMm9Memory,WiiMm9Frame*,char*,uint32_t);
 /* Optional host view, centered on the unchanged 256-column guest image.
- * Pixels beyond that image come from the actual wider tile maps and sprite
- * positions. This does not publish a wider guest texture or change simulation.
+ * The standard world loader's margins use mutable source metatiles with level
+ * bounds, bypassing stale rolling-cache columns. Other layers use their live
+ * maps, and sprites use queued positions. This does not publish a wider guest
+ * texture or change simulation.
  * Width must be even, 256..864. The output is tightly packed RGBA8, 240 rows.
  * Caller owns width*240*4 bytes. Failure leaves that output unchanged. */
 int wii_mm9_composite_view_prepare(WiiMm9Memory,uint32_t width,uint8_t* rgba,

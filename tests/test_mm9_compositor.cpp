@@ -79,6 +79,36 @@ int main() {
             require(view_pixel(x+44,y)==pixel(stock,x,y),"Wide view must preserve every original center pixel");
         require(view_pixel(44+256,8)==0x001f,"Right margin must read the next map page");
         require(view_pixel(44+260,18)==0x07e0,"Offscreen sprite must be visible in the new margin");
+        // The standard world loader's visible cache can be valid while its
+        // other half still contains old columns. Margins use mutable world
+        // metatiles, with level bounds, without changing the original center.
+        constexpr uint32_t scene=0x8031bf90,grid=0x8031c814,definitions=0x80504000,layout=0x80505000;
+        p32(scene+4,0x8009f1a8);p32(scene+0x5c,1);
+        p32(scene+0x20,definitions);p32(scene+0x28,layout);
+        p32(scene+0x14,16); // Published scroll can differ from the target at +34.
+        p32(0x8031c1e4,definitions);p32(0x8031c1e0,definitions+16);
+        p32(layout,0x02000201);p16(grid,32);
+        for(unsigned n=0;n<32*14;++n)p16(grid+4+n*2,1);
+        p16(definitions+8,0);p16(definitions+10,0x0040);
+        p16(definitions+12,0x0080);p16(definitions+14,0x00c0);
+        p16(0x80500004,0x07c0);fill(graphics+0x10000+64,32,0x22);
+        p16(config+0x10,16);
+        require(wii_mm9_composite_prepare(memory,&stock,error,sizeof error),error);
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        require(!std::memcmp(&stock,&combined,sizeof stock),"Direct world margins keep stock pixels/counters exact");
+        require(view_pixel(44-8,8)==0x001f && view_pixel(44+280,8)==0x001f,"Uncached margins come from real world cells");
+        require(view_pixel(44-16,8)==0xf800 && view_pixel(44-16,16)==0x07e0 &&
+                view_pixel(44-8,16)==0,"World metatile quadrants preserve order and transparency");
+        require(view_pixel(0,8)==0,"Negative world coordinates cannot wrap to the opposite side");
+        p16(grid+4+(296/16)*2,0);
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        require(view_pixel(44+280,8)==0xf800,"Mutable world cells update without refreshing the rolling cache");
+        p32(scene+0x14,256);p16(config+0x10,256);
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        require(view_pixel(44+280,8)==0,"World right edge cannot repeat cached foreground");
+        const auto valid_world=wide;p16(grid,31);
+        require(!wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error) && wide==valid_world,"Invalid world dimensions publish no partial view");
+        p32(scene+4,0);
         const auto before=wide;
         require(!wii_mm9_composite_view_prepare(memory,345,wide.data(),unsigned(wide.size()),error,sizeof error) && wide==before,"Invalid view must not partially publish");
         frame=original;p32(pool+0x808,pool+8);sprite(0,0,4,3,0,false,2);

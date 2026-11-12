@@ -34,7 +34,40 @@ void pixel(WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value) {
 struct Layer {
     unsigned width{},height{},priority{},slot{},mode{};
     uint32_t map{},tiles{},scroll{};unsigned u{},v{};
+    uint32_t world_grid{},world_definitions{};
+    unsigned world_stride{},world_width{},world_height{},world_count{};
+    int world_x{},world_y{};
 };
+void world_source(const Reader& r,unsigned id,Layer& layer) {
+    // WR9E's 8009f1a8 / 800c9704 loader expands mutable 16x16 world cells
+    // into a rolling 512-column cache. Read those cells directly for margins;
+    // cache contents outside the original viewport need not be current.
+    constexpr uint32_t state=0x8031bf70,grid=state+0x8a4;
+    for(unsigned n=0;n<4;++n) {
+        const auto object=state+0x20+n*0x94;
+        if(r.u32(object+0x5c)!=id || r.u32(object+4)!=0x8009f1a8 ||
+           r.u16(object+0xc) || layer.mode)continue;
+        const auto layout=r.u32(object+0x28),definitions=r.u32(object+0x20);
+        const auto attributes=r.u32(state+0x270);
+        need(layout && definitions && definitions==r.u32(state+0x274) &&
+             attributes>definitions && (attributes-definitions)%8==0,
+             "Unbound MM9 world definitions");
+        const unsigned columns=r.u8(layout+2),rows=r.u8(layout+3),stride=r.u16(grid);
+        need(columns && columns<=127 && rows && rows<=127 && stride==columns*16,
+             "Invalid MM9 world dimensions");
+        // These are the loader's published coordinates, including incremental
+        // scroll updates. Its target at +34/+38 can still name the prior cell.
+        layer.world_x=int32_t(r.u32(object+0x14));layer.world_y=int32_t(r.u32(object+0x18));
+        need((unsigned(layer.world_x)&511)==(layer.u&511) &&
+             (unsigned(layer.world_y)&511)==(layer.v&511),"MM9 world/cache origin mismatch");
+        layer.world_grid=grid+4;layer.world_definitions=definitions;
+        layer.world_stride=stride;layer.world_width=columns*256;layer.world_height=rows*224;
+        layer.world_count=(attributes-definitions)/8;
+        r.bytes(layer.world_grid,stride*rows*14*2);
+        r.bytes(definitions,attributes-definitions);
+        return;
+    }
+}
 struct Sprite {uint32_t tiles{},position{};unsigned width{},height{},palette{},priority{},kind{};int x{},y{};bool flip_x{},flip_y{},limited{};};
 template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put) {
     WiiMm9Frame out{};std::array<Layer,4> layers{};
@@ -52,6 +85,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put) 
         layer.mode=r.u8(backgrounds+0x90+order);layer.scroll=r.u32(backgrounds+0x94+order*4);
         need(layer.mode<=3 && (!layer.mode || layer.scroll),"Unbound MM9 per-line scroll mode");
         r.bytes(layer.map,(layer.width/8)*(layer.height/8)*2);r.bytes(layer.tiles,256*256/2);
+        if(width>256)world_source(r,id,layer);
     }
     const auto begin=r.u32(sprite_pool+0x80c),end=r.u32(sprite_pool+0x808);
     need(begin>=sprite_pool && end>=begin && end<=sprite_pool+0x800 && (end-begin)%8==0,"Invalid MM9 sprite pool span");
@@ -81,10 +115,20 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put) 
                 else if(layer.mode==3){const auto scroll=r.u32(layer.scroll+y*4);u=scroll&65535;v=scroll>>16;}
                 v=(v+y)&(layer.height-1);
                 for(unsigned x=0;x<width;++x) {
-                    const unsigned source_x=(u+x-unsigned(left))&(layer.width-1),page_x=source_x/256,page_y=v/256;
+                    unsigned source_x=(u+x-unsigned(left))&(layer.width-1),source_y=v;
+                    const unsigned page_x=source_x/256,page_y=v/256;
                     const unsigned tile=(page_y*(layer.width/256)+page_x)*1024+((v%256)/8)*32+(source_x%256)/8;
-                    const auto item=r.u16(layer.map+tile*2);const unsigned tx=(item>>6)&31,ty=item>>11;
-                    const auto px=(item&32)?7-(source_x&7):(source_x&7),py=(item&16)?7-(v&7):(v&7);
+                    uint16_t item;
+                    if(layer.world_grid && (x<unsigned(left) || x>=unsigned(left+256))) {
+                        const int wx=layer.world_x+int(x)-left,wy=layer.world_y+int(y);
+                        if(wx<0 || wy<0 || unsigned(wx)>=layer.world_width || unsigned(wy)>=layer.world_height)continue;
+                        const auto cell=r.u16(layer.world_grid+((unsigned(wy)/16)*layer.world_stride+unsigned(wx)/16)*2);
+                        need(cell<layer.world_count,"Invalid MM9 world metatile");
+                        item=r.u16(layer.world_definitions+cell*8+((unsigned(wy)/8)&1)*4+((unsigned(wx)/8)&1)*2);
+                        source_x=unsigned(wx);source_y=unsigned(wy);
+                    } else item=r.u16(layer.map+tile*2);
+                    const unsigned tx=(item>>6)&31,ty=item>>11;
+                    const auto px=(item&32)?7-(source_x&7):(source_x&7),py=(item&16)?7-(source_y&7):(source_y&7);
                     const auto index=nibble(r,layer.tiles,256,tx*8+px,ty*8+py);if(!index)continue;
                     put(out,x,y+8,color(r,0,item&15,index));if(x>=unsigned(left) && x<unsigned(left+256))++out.background_pixels;
                 }
