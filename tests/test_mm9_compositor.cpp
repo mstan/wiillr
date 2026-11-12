@@ -28,6 +28,47 @@ void fixture() {
     p16(0x80501004,0x07c0);p16(0x80501006,0x003e); // green and blue sprite palette
     p32(pool+0x80c,pool);p32(pool+0x808,pool);
 }
+void sprite_emitter_contract() {
+    fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
+    constexpr uint32_t object=0x80506000,position=0x80506100,camera=0x80506200,table=0x80506300;
+    p32(object+8,table);p32(object+0xc,position);p32(object+0x10,0x00050302);p32(object+0x14,512);
+    p32(position,250*256);p32(position+4,10*256);
+    p16(table,16);ram[(table+2)&0x1fffffff]=2;
+    p16(table+16,2);p16(table+18,0x0100);ram[(table+20)&0x1fffffff]=8;
+    p16(table+22,1);p16(table+24,0x0800);
+    p32(pool+4,0x2b);WiiMm9SpriteBatch batch{};
+    require(wii_mm9_sprites_prepare(memory,object,camera,&batch,error,sizeof error),error);
+    require(batch.admitted && batch.size==8 && batch.end==pool+8 && batch.margin_count==1,
+            "Native emitter preserves original crop and exposes uncropped components");
+    const uint8_t expected[]{0,6,3,6,2,0x8f,0xa2,0x2b};
+    require(!std::memcmp(batch.packed,expected,sizeof expected),"Original packed dimensions, palette, priority, coordinates and reserved bits");
+    const auto& margin=batch.margins[0];
+    require(margin.before==pool+8 && margin.x==258 && margin.y==10 && margin.width==8 && margin.height==16 &&
+            margin.tile==7 && margin.palette==3 && margin.priority==2 && margin.flags==4,"Margin packet has full coordinates and original insertion order");
+    require(ram[pool&0x1fffffff]==0 && read(nullptr,pool+4,4)[3]==0x2b,"Sprite preparation does not write guest RAM");
+    p32(object+0x14,0xe00);
+    require(wii_mm9_sprites_prepare(memory,object,camera,&batch,error,sizeof error),error);
+    require(batch.size==16 && !batch.margin_count && batch.packed[4]==0 && batch.packed[5]==0x8e &&
+            batch.packed[6]==0xae && batch.packed[7]==0x2b,"Object flips reflect component bounds and preserve packed flags");
+    p32(pool+0x808,pool+0x7f8);
+    require(wii_mm9_sprites_prepare(memory,object,camera,&batch,error,sizeof error),error);
+    require(!batch.admitted && !batch.size && !batch.margin_count,"Original whole-animation queue capacity check retained");
+    const auto unchanged=batch;p32(pool+0x808,pool+1);
+    require(!wii_mm9_sprites_prepare(memory,object,camera,&batch,error,sizeof error) &&
+            !std::memcmp(&batch,&unchanged,sizeof batch),"Invalid sprite cursor publishes no partial batch");
+
+    fixture();fill(sprite_graphics,32,0x22);fill(sprite_graphics+32,32,0x33);
+    fill(sprite_graphics+64,32,0x11);p16(0x80501002,0xf800);
+    sprite(0,0,254,3,0);sprite(1,0,254,3,1);
+    WiiMm9Frame stock{},combined{};std::vector<uint8_t> wide(344*240*4);
+    require(wii_mm9_composite_prepare(memory,&stock,error,sizeof error),error);
+    WiiMm9MarginSprite extra{pool+8,2,8,8,0,0,0,258,3};
+    auto render=[&](){require(wii_mm9_composite_present_sprites_prepare(memory,344,&extra,1,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        require(!std::memcmp(&stock,&combined,sizeof stock),"Margin packets cannot alter original stock pixels or counters");};
+    render();const auto pixel_at=[&](){const auto* p=wide.data()+((3+8)*344+44+258)*4;return uint16_t((p[0]>>3)<<11|(p[1]>>2)<<5|(p[2]>>3));};
+    require(pixel_at()==0x001f,"Margin sprite retains order before the following guest sprite");
+    extra.before=pool+16;render();require(pixel_at()==0xf800,"Margin sprite retains order after preceding guest sprites");
+}
 }
 int main() {
     try {
@@ -113,6 +154,7 @@ int main() {
         require(!wii_mm9_composite_view_prepare(memory,345,wide.data(),unsigned(wide.size()),error,sizeof error) && wide==before,"Invalid view must not partially publish");
         frame=original;p32(pool+0x808,pool+8);sprite(0,0,4,3,0,false,2);
         require(!wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)) && std::memcmp(&frame,&original,sizeof(frame))==0,"Unsupported sprite family must publish no partial texture");
+        sprite_emitter_contract();
         std::cout<<"MM9 logical tile/sprite compositor contracts passed; live copy/queue qualification pending\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

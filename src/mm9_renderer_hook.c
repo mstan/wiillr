@@ -34,6 +34,11 @@ static bool view_enabled,view_ready;
 static u32 view_fixed_width,view_width;
 static u8* view_rgba;
 static u32 view_capacity;
+static WiiMm9MarginSprite margin_sprites[4096];
+static WiiMm9SpriteBatch sprite_batch;
+static u32 margin_sprite_count;
+static bool sprite_attested,sprite_oracle,sprite_pending;
+static u64 sprite_calls,sprite_records,sprite_margins,sprite_oracle_checked;
 bool wii_mm9_renderer_view_supported(void) {
     return WIILLR_MM9_RENDERER_MODE>=2 && WIILLR_MM9_FRAME_MODE;
 }
@@ -42,6 +47,7 @@ bool wii_mm9_renderer_set_view(WiiGx* gx,WiiMm9View mode) {
        gx->title!=0x0001000157523945ull || mode<WII_MM9_VIEW_ORIGINAL || mode>WII_MM9_VIEW_FIT)
         return false;
     view_enabled=mode!=WII_MM9_VIEW_ORIGINAL;
+    if(!view_enabled)margin_sprite_count=0;
     view_fixed_width=mode==WII_MM9_VIEW_16_9?342:mode==WII_MM9_VIEW_21_9?448:0;
     view_ready=false;
     return true;
@@ -70,7 +76,8 @@ static bool prepare_view(CPUState* cpu) {
         void* next=realloc(view_rgba,bytes);if(!next)return false;
         view_rgba=next;view_capacity=bytes;
     }
-    if(!wii_mm9_composite_present_prepare(memory,width,prepared,view_rgba,view_capacity,error,sizeof error)) {
+    if(!wii_mm9_composite_present_sprites_prepare(memory,width,margin_sprites,margin_sprite_count,
+        prepared,view_rgba,view_capacity,error,sizeof error)) {
         fprintf(stderr,"Native MM9 view: %s\n",error);return false;
     }
     view_ready=true;return true;
@@ -172,6 +179,39 @@ static bool publish(CPUState* cpu,u32 address,const u8* bytes,u32 size) {
     u8* target=(u8*)read_memory(cpu,address,size);if(!target)return false;memcpy(target,bytes,size);const u32 physical=address&0x1fffffffu;gcn_native_code_content_dirty(physical,size);
     if(cpu->reserve_valid){const u32 reservation=gcn_reservation_key(cpu->reserve_addr)&~31u;if((u64)reservation+32>physical && reservation<(u64)physical+size)cpu->reserve_valid=false;}return true;
 }
+static int sprite_finish(CPUState* cpu) {
+    if(view_enabled && sprite_batch.margin_count) {
+        if(sprite_batch.margin_count>4096-margin_sprite_count || (margin_sprite_count &&
+           sprite_batch.margins[0].before<margin_sprites[margin_sprite_count-1].before))
+            return failure(cpu,"native margin sprite queue capacity/order");
+        memcpy(margin_sprites+margin_sprite_count,sprite_batch.margins,sprite_batch.margin_count*sizeof *margin_sprites);
+        margin_sprite_count+=sprite_batch.margin_count;
+    }
+    ++sprite_calls;sprite_records+=sprite_batch.size/8;sprite_margins+=sprite_batch.margin_count;return 0;
+}
+static int sprite_call(CPUState* cpu,u32 physical) {
+    if(WIILLR_MM9_RENDERER_MODE<2 || !WIILLR_MM9_FRAME_MODE || owner->title!=0x0001000157523945ull)return 0;
+    if(physical==0xa7764 || physical==0xa77c4) {margin_sprite_count=0;sprite_pending=false;return 0;}
+    if(physical==0xe88d8 && sprite_pending) {
+        sprite_pending=false;
+        const u8* actual=sprite_batch.size?read_memory(cpu,sprite_batch.address,sprite_batch.size):NULL;
+        if(r32(cpu,0x8037cc30)!=sprite_batch.end || (sprite_batch.size &&
+           (!actual || memcmp(actual,sprite_batch.packed,sprite_batch.size))))return failure(cpu,"original/native sprite queue mismatch");
+        ++sprite_oracle_checked;return sprite_finish(cpu);
+    }
+    if(physical!=0xe8700)return 0;
+    if(cpu->cycles>=cpu->cycle_deadline)return 1;
+    if(!sprite_attested)sprite_attested=identity(cpu,0x800e8700,0x1e4,UINT64_C(0x51a3a13c724ad69a));
+    if(!sprite_attested || sprite_pending)return failure(cpu,"sprite emitter identity/reentry");
+    char error[192];
+    if(!wii_mm9_sprites_prepare((WiiMm9Memory){cpu,read_memory},cpu->gpr[3],cpu->gpr[4],
+        &sprite_batch,error,sizeof error))return failure(cpu,error);
+    if(sprite_oracle){sprite_pending=true;return 0;}
+    if(sprite_batch.size && !publish(cpu,sprite_batch.address,sprite_batch.packed,sprite_batch.size))return failure(cpu,"native sprite queue publication");
+    if(sprite_batch.admitted){mem_write32(cpu,0x8037cc30,sprite_batch.end);cpu->gpr[3]=0x8037c428;}
+    if(sprite_finish(cpu))return 1;
+    cpu->pc=cpu->lr;++cpu->cycles;return 1;
+}
 static void overlay_write_byte(void* user,u32 address,u8 value){mem_write8(user,address,value);}
 bool wii_mm9_renderer_bind_hbm(const GcWiiNativeRenderApi* render,const GcWiiNativeGuiApi* gui,
     const GcWiiNativeGuiLayersApi* layers,const GcWiiNativeGuiMaskApi* mask,const GcWiiNativeGuiEffectsApi* effects) {
@@ -205,6 +245,7 @@ static bool retire_logical_inputs(CPUState* cpu) {
     if(!r8(cpu,0x80316d28+3) && r8(cpu,0x80316d28+4)<2) {
         for(u32 n=0;n<4;n++){const u32 slot=r32(cpu,0x80281e48+n*4)>>4;if(slot>3)return false;mem_write8(cpu,0x8039b190+0x90+slot,0);mem_write32(cpu,0x8039b190+0x94+slot*4,0);}
         mem_write32(cpu,0x8037c428+0x800,0x8037c428);mem_write32(cpu,0x8037c428+0x808,0x8037c428);mem_write32(cpu,0x8037c428+0x80c,0x8037c428);mem_write32(cpu,0x8037c428+0x810,0x8037cc28);
+          margin_sprite_count=0;
     }
     mem_write32(cpu,0x803b9308,prepared->final_sprite_count);mem_write32(cpu,0x803b930c,0);return !input_invalid;
 }
@@ -239,6 +280,10 @@ bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,co
     overlay_renderer=wii_mm9_overlay_create(memory,overlay_write_byte,render);
     if(!screen_renderer || !overlay_renderer || !prepared){wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;return false;}
     owner=gx;frame_api=frame;output_api=NULL;verified=oracle_pending=false;frames=uncovered=failed=oracle_checked=oracle_different=0;oracle_max_delta=0;
+    margin_sprite_count=0;sprite_attested=sprite_pending=false;
+    sprite_calls=sprite_records=sprite_margins=sprite_oracle_checked=0;
+    const char* sprite_check=getenv("WIILLR_MM9_SPRITES_ORACLE");
+    sprite_oracle=sprite_check && !strcmp(sprite_check,"1");
 #if WIILLR_MM9_FRAME_MODE
     owned_reset();
 #endif
@@ -249,10 +294,12 @@ void wii_mm9_renderer_hook_invalidate(u32 address,u32 size) {
     owned_invalidate(address,size);
 #endif
     const u32 a=address&0x1fffffffu;if(((u64)a+size>(COMPOSITOR&0x1fffffffu) && a<(COMPOSITOR&0x1fffffffu)+0x108) || ((u64)a+size>(SCREEN&0x1fffffffu) && a<(SCREEN&0x1fffffffu)+0x21c))verified=false;
+    if(a<0xe88e4 && (u64)a+size>0xe8700)sprite_attested=false;
 }
 int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
     if(WIILLR_MM9_RENDERER_MODE==0)return 0;
     if(!owner || owner->cpu!=cpu)return 0;const u32 physical=address&0x1fffffffu;
+    const int sprite=sprite_call(cpu,physical);if(sprite)return sprite;
 #if WIILLR_MM9_FRAME_MODE
     const int frame=owned_call(cpu,address);if(frame)return frame;
 #endif
@@ -301,12 +348,15 @@ int wii_mm9_renderer_hook_dispatch(CPUState* cpu,u32 address) {
      * both the external dispatcher and that label. */
     const u32 p=address&0x1fffffffu;
 #if WIILLR_MM9_FRAME_MODE
-    if(p==0x9905c || p==0x99200 || p==0x99394 || p==0x995f0 || p==0xd5990 || p==0xe8024 || p==0x83730)return 0;
+    if(p==0x9905c || p==0x99200 || p==0x99394 || p==0x995f0 || p==0xd5990 || p==0xe8024 || p==0x83730 ||
+       p==0xe8700 || p==0xe88d8 || p==0xa7764 || p==0xa77c4)return 0;
 #endif
     return p==(SCREEN&0x1fffffffu)?0:wii_mm9_renderer_hook_call(cpu,address);
 }
 void wii_mm9_renderer_hook_stop(void) {
     if(!owner)return;WiiMm9ScreenStatus status={0};wii_mm9_screen_status(screen_renderer,&status);
+    printf("{\"native_mm9_sprites\":1,\"calls\":%llu,\"guest_records\":%llu,\"margin_records\":%llu,\"oracle_checked\":%llu}\n",
+        (unsigned long long)sprite_calls,(unsigned long long)sprite_records,(unsigned long long)sprite_margins,(unsigned long long)sprite_oracle_checked);
     WiiMm9HbmStatus hbm={0};wii_mm9_hbm_status(hbm_renderer,&hbm);
     printf("{\"native_mm9_hbm\":1,\"scenes\":%llu,\"rejected\":%llu}\n",(unsigned long long)hbm.scenes,(unsigned long long)hbm.rejected);
     wii_mm9_hbm_destroy(hbm_renderer);hbm_renderer=NULL;

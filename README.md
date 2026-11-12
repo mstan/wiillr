@@ -23,9 +23,10 @@ resuming. With the native MM9 frame provider, View offers Original 4:3, 16:9,
 21:9 and adaptive Fit to screen. Fresh settings default to Fit to screen;
 explicit saved choices persist. Resume preserves a manually resized window.
 The standard foreground loader's margins read mutable world metatiles directly,
-with level rectangle bounds. Other layers use the game's cached maps, and sprites
-come from its original queue. Other layer types, broader world/bounds coverage,
-margin entities and HUD placement still need qualification.
+with level rectangle bounds. Other layers use the game's cached maps. A native
+animation emitter preserves the CPU-visible sprite queue while retaining full
+coordinates for margin sprites. Other layer types, broader world/bounds coverage,
+actor activation/culling and HUD placement still need qualification.
 It does not increase internal resolution; render scale remains unconnected.
 F10 presses the virtual console's Sync button for first-time Remote pairing.
 
