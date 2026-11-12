@@ -17,6 +17,9 @@ int main(void) {
     s.player_src[0]=0;input.buttons=~0u;CHECK(!wii_launcher_input_map(&s,&input).buttons);
     s.player_src[0]=2;input.buttons=0;
     CHECK(!wii_launcher_input_map(&s,&input).buttons); /* keyboard source isolated */
+    keys[SDL_SCANCODE_F10]=true;
+    CHECK(wii_launcher_input_map(&s,&input).buttons==0x20); /* physical console Sync */
+    keys[SDL_SCANCODE_F10]=false;
     s.player_pad_bind[0][5]=RECOMP_LAUNCHER_PAD_AXIS(SDL_GAMEPAD_AXIS_LEFT_TRIGGER,1);
     input.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER]=1000;
     CHECK(!(wii_launcher_input_map(&s,&input).buttons&0x100));

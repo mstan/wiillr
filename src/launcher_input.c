@@ -70,6 +70,9 @@ GcnllrPad wii_launcher_input_map(const RecompLauncherCSettings* s,const WiiLaunc
         }
         if(held)pad.buttons|=pad_bits[b];
     }
+    /* Console Sync is separate from the Remote's gameplay button bindings.
+     * Keep a way to pair a fresh copied NAND even with a gamepad selected. */
+    if(key_down(input,SDL_SCANCODE_F10))pad.buttons|=0x20;
     if(s->player_src[0]==1) {
         pad.substick_x=(uint8_t)(128+100*((int)key_down(input,SDL_SCANCODE_L)-(int)key_down(input,SDL_SCANCODE_J)));
         pad.substick_y=(uint8_t)(128+100*((int)key_down(input,SDL_SCANCODE_I)-(int)key_down(input,SDL_SCANCODE_K)));
@@ -134,7 +137,7 @@ void wii_launcher_input_poll(void* user,GcnllrPad* pad) {
     const RecompLauncherCSettings* s=user;
     WiiLauncherInput input={0};
     SDL_Window* focus=SDL_GetKeyboardFocus();
-    if(s->player_src[0]==1 && focus && !strcmp(SDL_GetWindowTitle(focus),"Mega Man 9")) {
+    if(focus && !strcmp(SDL_GetWindowTitle(focus),"Mega Man 9")) {
         input.keys=SDL_GetKeyboardState(&input.key_count);
         if(SDL_GetMouseFocus()==focus)input.mouse=SDL_GetMouseState(NULL,NULL);
     }

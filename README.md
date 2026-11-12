@@ -17,6 +17,7 @@ deadzone and button remaps reach gameplay and persist in the same INI store.
 The original D-pad assignments also accept the left stick; remapping or
 unbinding a direction removes that alias. Mouse IR and its A/B buttons remain
 available. Runtime UI, render scale and widescreen are not yet connected.
+F10 presses the virtual console's Sync button for first-time Remote pairing.
 
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
 with gcnllr. Initial targets are the original Startup Menu and Mega Man 9.
