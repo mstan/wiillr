@@ -13,7 +13,7 @@
 #define SYSTEM_FRAMEWORK 0x8108907cu
 #define GRAPHICS_ARG 0x810897c0u
 static struct {
-    WiiGx* owner;const GcWiiNativeRenderApi* render;const GcWiiNativeFrameApi* frame;
+    WiiGx* owner;const GcWiiNativeRenderApi* render;const GcWiiNativeFrameApi* frame;const GcWiiNativeCaptureApi* capture;
     WiiMenuView view;float model[12];bool active,bad,projection_ready;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,uncovered,failed,fifo_start,fifo_bytes;
 } state;
@@ -185,6 +185,9 @@ bool wii_menu_frame_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcW
     memset(&state,0,sizeof state);state.owner=gx;state.render=render;state.frame=frame;
     state.view.depth_flags=GC_WII_NATIVE_DEPTH_TEST|GC_WII_NATIVE_DEPTH_WRITE;state.view.depth_func=7;return true;
 }
+void wii_menu_frame_capture(const GcWiiNativeCaptureApi* api) {
+    state.capture=api && api->abi==GC_WII_NATIVE_CAPTURE_ABI?api:NULL;
+}
 int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;state.bad=false;
@@ -216,6 +219,14 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     } else if(address==0x81362d3c || address==0x81362fbc) {
         if(!identity(cpu,address,address==0x81362d3c?0x26c:0x2e0,address==0x81362d3c?UINT64_C(0x55ddc65ee9f6e70f):UINT64_C(0xa44dc2f4069a6270)))return stop(cpu,"utility draw identity",false);
         const int drawn=utility_quad(cpu,address);if(drawn!=1)return stop(cpu,"utility draw input/submission",drawn<0);
+    } else if(address==0x8136339c) {
+        if(!identity(cpu,address,0xc0,UINT64_C(0x76b8cf20247ebf19)) || !state.active || !state.capture || cpu->gpr[4]>1)
+            return stop(cpu,"channel texture capture identity/provider",false);
+        const u32 object=cpu->gpr[3];
+        const GcWiiNativeTextureCopy copy={.destination=word(cpu,object+0x10),.x=half(cpu,object),.y=half(cpu,object+2),
+            .width=half(cpu,object+4),.height=half(cpu,object+6),.format=word(cpu,object+8)};
+        if(state.bad)return stop(cpu,"channel texture capture object",false);
+        if(!frontier() || !state.capture->texture_copy(&copy))return stop(cpu,"channel texture capture submission",true);
     } else if(address==0x815f7170) {
         if(!identity(cpu,address,0x298,UINT64_C(0xd8d23825eaf80f93)))return stop(cpu,"fader identity",false);
         const int drawn=fader(cpu,cpu->gpr[3]);if(drawn!=1)return stop(cpu,"fader input/submission",drawn<0);

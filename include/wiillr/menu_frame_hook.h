@@ -13,6 +13,7 @@ extern "C" {
  * callers must stop rather than resume through an omitted GX setup. */
 int wii_menu_frame_current_view(CPUState*,WiiMenuView*);
 bool wii_menu_frame_start(WiiGx*,const GcWiiNativeRenderApi*,const GcWiiNativeFrameApi*);
+void wii_menu_frame_capture(const GcWiiNativeCaptureApi*);
 void wii_menu_frame_stop(void);
 int wii_menu_frame_entry(CPUState*,uint32_t);
 #ifdef __cplusplus

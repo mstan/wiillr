@@ -81,6 +81,8 @@ owner independently of the original frame body. `reference` retains the same
 derived entry seams and native pane providers while executing the original
 frame body. `native` replaces graphics initialization, view/layout setup,
 channel-thumbnail clipping, utility/fader quads, display copies and completion.
+Channel texture snapshots use the typed native capture extension with coherent
+memory and immutable copy ownership, without constructing guest GX commands.
 It publishes typed view state to Picture and Text instead of reconstructing
 the SDK's command caches. The original scene traversal, visibility changes,
 keyboard draw, controller reads, animation, sound calculation and VI wait/order

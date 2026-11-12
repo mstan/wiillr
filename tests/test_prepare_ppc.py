@@ -11,9 +11,9 @@ class DolPages(unittest.TestCase):
         for index,offset,address,size in ((0,0x100,0x80001004,8),(1,0x108,0x90002000,4),(7,0x10c,0x8000100c,4)):
             for at,value in ((index*4,offset),(0x48+index*4,address),(0x90+index*4,size)):struct.pack_into('>I',data,at,value)
         struct.pack_into('>I',data,0xe0,0x80001004);data[0x100:0x110]=bytes.fromhex('600000004e8000204e80002012345678');return data
-    def prepare(self,data):
+    def prepare(self,data,ranges=()):
         with tempfile.TemporaryDirectory() as root:
-            path=Path(root)/'original.dol';path.write_bytes(data);return module.dol_text_pages(path)
+            path=Path(root)/'original.dol';path.write_bytes(data);return module.dol_text_pages(path,ranges)
     def test_all_text_and_shared_data(self):
         pages,record=self.prepare(self.image());self.assertEqual(record['pages'],2)
         main=next(value[0] for name,value in pages.items() if name.startswith('80001000'))
@@ -30,6 +30,15 @@ class DolPages(unittest.TestCase):
     def test_physical_entry_into_cached_text(self):
         image=self.image();struct.pack_into('>I',image,0xe0,0x1004)
         pages,record=self.prepare(image);self.assertEqual(record['entry'],0x1004);self.assertEqual(len(pages),2)
+    def test_explicit_initialized_code_range(self):
+        image=self.image()+bytes.fromhex('4e800020')*1024
+        for at,value in ((7*4,0x140),(0x48+7*4,0x80300000),(0x90+7*4,4096)):
+            struct.pack_into('>I',image,at,value)
+        pages,record=self.prepare(image,[(0x80300000,0x80301000)])
+        self.assertEqual(record['code_ranges'],[(0x80300000,0x80301000)])
+        self.assertEqual(next(value[0] for name,value in pages.items() if name.startswith('80300000')),bytes.fromhex('4e800020')*1024)
+        for span in ((0x80300000,0x80302000),(0x80300004,0x80301000),(0x80300000,0x80300000),(0x80400000,0x80401000)):
+            with self.assertRaisesRegex(ValueError,'Code range'):self.prepare(image,[span])
 
 class PreparedCatalog(unittest.TestCase):
     def fixture(self,root):

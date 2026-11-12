@@ -24,7 +24,7 @@ def catalog_pages(path):
     if not pages:raise ValueError('Empty prepared catalog')
     return pages,dict(path=str(root),receipt_sha256=sha(receipt),pages=len(pages))
 
-def dol_text_pages(path):
+def dol_text_pages(path,code_ranges=()):
     """Original initialized DOL bytes, not an execution/boot-state capture.
 
     Fill page-sharing data sections too: the runtime verifies the complete
@@ -55,22 +55,33 @@ def dol_text_pages(path):
     physical_entry=entry&0x3fffffff
     if entry&3 or entry&0xc0000000==0x40000000 or not any(s['physical']<=physical_entry<s['physical']+s['size'] for s in text):
         raise ValueError('DOL entry outside text')
+    # Some original loaders label initialized executable code as DOL data.
+    # Explicit ranges include its original full pages without changing the
+    # image, boot state, section metadata or runtime content verification.
+    selected=list(text)
+    for start,end in code_ranges:
+        if start&4095 or end&4095 or start>=end or end>0x100000000 or not any(
+                s['address']<=start and end<=s['address']+s['size'] for s in sections):
+            raise ValueError('Code range must be complete pages inside one initialized DOL section')
+        selected.append(dict(address=start,size=end-start))
     pages={}
-    for section in text:
+    for section in selected:
         for address in range(section['address']&~4095,(section['address']+section['size']+4095)&~4095,4096):
             page=bytes(loaded[address&0x3fffffff]);name=f'{address:08x}_{zlib.crc32(page):08x}.bin'
             pages[name]=(page,hashlib.sha256(page).hexdigest())
-    return pages,dict(path=str(path),sha256=sha(path),entry=entry,text_sections=text,pages=len(pages))
+    return pages,dict(path=str(path),sha256=sha(path),entry=entry,text_sections=text,code_ranges=list(code_ranges),pages=len(pages))
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--capture',type=Path,action='append',default=[],
                    help='Verified original execution; repeat to retain earlier loader variants')
     p.add_argument('--dol',type=Path,action='append',default=[],help='Original DOL: union every initialized text page with captured variants')
+    p.add_argument('--dol-code-range',nargs=2,type=lambda value:int(value,0),action='append',default=[],metavar=('START','END'),help='Explicit page-aligned executable range inside each original initialized DOL')
     p.add_argument('--catalog',type=Path,action='append',default=[],help='Previously verified preparation root; repeat to combine title catalogs')
     p.add_argument('--compiler',type=Path,required=True)
     p.add_argument('--work-root',type=Path,required=True)
     args=p.parse_args();compiler=args.compiler.resolve(strict=True)
     if not args.capture and not args.dol and not args.catalog:p.error('Supply an original DOL, verified capture or prepared catalog')
+    if args.dol_code_range and not args.dol:p.error('DOL code ranges require an original DOL')
     pages={};captures=[];journals=[];title_identity=None;dols=[];catalogs=[]
     for source in args.catalog:
         original,record=catalog_pages(source);catalogs.append(record)
@@ -118,7 +129,7 @@ def main():
                 raise ValueError('Miss instruction/page identity differs')
         if strict_stop and not misses:raise ValueError('Strict-stop capture contains no original code miss')
     for source in args.dol:
-        original,record=dol_text_pages(source.resolve(strict=True));dols.append(record)
+        original,record=dol_text_pages(source.resolve(strict=True),args.dol_code_range);dols.append(record)
         for name,value in original.items():
             if name in pages and pages[name][0]!=value[0]:raise ValueError('Conflicting original DOL page identity')
             pages[name]=value
