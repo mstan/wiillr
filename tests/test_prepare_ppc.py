@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """ROM-free whole-text page preparation, including shared initialized data."""
-import importlib.util,struct,tempfile,unittest,zlib
+import hashlib,importlib.util,json,struct,tempfile,unittest,zlib
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('prepare_ppc',Path(__file__).resolve().parents[1]/'tools/prepare_ppc.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -30,5 +30,31 @@ class DolPages(unittest.TestCase):
     def test_physical_entry_into_cached_text(self):
         image=self.image();struct.pack_into('>I',image,0xe0,0x1004)
         pages,record=self.prepare(image);self.assertEqual(record['entry'],0x1004);self.assertEqual(len(pages),2)
+
+class PreparedCatalog(unittest.TestCase):
+    def fixture(self,root):
+        page=bytes.fromhex('60000000')*1024
+        name=f'80001000_{zlib.crc32(page):08x}.bin'
+        (root/'pages').mkdir();(root/'pages'/name).write_bytes(page)
+        identity=dict(cpu='broadway',pc_namespaces='preserved',pages={name:hashlib.sha256(page).hexdigest()})
+        (root/'prepared.json').write_text(json.dumps(identity))
+        return name,page,identity
+    def test_verified_page_and_receipt_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);name,page,_=self.fixture(root)
+            pages,record=module.catalog_pages(root)
+            self.assertEqual(pages[name][0],page);self.assertEqual(record['pages'],1)
+            self.assertEqual(record['receipt_sha256'],module.sha(root/'prepared.json'))
+    def test_changed_page_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);name,page,_=self.fixture(root)
+            (root/'pages'/name).write_bytes(bytes(4096))
+            with self.assertRaisesRegex(ValueError,'Changed prepared'):module.catalog_pages(root)
+    def test_wrong_namespace_and_unsafe_name_rejected(self):
+        for field,value in [('pc_namespaces','canonical'),('cpu','gekko'),('pages',{'../outside.bin':'0'*64})]:
+            with tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);_,_,identity=self.fixture(root);identity[field]=value
+                (root/'prepared.json').write_text(json.dumps(identity))
+                with self.assertRaises(ValueError):module.catalog_pages(root)
 
 if __name__=='__main__':unittest.main()

@@ -13,6 +13,12 @@
 namespace {
 constexpr uint32_t sdk_pointer=0x81695618;
 void need(bool b,const char* why){if(!b)throw std::runtime_error(why);}
+[[noreturn]] void unknown_material(uint32_t pane,uint32_t material,const uint8_t* equation,unsigned bytes=32) {
+    char text[256],hex[65];
+    for(unsigned n=0;n<bytes;++n)std::snprintf(hex+n*2,3,"%02x",equation[n]);
+    std::snprintf(text,sizeof text,"Wii Menu equation needs another native material family (pane=%08x material=%08x stages=%s)",pane,material,hex);
+    throw std::runtime_error(text);
+}
 void message(char* out,uint32_t size,const char* why){if(out && size)std::snprintf(out,size,"%s",why);}
 struct Reader {
     WiiMenuMemory memory;
@@ -88,7 +94,7 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
     const Counts cap(r.u32(material+0x4c)),num(r.u32(material+0x50));
     const bool layered=num.textures==3 && num.generators==3 && num.stages==3 && !num.ind_stages;
     const bool single_image=num.textures==1 && num.generators==1 && num.stages==1 && !num.ind_stages;
-    enum class Single{None,Shadow,OpaqueRange,AlphaRange,Raster};Single single=Single::None;
+    enum class Single{None,Shadow,SolidCoverage,OpaqueRange,AlphaRange,Raster};Single single=Single::None;
     const bool range_tint=num.textures==1 && num.generators==1 && num.stages==2 && !num.ind_stages;
     const bool masked=num.textures==2 && num.generators==2 && num.stages==2 && !num.ind_stages;
     need(layered || single_image || masked || range_tint || (num.textures<=1 && num.generators==num.textures && !num.stages && !num.ind_stages),"Wii Menu material requires a broader native shader family");
@@ -108,6 +114,8 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
             1,4,1,0,0xff,0x0f,0,0x61,0x77,0x47,0,0xe1,0,0,0,0};
         constexpr uint8_t coverage_last_a[]{0,4,0,0,0x42,0xf8,0,0x61,0x77,0x77,0,0xe1,0,0,0,0,
             1,4,1,0,0xff,0x0f,0,0x61,0x74,0x77,0,0xe1,0,0,0,0};
+        constexpr uint8_t pane_coverage[]{0,4,0,0,0x42,0xf8,0,0x61,0x77,0x77,0,0xe1,0,0,0,0,
+            1,4,1,0,0xaf,0xf0,0,0x61,0x77,0x47,0,0xe1,0,0,0,0};
         constexpr uint8_t additive[]{0,4,0,0,0x24,0xf8,0,0x61,0x75,0x77,0,0xe1,0,0,0,0,
             1,4,1,0,0x6f,0x08,0,0x61,0x75,0x77,0,0xe1,0,0,0,0};
         constexpr uint8_t product[]{0,4,0,0,0xff,0xff,0,0x61,0x77,0x47,0,0xe1,0,0,0,0,
@@ -116,23 +124,26 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
         const auto* equation=r.bytes(stages,32);
         if(!std::memcmp(equation,rgba_mask,32)){out.mask.flags=GC_WII_NATIVE_GUI_MASK_RGB;mask_register_opacity=true;}
         else if(!std::memcmp(equation,coverage_first,32))color_texture=1;
+        else if(!std::memcmp(equation,pane_coverage,32))out.mask.flags=GC_WII_NATIVE_GUI_MASK_PANE_RGB;
         else if(!std::memcmp(equation,additive,32))out.effect=2;
         else if(!std::memcmp(equation,product,32)){out.effect=3;color_texture=1;}
-        else need(!std::memcmp(equation,coverage_last,32) || !std::memcmp(equation,coverage_last_a,32),"Wii Menu coverage equation needs another native material family");
+        else if(std::memcmp(equation,coverage_last,32) && std::memcmp(equation,coverage_last_a,32))unknown_material(pane,material,equation);
         out.needs_mask=out.effect==0;
     }
     if(single_image) {
         constexpr uint8_t mask[]{0,4,0,0,0xff,0x2f,0,0x61,0x17,0x74,0,0xe1,0,0,0,0};
+        constexpr uint8_t solid_coverage[]{0,4,0,0,0xff,0x2f,0,0x61,0x77,0x47,0,0xe1,0,0,0,0};
         constexpr uint8_t opaque[]{0,4,0,0,0x42,0xf8,0,0x61,0x77,0x27,0,0xe1,0,0,0,0};
         constexpr uint8_t alpha_range[]{0,0xff,0,0,0xff,0x4f,0,0xf8,0x21,0x74,0,0xf8,0,0,0,0};
         constexpr uint8_t raster[]{0xff,4,0xff,0,0xfa,0xff,0,0x61,0x75,0x77,0,0xe1,0,0,0,0};
         const auto stages=blend+cap.blend*4+cap.ind_stages*4+cap.ind_srts*20;
         const auto* equation=r.bytes(stages,16);
         if(!std::memcmp(equation,mask,16))single=Single::Shadow;
+        else if(!std::memcmp(equation,solid_coverage,16))single=Single::SolidCoverage;
         else if(!std::memcmp(equation,opaque,16))single=Single::OpaqueRange;
         else if(!std::memcmp(equation,alpha_range,16))single=Single::AlphaRange;
         else if(!std::memcmp(equation,raster,16))single=Single::Raster;
-        else need(false,"Wii Menu single-image equation needs another native material family");
+        else unknown_material(pane,material,equation,16);
     }
     if(range_tint) {
         constexpr uint8_t tinted[]{0,0xff,0,0,0x42,0xf8,0,0xf8,0x21,0x74,0,0xf8,0,0,0,0,
@@ -178,6 +189,12 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
         for(unsigned c=0;c<3;++c)out.color.high[c]=out.color.low[c];
         out.color.high[3]=out.color.low[3];out.color.low[3]=0;out.needs_gui=1;
     }
+    if(single==Single::SolidCoverage) {
+        // Channel-transition silhouettes use solid C0 RGB and the texture's
+        // alpha directly, independent of both color-register and pane alpha.
+        for(unsigned c=0;c<3;++c)out.color.high[c]=out.color.low[c];
+        out.color.low[3]=0;out.color.high[3]=255;out.needs_gui=1;
+    }
     if(single==Single::OpaqueRange){out.color.low[3]=out.color.high[3];out.needs_gui=1;}
     if(single==Single::AlphaRange){for(unsigned c=0;c<3;++c)out.color.low[c]=out.color.high[c];out.needs_gui=1;}
     if(single==Single::Raster)out.needs_gui=0;
@@ -203,7 +220,9 @@ WiiMenuPicture prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenu
     for(unsigned v=0;v<4;++v) {
         auto& vertex=out.vertices[v];vertex.position[0]=xs[v];vertex.position[1]=ys[v];
         for(unsigned ch=0;ch<4;++ch) {
-            if((single_image && single!=Single::Raster) || (masked && (ch<3 || out.effect!=2)) || (out.effect==1 && ch<3)){vertex.color[ch]=1.f;continue;}
+            if((single_image && single!=Single::Raster) ||
+               (masked && ((ch<3 && !(out.mask.flags&GC_WII_NATIVE_GUI_MASK_PANE_RGB)) || (ch==3 && out.effect!=2))) ||
+               (out.effect==1 && ch<3)){vertex.color[ch]=1.f;continue;}
             unsigned value=(ch==3?alpha_source:color_source)?(quad?quad->colors[v][ch]:r.u8(pane+0xd4+color_index[v]*4+ch)):material_color[ch];
             if(ch==3 && alpha_source)value=value*global_alpha/255;
             vertex.color[ch]=float(value)/255.f;

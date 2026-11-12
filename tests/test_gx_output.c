@@ -53,8 +53,22 @@ int main(void) {
     publish(7,0x10000000,32,1,32,0x47);assert(cpu.mem2[3]==0x47 && materials[7]==1 && releases[7]==1);
     publish(8,0x4000,32,2,32,0x48);
     assert(wii_gx_output_present(&gx,0x4000,16,2,32)==1 && !materials[8]);
+    /* Foreign graphics APIs may read padding while holding a device lock.
+     * They must be told about the entire protected page before entry, so
+     * their memcpy cannot reenter the GPU through our fault handler. */
+    publish(9,0x5020,32,1,32,0x49);
+    assert(wii_gx_output_pending(&gx,0x80005fff,1));
+    assert(wii_gx_output_prepare(&gx,0x80005fff,1));
+    MEMORY_BASIC_INFORMATION info;
+    assert(VirtualQuery(cpu.ram+0x5000,&info,sizeof info) && info.Protect==PAGE_READWRITE);
+    assert(materials[9]==1 && releases[9]==1 && raw[0x5020]==0x49 && raw[0x5fff]==0xe5);
+    publish(10,0x6020,32,1,32,0x4a);
+    assert(wii_gx_output_pending(&gx,0x80005fff,2));
+    assert(wii_gx_output_prepare(&gx,0x80005fff,2));
+    assert(VirtualQuery(cpu.ram+0x6000,&info,sizeof info) && info.Protect==PAGE_READWRITE);
+    assert(materials[10]==1 && releases[10]==1 && raw[0x6020]==0x4a && raw[0x6000]==0xe5);
     assert(wii_gx_output_close(&gx));assert(raw[0x4003]==0x48 && materials[8]==1 && releases[8]==1);
-    assert(gx.copies==8 && dirty>0 && !gx.output);
+    assert(gx.copies==10 && dirty>0 && !gx.output);
     gcn_mem1_release(cpu.ram);free(cpu.mem2);return 0;
 }
 #else

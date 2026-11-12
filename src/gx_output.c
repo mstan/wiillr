@@ -131,8 +131,15 @@ int wii_gx_output_pending(void* user,u32 address,u32 size) {
 }
 int wii_gx_output_prepare(void* user,u32 address,u32 size) {
     WiiGx* g=user;Output* o=g->output;const u32 at=address&0x1fffffff;
-    return !o || at>=g->cpu->ram_size || (!o->failed && GetCurrentThreadId()==o->thread &&
-        gcn_resident_memory_prepare_read(o->memory,at,size) && protect(o,true));
+    if(!o || at>=g->cpu->ram_size)return 1;
+    if(o->failed || GetCurrentThreadId()!=o->thread || size>g->cpu->ram_size-at)return 0;
+    if(!size)return 1;
+    /* VirtualProtect guards complete pages, including padding outside the
+     * retained rows. Prepare those pages before a foreign GPU API accesses
+     * them; a fault inside its device lock cannot safely reenter the GPU. */
+    const u32 first=at/o->page_size*o->page_size;
+    const u32 end=(u32)(((u64)at+size+o->page_size-1)/o->page_size*o->page_size);
+    return gcn_resident_memory_prepare_read(o->memory,first,end-first) && protect(o,true);
 }
 int wii_gx_output_present(WiiGx* g,u32 address,u32 width,u32 height,u32 stride) {
     Output* o=g->output;if(!o)return 0;const u32 at=address&0x1fffffff;GcnResidentCopy c;

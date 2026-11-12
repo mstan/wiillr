@@ -18,6 +18,9 @@ static bool active;
 static RecompLauncherCGameInfo game_info;
 static char config_path[32768],boot_image[32768];
 static bool settings_key_held,input_release;
+static const char* game_caption(const WiiGx* gx) {
+    return gx->title==0x0000000100000002ull?"Wii Menu":"Mega Man 9";
+}
 
 static bool set_env(const char* name,const char* value) {
 #ifdef _WIN32
@@ -151,9 +154,10 @@ static bool session_settings(void* user) {
 static void session_input(void* user,GcnllrPad* pad) {
     WiiGx* gx=user;
     SDL_Window* focus=SDL_GetKeyboardFocus();
-    const bool focused=focus && !strcmp(SDL_GetWindowTitle(focus),"Mega Man 9");
+    const bool focused=focus && !strcmp(SDL_GetWindowTitle(focus),game_caption(gx));
     int count=0;const bool* keys=SDL_GetKeyboardState(&count);
-    const bool pressed=focused && keys && count>SDL_SCANCODE_F1 && keys[SDL_SCANCODE_F1];
+    const bool pressed=gx->title==0x0001000157523945ull && focused &&
+        keys && count>SDL_SCANCODE_F1 && keys[SDL_SCANCODE_F1];
     const bool open=pressed && !settings_key_held;
     settings_key_held=pressed;
     if(open)(void)session_settings(gx);
@@ -172,13 +176,13 @@ static void session_input(void* user,GcnllrPad* pad) {
 bool wii_launcher_window(WiiGx* gx) {
     if(!active)return true;
     gx->host_input_user=gx;gx->host_input=session_input;
-    gx->host_settings=session_settings;
+    gx->host_settings=gx->title==0x0001000157523945ull?session_settings:NULL;
     gx->host_input_stop=wii_launcher_input_stop;
     int count=0;SDL_Window** windows=SDL_GetWindows(&count);
     bool ok=false;
     for(int i=0;windows && i<count;++i) {
         SDL_Window* window=windows[i];
-        if(strcmp(SDL_GetWindowTitle(window),"Mega Man 9"))continue;
+        if(strcmp(SDL_GetWindowTitle(window),game_caption(gx)))continue;
         if(settings.fullscreen==2) {
             SDL_DisplayMode mode;
             if(!SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window),

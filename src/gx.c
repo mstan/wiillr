@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/gx.h"
 #include "wiillr/pointer.h"
+#include "wiillr/remote_input.h"
+#include "wiillr/fs.h"
 #include "wiillr/gx_output.h"
 #include "memory/memory.h"
 #include "cpu/native_code.h"
@@ -9,6 +11,7 @@
 #include <string.h>
 #if WIILLR_MENU_PICTURES
 #include "wiillr/menu_picture_hook.h"
+#include "wiillr/menu_frame_hook.h"
 #endif
 #if WIILLR_MM9_RENDERER
 #include "wiillr/mm9_renderer_hook.h"
@@ -60,6 +63,7 @@ static int fifo(void* user,const u8* bytes,u32 size) {WiiGx* g=user;return g->ap
 static void drain(void* user) {WiiGx* g=user;if(!g->api->drain())g->cpu->halted=true;}
 bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const char* data,const char* cache) {
     memset(g,0,sizeof *g);g->machine=m;g->cpu=cpu;
+    if(m->ios.fs)(void)wii_fs_boot_title(m->ios.fs,&g->title);
 #if WIILLR_GX_SOFTWARE
     extern const GcnllrNativeGxApi* wii_gx_software_api(WiiMachine*,CPUState*);
     if(library && strcmp(library,"software"))return false;
@@ -76,6 +80,10 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     if(!get || !(g->api=get(GCNLLR_NATIVE_GX_ABI))) {wii_gx_stop(g);return false;}
 #endif
     const char* title=getenv("WIILLR_WINDOW_TITLE"),*window=getenv("WIILLR_WINDOW");
+    if(!title || !strcmp(title,"Mega Man 9") || !strcmp(title,"Wii Menu")) {
+        if(g->title==0x0001000157523945ull)title="Mega Man 9";
+        else if(g->title==0x0000000100000002ull)title="Wii Menu";
+    }
     g->visible=window && !strcmp(window,"1");
 #if WIILLR_GX_SOFTWARE
     /* Reference scanout is available through the machine's TCP interface. */
@@ -113,30 +121,31 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     const GcWiiNativeRenderApi* native_api=native_get?native_get(GC_WII_NATIVE_RENDER_ABI):NULL;
 #ifdef _WIN32
     GcWiiNativeGuiGetApi gui_get=(GcWiiNativeGuiGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_get_api");
+    GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_layers_get_api");
+    GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_mask_get_api");
+    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_effects_get_api");
 #else
     GcWiiNativeGuiGetApi gui_get=(GcWiiNativeGuiGetApi)dlsym(g->library,"gc_wii_native_gui_get_api");
+    GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)dlsym(g->library,"gc_wii_native_gui_layers_get_api");
+    GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)dlsym(g->library,"gc_wii_native_gui_mask_get_api");
+    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)dlsym(g->library,"gc_wii_native_gui_effects_get_api");
 #endif
     const GcWiiNativeGuiApi* gui_api=gui_get?gui_get(GC_WII_NATIVE_GUI_ABI):NULL;
 #if WIILLR_MENU_PICTURES
     if(!wii_menu_picture_hook_start(g,native_api,gui_api)){wii_gx_stop(g);return false;}
+    if(layers_get)wii_menu_picture_hook_layers(layers_get(GC_WII_NATIVE_GUI_LAYERS_ABI));
+    if(mask_get)wii_menu_picture_hook_mask(mask_get(GC_WII_NATIVE_GUI_MASK_ABI));
+    if(effects_get)wii_menu_picture_hook_effects(effects_get(GC_WII_NATIVE_GUI_EFFECTS_ABI));
 #endif
-#if WIILLR_MM9_RENDERER
+#if WIILLR_MM9_RENDERER || WIILLR_MENU_FRAME_ACTIVE
 #ifdef _WIN32
     GcWiiNativeFrameGetApi frame_get=(GcWiiNativeFrameGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_frame_get_api");
 #else
     GcWiiNativeFrameGetApi frame_get=(GcWiiNativeFrameGetApi)dlsym(g->library,"gc_wii_native_frame_get_api");
 #endif
     const GcWiiNativeFrameApi* frame_api=frame_get?frame_get(GC_WII_NATIVE_FRAME_ABI):NULL;
+#if WIILLR_MM9_RENDERER
     if(!wii_mm9_renderer_hook_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
-#ifdef _WIN32
-    GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_layers_get_api");
-    GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_mask_get_api");
-    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_effects_get_api");
-#else
-    GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)dlsym(g->library,"gc_wii_native_gui_layers_get_api");
-    GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)dlsym(g->library,"gc_wii_native_gui_mask_get_api");
-    GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)dlsym(g->library,"gc_wii_native_gui_effects_get_api");
-#endif
     if(!wii_mm9_renderer_bind_hbm(native_api,gui_api,
         layers_get?layers_get(GC_WII_NATIVE_GUI_LAYERS_ABI):NULL,
         mask_get?mask_get(GC_WII_NATIVE_GUI_MASK_ABI):NULL,
@@ -151,6 +160,10 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
         const GcWiiNativeOutputApi* output=output_get?output_get(GC_WII_NATIVE_OUTPUT_ABI):NULL;
         if(!output){wii_gx_stop(g);return false;}wii_mm9_renderer_bind_output(output);
     }
+#endif
+#endif
+#if WIILLR_MENU_FRAME_ACTIVE
+    if(!wii_menu_frame_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
 #endif
 #endif
 #endif
@@ -190,19 +203,7 @@ bool wii_gx_tick(WiiGx* g) {
         GcnllrPad pad=status.pad;
         if(g->host_input)g->host_input(g->host_input_user,&pad);
         if(g->host_input_capture)status.pointer.valid=false;
-        /* Sideways remote: X/South jumps (2), Z/East shoots (1), Enter
-         * presses Plus. Arrow keys/left stick drive the rotated D-pad. */
-        if(pad.buttons&0x100)next.buttons|=0x100;
-        if(pad.buttons&0x200)next.buttons|=0x200;
-        if(pad.buttons&0x400)next.buttons|=0x800;
-        if(pad.buttons&0x800)next.buttons|=0x400;
-        if(pad.buttons&0x1000)next.buttons|=0x10;
-        if(pad.buttons&0x10)next.buttons|=0x8000;
-        if(pad.buttons&0x40)next.buttons|=0x1000;
-        if(pad.stick_x<80 || (pad.buttons&1))next.buttons|=8;
-        if(pad.stick_x>176 || (pad.buttons&2))next.buttons|=4;
-        if(pad.stick_y>176 || (pad.buttons&8))next.buttons|=2;
-        if(pad.stick_y<80 || (pad.buttons&4))next.buttons|=1;
+        next.buttons=wii_remote_buttons(&pad,g->title==0x0001000157523945ull);
         int x=(int)next.pointer_x-((int)pad.substick_x-128)/16;
         int y=(int)next.pointer_y-((int)pad.substick_y-128)/16;
         next.pointer_x=(u16)(x<0?0:x>1023?1023:x);next.pointer_y=(u16)(y<0?0:y>767?767:y);
@@ -240,6 +241,7 @@ void wii_gx_stop(WiiGx* g) {
     wii_mm9_renderer_hook_stop();
 #endif
 #if WIILLR_MENU_PICTURES
+    wii_menu_frame_stop();
     wii_menu_picture_hook_stop();
 #endif
     if(g->machine) {g->machine->gx_fifo=NULL;g->machine->gx_user=NULL;gcn_gp_set_drain_hook(&g->machine->gp,NULL,NULL);}

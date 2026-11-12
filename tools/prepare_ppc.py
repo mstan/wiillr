@@ -1,11 +1,28 @@
 # SPDX-License-Identifier: MIT
 """Compile verified discovery pages; they are code inputs, never boot state."""
-import argparse, hashlib, json, os, struct
+import argparse, hashlib, json, os, re, struct
 from pathlib import Path
 import subprocess, sys, zlib
 
 ROOT=Path(__file__).resolve().parents[1]
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def catalog_pages(path):
+    """Union previously prepared titles without changing their PC namespaces."""
+    root=path.resolve(strict=True);receipt=root/'prepared.json'
+    identity=json.loads(receipt.read_text())
+    if identity.get('cpu')!='broadway' or identity.get('pc_namespaces')!='preserved':
+        raise ValueError('Expected a preserved-namespace Broadway catalog')
+    pages={}
+    for name,digest in identity['pages'].items():
+        if not re.fullmatch(r'[0-9a-f]{8}_[0-9a-f]{8}\.bin',name):
+            raise ValueError('Invalid prepared code-page name')
+        data=(root/'pages'/name).read_bytes()
+        if len(data)!=4096 or hashlib.sha256(data).hexdigest()!=digest or f'{zlib.crc32(data):08x}'!=name[9:17]:
+            raise ValueError('Changed prepared code page')
+        pages[name]=(data,digest)
+    if not pages:raise ValueError('Empty prepared catalog')
+    return pages,dict(path=str(root),receipt_sha256=sha(receipt),pages=len(pages))
 
 def dol_text_pages(path):
     """Original initialized DOL bytes, not an execution/boot-state capture.
@@ -49,11 +66,18 @@ def main():
     p.add_argument('--capture',type=Path,action='append',default=[],
                    help='Verified original execution; repeat to retain earlier loader variants')
     p.add_argument('--dol',type=Path,action='append',default=[],help='Original DOL: union every initialized text page with captured variants')
+    p.add_argument('--catalog',type=Path,action='append',default=[],help='Previously verified preparation root; repeat to combine title catalogs')
     p.add_argument('--compiler',type=Path,required=True)
     p.add_argument('--work-root',type=Path,required=True)
     args=p.parse_args();compiler=args.compiler.resolve(strict=True)
-    if not args.capture and not args.dol:p.error('Supply an original DOL or verified capture')
-    pages={};captures=[];journals=[];title_identity=None;dols=[]
+    if not args.capture and not args.dol and not args.catalog:p.error('Supply an original DOL, verified capture or prepared catalog')
+    pages={};captures=[];journals=[];title_identity=None;dols=[];catalogs=[]
+    for source in args.catalog:
+        original,record=catalog_pages(source);catalogs.append(record)
+        for name,value in original.items():
+            if name in pages and pages[name][0]!=value[0]:raise ValueError('Conflicting prepared code-page identity')
+            pages[name]=value
+            journals.append(json.dumps(dict(event='prepared_code_page',pc=int(name[:8],16),receipt_sha256=record['receipt_sha256']))+'\n')
     for source in args.capture:
         capture=source.resolve();run=json.loads((capture/'run.json').read_text())
         strict_stop=run.get('execution')=='PPC-static-native' and run.get('exit_code')==2
@@ -121,7 +145,7 @@ def main():
         subprocess.run(command,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
     chunks=sorted((work/'generated/chunks').glob('*.c'))
     if len(chunks)!=len(pages):raise ValueError('Some original code variants were not compiled')
-    identity=dict(captures=captures,dol_inputs=dols,journal_sha256=sha(journal_path),
+    identity=dict(captures=captures,dol_inputs=dols,catalog_inputs=catalogs,journal_sha256=sha(journal_path),
         compiler=dict(path=str(compiler),sha256=sha(compiler)),
         generator_sha256=sha(generator),pages={name:v[1] for name,v in pages.items()},
         generated={str(path.relative_to(work)):sha(path) for path in sorted((work/'generated').glob('**/*')) if path.is_file()},

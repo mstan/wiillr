@@ -164,6 +164,12 @@ void units() {
     ram[(pane&0x1fffffff)+0xce]=1;p16(material+0x2a,80);
     require(wii_menu_native_draw_picture(shadow,pane,info,&view)==1 && uploads==shadow_uploads+1 && last_gui.high[3]==80,"Shadow opacity and unused pane animation must reuse geometry");
     wii_menu_native_destroy(shadow);
+    custom_stage(mem+76,0,{15,15,15,2},{7,7,7,4});
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.needs_gui && out.color.low[0]==20 && out.color.high[0]==20 &&
+        out.color.low[1]==30 && out.color.high[1]==30 && out.color.low[3]==0 && out.color.high[3]==255 &&
+        out.vertices[0].color[0]==1 && out.vertices[0].color[3]==1,
+        "Channel silhouette keeps solid register RGB and direct texture alpha despite register/pane opacity");
     custom_stage(mem+76,0,{2,4,8,15},{7,7,7,2});
     p16(material+0x24,20);p16(material+0x2c,200);p16(material+0x2a,10);p16(material+0x32,180);
     require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
@@ -198,6 +204,12 @@ void units() {
     require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && out.mask.opacity==255 && out.mask.flags==0,"Coverage-last material");
     custom_stage(mem+148,1,{15,15,15,0},{4,7,7,7});
     require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),"Equivalent direct-alpha coverage material");
+    custom_stage(mem+148,1,{15,10,0,15},{7,7,7,4});
+    require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
+    require(out.mask.flags==GC_WII_NATIVE_GUI_MASK_PANE_RGB && out.mask.opacity==255 &&
+        out.vertices[0].color[0]==1 && out.vertices[0].color[1]==0 &&
+        out.vertices[1].color[0]==0 && out.vertices[1].color[1]==1 && out.vertices[0].color[3]==1,
+        "Channel transition retains pane RGB without multiplying pane alpha");
     const auto mask_previous=out;ram[0x884+6]=1;
     require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&mask_previous,sizeof out),"Unsupported mask operation must reject atomically");
     // The same one-image allocation can select the authored threshold effect.

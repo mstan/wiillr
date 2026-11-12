@@ -13,6 +13,7 @@ typedef struct {
     const GcWiiNativePresentationApi* presentation;
     WiiMachine* machine;
     CPUState* cpu;
+    u64 title;
     u64 copies,scanouts,last_service;
     u32 scanout_address,scanout_width,scanout_height,scanout_stride;
     bool visible,input_sent,mouse_active,quit;
