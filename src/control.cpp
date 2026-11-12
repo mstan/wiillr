@@ -172,6 +172,13 @@ struct WiiControl {
         ",\"dsp_interpreter\":"+std::to_string(dsp.interpreter_instructions)+",\"dsp_misses\":"+std::to_string(dsp.misses)+"}";
     }
     if(args[0]=="pause" && args.size()==1){paused=true;stop_at=0;return "{\"ok\":true}";}
+    if(args[0]=="review" && args.size()==3) {
+      const auto volume=number(args[2],10);
+      if(!paused || (args[1]!="show" && args[1]!="hide") || volume>100 ||
+         !gx->host_review || !gx->host_review(gx->host_input_user,args[1]=="show",u32(volume)))
+        throw std::runtime_error("paused review window unavailable");
+      return "{\"ok\":true}";
+    }
     if(args[0]=="fingerprint" && args.size()==1)return fingerprint();
     if(args[0]=="scheduler" && args.size()==1) {
       const auto& domains=machine->domains;

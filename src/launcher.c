@@ -153,6 +153,21 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     wii_launcher_input_reset();active=true;return 0;
 }
 
+static bool session_review(void* user,bool visible,u32 volume) {
+    WiiGx* gx=user;
+    if(gx->title!=0x0001000157523945ull || volume>100)return false;
+    int count=0;SDL_Window** windows=SDL_GetWindows(&count);bool ok=false;
+    for(int i=0;windows && i<count;++i) {
+        if(strcmp(SDL_GetWindowTitle(windows[i]),game_caption(gx)))continue;
+        ok=visible?(SDL_SetWindowFullscreen(windows[i],false) && SDL_ShowWindow(windows[i])):
+            SDL_HideWindow(windows[i]);
+        break;
+    }
+    SDL_free(windows);
+    if(!ok || !gcn_host_audio_set_volume(volume))return false;
+    settings.enable_audio=1;settings.volume=(int)volume;
+    wii_pacing_reset(&gx->machine->pacing);return true;
+}
 static bool session_settings(void* user) {
     WiiGx* gx=user;
     /* This callback runs between fields on the simulation/graphics owner.
@@ -218,6 +233,7 @@ bool wii_launcher_window(WiiGx* gx) {
 #endif
     gx->host_input_user=gx;gx->host_input=session_input;
     gx->host_settings=gx->title==0x0001000157523945ull?session_settings:NULL;
+    gx->host_review=gx->title==0x0001000157523945ull?session_review:NULL;
     gx->host_input_stop=wii_launcher_input_stop;
     /* Audio/input edits and Resume preserve a manually resized Fit window. */
     if(!resize)return true;

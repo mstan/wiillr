@@ -187,7 +187,10 @@ code variants with matching title/profile identities.
 provides `status`, `pause`, `run [guest-cycles]`, `input mask [x y pointing present
 pairing]`, `sync`, `read hex-address byte-count`, `write hex-address hex-bytes`,
 `frame` and `quit`. With the shared launcher attached, paused `settings` opens
-the same in-session settings. Frame capture drains actual GPU work without advancing guest
+the same in-session settings. Paused `review show 100` reveals the MM9 window
+in windowed mode at normal host volume; `review hide 0` parks it silently for
+scenario setup. These commands affect the current process's window and gain,
+without advancing guest execution. Frame capture drains actual GPU work without advancing guest
 time; `--frame-output` optionally saves a PNG using Pillow. RAM commands reject
 MMIO and out-of-range requests. A pause preserves guest time and device state.
 
