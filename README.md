@@ -16,7 +16,10 @@ stay in their existing profile. Keyboard/gamepad source, device selection,
 deadzone and button remaps reach gameplay and persist in the same INI store.
 The original D-pad assignments also accept the left stick; remapping or
 unbinding a direction removes that alias. Mouse IR and its A/B buttons remain
-available. Runtime UI, render scale and widescreen are not yet connected.
+available. F1 opens the shared settings during play. The game pauses behind
+them; Resume or closing the settings window returns to the same point, while
+Quit Game exits. Display, input and host volume edits persist and apply when
+resuming. Render scale and widescreen controls are not yet connected.
 F10 presses the virtual console's Sync button for first-time Remote pairing.
 
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
@@ -156,7 +159,8 @@ code variants with matching title/profile identities.
 `WIILLR_CONTROL_PAUSED=1` parks before the first instruction. `tools/wii_control.py`
 provides `status`, `pause`, `run [guest-cycles]`, `input mask [x y pointing present
 pairing]`, `sync`, `read hex-address byte-count`, `write hex-address hex-bytes`,
-`frame` and `quit`. Frame capture drains actual GPU work without advancing guest
+`frame` and `quit`. With the shared launcher attached, paused `settings` opens
+the same in-session settings. Frame capture drains actual GPU work without advancing guest
 time; `--frame-output` optionally saves a PNG using Pillow. RAM commands reject
 MMIO and out-of-range requests. A pause preserves guest time and device state.
 

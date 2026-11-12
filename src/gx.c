@@ -181,11 +181,15 @@ bool wii_gx_tick(WiiGx* g) {
     GcnllrNativeGxStatus status={0};g->api->status(&status);
     g->quit=status.quit!=0;
     if(g->quit)return !status.failed;
-    if(g->visible && g->machine->ios.bluetooth && (!g->input_sent || g->input_field!=g->machine->fields)) {
+    /* Explicit scripted input is authoritative, including with a launcher
+     * window. Do not overwrite its reports with background host controls. */
+    if(g->visible && !getenv("WIILLR_INPUT_SCRIPT") && g->machine->ios.bluetooth &&
+       (!g->input_sent || g->input_field!=g->machine->fields)) {
         g->input_field=g->machine->fields;
         WiiBluetoothInput next=g->input;next.buttons=0;
         GcnllrPad pad=status.pad;
         if(g->host_input)g->host_input(g->host_input_user,&pad);
+        if(g->host_input_capture)status.pointer.valid=false;
         /* Sideways remote: X/South jumps (2), Z/East shoots (1), Enter
          * presses Plus. Arrow keys/left stick drive the rotated D-pad. */
         if(pad.buttons&0x100)next.buttons|=0x100;
@@ -227,7 +231,7 @@ bool wii_gx_tick(WiiGx* g) {
 }
 void wii_gx_stop(WiiGx* g) {
     if(g->host_input_stop)g->host_input_stop(g->host_input_user);
-    g->host_input=NULL;g->host_input_stop=NULL;g->host_input_user=NULL;
+    g->host_input=NULL;g->host_input_stop=NULL;g->host_settings=NULL;g->host_input_user=NULL;
     if(g->machine && g->machine->hollywood.video_user==g) {
         g->machine->hollywood.idle_dimming=NULL;g->machine->hollywood.video_user=NULL;
     }

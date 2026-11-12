@@ -80,6 +80,8 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
     result = dict(executable=identity(executable), gx_library=identity(library),
                   inputs=identity(args.inputs), epoch=args.epoch, command=command,
                   host_audio_output=env['GCN_AUDIO'] == '1', checkpoints=[])
+    if getattr(args, 'launcher', False):
+        command.insert(1, '--launcher')
     process = None
     control = None
     try:
@@ -113,7 +115,10 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
                 print(f'{root.name}: cycle {point["cycles"]}, fields {point["fields"]}', flush=True)
             if after_checkpoints is not None:
                 after_checkpoints(control, process)
-            control.command('quit')
+            if process.poll() is None:
+                control.command('quit')
+            elif not getattr(args, 'allow_clean_exit', False):
+                raise RuntimeError('Native process stopped before capture exit')
             if process.wait(timeout=20):
                 raise RuntimeError('Native process exited unsuccessfully')
     finally:

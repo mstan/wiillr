@@ -6,6 +6,7 @@
 #include "launcher_profile.h"
 #include "launcher_settings.h"
 #include "sha256.h"
+#include "host/host_audio.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,9 @@
 static RecompLauncherCSettings settings;
 static unsigned char expected[1][32];
 static bool active;
+static RecompLauncherCGameInfo game_info;
+static char config_path[32768],boot_image[32768];
+static bool settings_key_held,input_release;
 
 static bool set_env(const char* name,const char* value) {
 #ifdef _WIN32
@@ -74,20 +78,19 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
         puts("{\"launcher_title_verified\":true,\"window_opened\":false}");
         return 0;
     }
-    char config[32768];
     const char* directory=getenv("WIILLR_USER_DIR");
     char* pref=NULL;
     if(!directory || !*directory) {
         pref=SDL_GetPrefPath("RetroPortingToolKit","Mega Man 9");directory=pref;
     }
-    if(!directory || snprintf(config,sizeof config,"%s/config.ini",directory)>=(int)sizeof config) {
+    if(!directory || snprintf(config_path,sizeof config_path,"%s/config.ini",directory)>=(int)sizeof config_path) {
         SDL_free(pref);return 2;
     }
     RecompLauncherCGameInfo game={0};
     launcher_profile_apply("wii",&game);
     game.name="Mega Man 9";game.region="USA";
     game.known_sha256=(const uint8_t(*)[32])expected;game.num_known_sha256=1;
-    game.num_players=1;game.config_path=config;
+    game.num_players=1;game.config_path=config_path;
     game.settings_bindings=1;
     memset(&settings,0,sizeof settings);
     settings.window_scale=2;settings.enable_audio=1;settings.audio_freq=32000;
@@ -109,25 +112,73 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
         fprintf(stderr,"launcher: launch unavailable or selected content is unsupported\n");
         return 2;
     }
-    char volume[8];snprintf(volume,sizeof volume,"%d",settings.volume);
+    if(strlen(selected)>=sizeof boot_image)return 2;
+    strcpy(boot_image,selected);game_info=game;game_info.default_settings=NULL;
+    char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
     if(!set_env("WIILLR_WINDOW","1") || !set_env("GCN_WINDOW","1") ||
        !set_env("WIILLR_WINDOW_TITLE","Mega Man 9") ||
        !set_env("GCN_AUDIO_VOLUME",volume))return 2;
-    /* An explicit automation override remains authoritative. */
-    if(!getenv("GCN_AUDIO") && !set_env("GCN_AUDIO",settings.enable_audio?"1":"0"))return 2;
+    /* Keep the host session available for live unmute; the user's audio
+     * switch controls host gain. Guest audio and explicit QA overrides stay. */
+    if(!getenv("GCN_AUDIO") && !set_env("GCN_AUDIO","1"))return 2;
     wii_launcher_input_reset();active=true;return 0;
+}
+
+static bool session_settings(void* user) {
+    WiiGx* gx=user;
+    /* This callback runs between fields on the simulation/graphics owner.
+     * The shared in-session launcher freezes that owner until RESUME. */
+    if(!gx->api->drain()) {gx->cpu->halted=true;return false;}
+    SDL_Window* gl_window=SDL_GL_GetCurrentWindow();
+    SDL_GLContext gl_context=SDL_GL_GetCurrentContext();
+    RecompLauncherCGameInfo in_session=game_info;in_session.in_session=1;
+    char selected[32768];
+    const int action=recomp_launcher_run_window("Mega Man 9 Settings",&settings,
+        &in_session,NULL,boot_image,selected,sizeof selected);
+    if(gl_context && !SDL_GL_MakeCurrent(gl_window,gl_context))gx->cpu->halted=true;
+    if(action==RECOMP_LAUNCHER_RESULT_UNAVAILABLE)return false;
+    wii_launcher_input_reset();
+    char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
+    if(!set_env("GCN_AUDIO_VOLUME",volume) ||
+       !gcn_host_audio_set_volume((u32)(settings.enable_audio?settings.volume:0)) ||
+       !wii_launcher_window(gx))gx->cpu->halted=true;
+    wii_pacing_reset(&gx->machine->pacing);
+    input_release=true;
+    if(action==RECOMP_LAUNCHER_RESULT_QUIT)gx->quit=true;
+    return !gx->cpu->halted;
+}
+
+static void session_input(void* user,GcnllrPad* pad) {
+    WiiGx* gx=user;
+    SDL_Window* focus=SDL_GetKeyboardFocus();
+    const bool focused=focus && !strcmp(SDL_GetWindowTitle(focus),"Mega Man 9");
+    int count=0;const bool* keys=SDL_GetKeyboardState(&count);
+    const bool pressed=focused && keys && count>SDL_SCANCODE_F1 && keys[SDL_SCANCODE_F1];
+    const bool open=pressed && !settings_key_held;
+    settings_key_held=pressed;
+    if(open)(void)session_settings(gx);
+    wii_launcher_input_poll(&settings,pad);
+    const bool controls_held=pressed || pad->buttons || pad->stick_x!=128 ||
+        pad->stick_y!=128 || pad->substick_x!=128 || pad->substick_y!=128 ||
+        (focused && SDL_GetMouseState(NULL,NULL));
+    if(input_release && !controls_held)input_release=false;
+    gx->host_input_capture=input_release;
+    if(input_release) {
+        memset(pad,0,sizeof *pad);
+        pad->stick_x=pad->stick_y=pad->substick_x=pad->substick_y=128;
+    }
 }
 
 bool wii_launcher_window(WiiGx* gx) {
     if(!active)return true;
-    gx->host_input_user=&settings;gx->host_input=wii_launcher_input_poll;
+    gx->host_input_user=gx;gx->host_input=session_input;
+    gx->host_settings=session_settings;
     gx->host_input_stop=wii_launcher_input_stop;
     int count=0;SDL_Window** windows=SDL_GetWindows(&count);
     bool ok=false;
     for(int i=0;windows && i<count;++i) {
         SDL_Window* window=windows[i];
         if(strcmp(SDL_GetWindowTitle(window),"Mega Man 9"))continue;
-        if(SDL_GetWindowFlags(window)&SDL_WINDOW_HIDDEN)continue;
         if(settings.fullscreen==2) {
             SDL_DisplayMode mode;
             if(!SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window),

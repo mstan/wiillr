@@ -22,6 +22,8 @@ typedef struct {
     void* host_input_user;
     void (*host_input)(void*,GcnllrPad*);
     void (*host_input_stop)(void*);
+    bool (*host_settings)(void*); /* optional owner-thread in-session UI */
+    bool host_input_capture; /* host menu holds input until its controls release */
 } WiiGx;
 bool wii_gx_start(WiiGx*,WiiMachine*,CPUState*,const char* library,const char* data,const char* cache);
 bool wii_gx_tick(WiiGx*);

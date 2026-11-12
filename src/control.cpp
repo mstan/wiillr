@@ -264,6 +264,12 @@ struct WiiControl {
       return "{\"ok\":true,\"width\":"+std::to_string(frame.width)+",\"height\":"+std::to_string(frame.height)+",\"stride\":"+
         std::to_string(frame.stride)+",\"data\":\""+hex(frame.bytes,frame.size)+"\"}";
     }
+    if(args[0]=="settings" && args.size()==1) {
+      if(!paused || !gx->host_settings || !gx->host_settings(gx->host_input_user))
+        throw std::runtime_error("settings unavailable");
+      if(gx->quit){quit=true;paused=false;}
+      return "{\"ok\":true}";
+    }
     if(args[0]=="window" && args.size()==3) {
       const auto width=number(args[1],10),height=number(args[2],10);
       if(!paused || width>8192 || height>8192 || !gx->presentation ||
