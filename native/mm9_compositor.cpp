@@ -36,8 +36,9 @@ struct Layer {
     uint32_t map{},tiles{},scroll{};unsigned u{},v{};
 };
 struct Sprite {uint32_t tiles{},position{};unsigned width{},height{},palette{},priority{},kind{};int x{},y{};bool flip_x{},flip_y{},limited{};};
-WiiMm9Frame compose(const Reader& r) {
+template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put) {
     WiiMm9Frame out{};std::array<Layer,4> layers{};
+    const int left=int(width-256)/2;
     const auto config=r.u32(world+0x40),flags=r.u32(world),enabled=r.u32(config)>>8;
     const auto graphics=r.u32(resources+0x258);
     for(unsigned order=0;order<4;++order) {
@@ -69,7 +70,7 @@ WiiMm9Frame compose(const Reader& r) {
     // Border/clear and exact copy sampling still require the live gate.
     const auto clear=r.u16(0x8038b2f8+0x26bc);const auto backdrop=rgb565(clear&0x7fff);const auto limit=r.u32(0x803b930c);
     for(unsigned y=0;y<224;++y) {
-        for(unsigned x=0;x<256;++x)pixel(out,x,y+8,backdrop);
+        for(unsigned x=0;x<width;++x)put(out,x,y+8,backdrop);
         unsigned count=0;
         for(int priority=3;priority>=0;--priority) {
             // The original layer order is 3,2,1,0 within each priority.
@@ -79,13 +80,13 @@ WiiMm9Frame compose(const Reader& r) {
                 if(layer.mode==1)u=r.u16(layer.scroll+y*2);else if(layer.mode==2)v=r.u16(layer.scroll+y*2);
                 else if(layer.mode==3){const auto scroll=r.u32(layer.scroll+y*4);u=scroll&65535;v=scroll>>16;}
                 v=(v+y)&(layer.height-1);
-                for(unsigned x=0;x<256;++x) {
-                    const unsigned source_x=(u+x)&(layer.width-1),page_x=source_x/256,page_y=v/256;
+                for(unsigned x=0;x<width;++x) {
+                    const unsigned source_x=(u+x-unsigned(left))&(layer.width-1),page_x=source_x/256,page_y=v/256;
                     const unsigned tile=(page_y*(layer.width/256)+page_x)*1024+((v%256)/8)*32+(source_x%256)/8;
                     const auto item=r.u16(layer.map+tile*2);const unsigned tx=(item>>6)&31,ty=item>>11;
                     const auto px=(item&32)?7-(source_x&7):(source_x&7),py=(item&16)?7-(v&7):(v&7);
                     const auto index=nibble(r,layer.tiles,256,tx*8+px,ty*8+py);if(!index)continue;
-                    pixel(out,x,y+8,color(r,0,item&15,index));++out.background_pixels;
+                    put(out,x,y+8,color(r,0,item&15,index));if(x>=unsigned(left) && x<unsigned(left+256))++out.background_pixels;
                 }
             }
             for(const auto& sprite:sprites) {
@@ -94,9 +95,9 @@ WiiMm9Frame compose(const Reader& r) {
                 if(sprite.kind)continue;
                 const auto sy=unsigned(int(y)-sprite.y);const auto py=sprite.flip_y?sprite.height-1-sy:sy;
                 for(unsigned sx=0;sx<sprite.width;++sx) {
-                    const int x=sprite.x+int(sx);if(x<0 || x>=256)continue;
+                    const int x=sprite.x+int(sx)+left;if(x<0 || x>=int(width))continue;
                     const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(r,sprite.tiles,sprite.width,px,py);if(!index)continue;
-                    pixel(out,unsigned(x),y+8,color(r,1,sprite.palette,index));++out.sprite_pixels;
+                    put(out,unsigned(x),y+8,color(r,1,sprite.palette,index));if(x>=left && x<left+256)++out.sprite_pixels;
                 }
             }
         }
@@ -107,6 +108,31 @@ WiiMm9Frame compose(const Reader& r) {
 }
 extern "C" int wii_mm9_composite_prepare(WiiMm9Memory memory,WiiMm9Frame* output,char* error,uint32_t size) {
     if(!memory.read || !output){if(error && size)std::snprintf(error,size,"Missing MM9 compositor input");return 0;}
-    try{const auto frame=compose({memory});*output=frame;if(error && size)*error=0;return 1;}
+    try{const auto frame=compose({memory},256,pixel);*output=frame;if(error && size)*error=0;return 1;}
     catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
+}
+extern "C" int wii_mm9_composite_present_prepare(WiiMm9Memory memory,uint32_t width,WiiMm9Frame* stock,
+    uint8_t* rgba,uint32_t capacity,char* error,uint32_t size) {
+    if(!memory.read || !rgba || width<256 || width>WII_MM9_VIEW_MAX_WIDTH ||
+       (width&1) || uint64_t(width)*240*4>capacity) {
+        if(error && size)std::snprintf(error,size,"Invalid MM9 host view");return 0;
+    }
+    try {
+        std::vector<uint8_t> prepared(size_t(width)*240*4);
+        for(size_t i=3;i<prepared.size();i+=4)prepared[i]=255;
+        const unsigned left=(width-256)/2;
+        const auto frame=compose({memory},width,[&](WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value) {
+            if(x>=left && x<left+256)pixel(out,x-left,y,value);
+            auto* p=prepared.data()+(size_t(y)*width+x)*4;
+            const unsigned red=value>>11,green=(value>>5)&63,blue=value&31;
+            p[0]=uint8_t((red<<3)|(red>>2));p[1]=uint8_t((green<<2)|(green>>4));
+            p[2]=uint8_t((blue<<3)|(blue>>2));p[3]=255;
+        });
+        if(stock)*stock=frame;
+        std::memcpy(rgba,prepared.data(),prepared.size());if(error && size)*error=0;return 1;
+    }catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
+}
+extern "C" int wii_mm9_composite_view_prepare(WiiMm9Memory memory,uint32_t width,
+    uint8_t* rgba,uint32_t capacity,char* error,uint32_t size) {
+    return wii_mm9_composite_present_prepare(memory,width,nullptr,rgba,capacity,error,size);
 }

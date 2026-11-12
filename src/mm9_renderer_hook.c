@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
 
 #define COMPOSITOR 0x800e7308u
 #define SCREEN 0x800d5e50u
@@ -29,6 +30,39 @@ static bool verified,oracle_pending,input_invalid;
 static u64 frames,uncovered,failed,oracle_checked,oracle_different;
 static u32 oracle_max_delta;
 static const char* oracle_directory;
+static bool view_enabled,view_ready;
+static u32 view_fixed_width,view_width;
+static u8* view_rgba;
+static u32 view_capacity;
+static const u8* read_memory(void*,u32,u32);
+static bool prepare_view(CPUState* cpu) {
+    view_ready=false;
+    char error[192];const WiiMm9Memory memory={cpu,read_memory};
+    if(!view_enabled) {
+        if(wii_mm9_composite_prepare(memory,prepared,error,sizeof error))return true;
+        fprintf(stderr,"Native MM9 compositor: %s\n",error);return false;
+    }
+    u32 width=view_fixed_width;
+    if(!width) {
+        u32 w,h;if(!owner->presentation->window_size(&w,&h) || !h)return false;
+        const double desired=256.0*0.75*(double)w/(double)h;
+        width=desired>=WII_MM9_VIEW_MAX_WIDTH?WII_MM9_VIEW_MAX_WIDTH:
+            desired<=256?256:2u*(u32)(desired/2.0+0.5);
+    }
+    view_width=width;if(width==256) {
+        if(wii_mm9_composite_prepare(memory,prepared,error,sizeof error))return true;
+        fprintf(stderr,"Native MM9 compositor: %s\n",error);return false;
+    }
+    const u32 bytes=width*240*4;
+    if(bytes>view_capacity) {
+        void* next=realloc(view_rgba,bytes);if(!next)return false;
+        view_rgba=next;view_capacity=bytes;
+    }
+    if(!wii_mm9_composite_present_prepare(memory,width,prepared,view_rgba,view_capacity,error,sizeof error)) {
+        fprintf(stderr,"Native MM9 view: %s\n",error);return false;
+    }
+    view_ready=true;return true;
+}
 #if WIILLR_MM9_FRAME_MODE
 static int owned_effects(CPUState*,GcWiiNativeClear*,GcWiiNativeDisplayCopy*,bool);
 static int owned_camera(CPUState*,GcWiiNativeDraw*);
@@ -176,6 +210,17 @@ static int compare_oracle(CPUState* cpu) {
     if(maximum>5)return failure(cpu,"same-entry compositor image mismatch");return 0;
 }
 bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcWiiNativeFrameApi* frame) {
+    const char* fit=getenv("WIILLR_MM9_FIT"),*fixed=getenv("WIILLR_MM9_VIEW_WIDTH");
+    view_enabled=(fit && !strcmp(fit,"1")) || fixed;view_fixed_width=0;view_ready=false;
+    if(fit && strcmp(fit,"0") && strcmp(fit,"1"))return false;
+    if(fixed) {
+        char* end;errno=0;unsigned long value=strtoul(fixed,&end,10);
+        if(errno || !*fixed || *end || value<256 || value>WII_MM9_VIEW_MAX_WIDTH || (value&1))return false;
+        view_fixed_width=(u32)value;
+    }
+    if(view_enabled && (!gx || !gx->presentation || WIILLR_MM9_RENDERER_MODE<2 || !WIILLR_MM9_FRAME_MODE)) {
+        fprintf(stderr,"MM9 host view requires its native frame and presentation providers\n");return false;
+    }
     if(WIILLR_MM9_RENDERER_MODE==0)return true;
     if(owner || !gx || !render || !frame || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
     const WiiMm9Memory memory={gx->cpu,read_memory};screen_renderer=wii_mm9_screen_create(memory,render);prepared=calloc(1,sizeof *prepared);
@@ -216,7 +261,7 @@ int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
         cpu->pc=cpu->lr;++cpu->cycles;return 1;
     }
     if(cpu->lr!=0x8009dd4c)return unsupported(cpu,"compositor caller");
-    if(!wii_mm9_composite_prepare(memory,prepared,error,sizeof error))return unsupported(cpu,error);
+    if(!prepare_view(cpu))return unsupported(cpu,"host view preparation");
     if(WIILLR_MM9_RENDERER_MODE==1){if(oracle_entry)memcpy(oracle_entry,cpu->ram,cpu->ram_size);oracle_pending=true;return 0;}
     GcWiiNativeClear clear;GcWiiNativeDisplayCopy copy;if(!frame_effects(cpu,&clear,&copy))return unsupported(cpu,"frame copy settings");
     if(!ordered_boundary())return failure(cpu,"frame prior completion");
@@ -259,6 +304,8 @@ void wii_mm9_renderer_hook_stop(void) {
     owned_summary();
 #endif
     printf("{\"native_mm9_renderer\":%u,\"compositor_frames\":%llu,\"screen_draws\":%llu,\"screen_mesh_uploads\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"oracle_frames\":%llu,\"oracle_different_pixels\":%llu,\"oracle_max_channel_delta\":%u}\n",WIILLR_MM9_RENDERER_MODE,(unsigned long long)frames,(unsigned long long)status.draws,(unsigned long long)status.mesh_uploads,(unsigned long long)uncovered,(unsigned long long)failed,(unsigned long long)oracle_checked,(unsigned long long)oracle_different,oracle_max_delta);
-    wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;free(oracle_entry);oracle_entry=NULL;owner=NULL;frame_api=NULL;output_api=NULL;
+    wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;free(oracle_entry);oracle_entry=NULL;
+    free(view_rgba);view_rgba=NULL;view_capacity=view_width=0;view_enabled=view_ready=false;
+    owner=NULL;frame_api=NULL;output_api=NULL;
 }
 

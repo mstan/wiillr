@@ -63,7 +63,25 @@ int main() {
         ram[0x39b220]=1;p32(0x8039b190+0x94,0x80502000);for(unsigned y=0;y<224;++y)p16(0x80502000+y*2,8);
         require(wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)),error);
         require(pixel(frame,0,8)==0x001f && pixel(frame,8,8)==0xf800,"Live per-line horizontal scroll and logical tile selection");
-        const auto original=frame;p32(pool+0x808,pool+8);sprite(0,0,4,3,0,false,2);
+        const auto original=frame;
+        // Actual neighboring map pages and sprites outside the old crop.
+        fixture();p16(config+8,0x4001);
+        p16(graphics+2048,0x0040);fill(graphics+0x10000+32,32,0x33);
+        fill(sprite_graphics,32,0x22);sprite(0,0,260,10,0);
+        WiiMm9Frame stock{};require(wii_mm9_composite_prepare(memory,&stock,error,sizeof error),error);
+        std::vector<uint8_t> wide(344*240*4);
+        require(wii_mm9_composite_view_prepare(memory,344,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        WiiMm9Frame combined{};
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        require(!std::memcmp(&stock,&combined,sizeof stock),"Combined traversal must preserve the complete original output and counters");
+        const auto view_pixel=[&](unsigned x,unsigned y){const auto* p=wide.data()+(y*344+x)*4;return uint16_t((p[0]>>3)<<11|(p[1]>>2)<<5|(p[2]>>3));};
+        for(unsigned y=0;y<240;++y)for(unsigned x=0;x<256;++x)
+            require(view_pixel(x+44,y)==pixel(stock,x,y),"Wide view must preserve every original center pixel");
+        require(view_pixel(44+256,8)==0x001f,"Right margin must read the next map page");
+        require(view_pixel(44+260,18)==0x07e0,"Offscreen sprite must be visible in the new margin");
+        const auto before=wide;
+        require(!wii_mm9_composite_view_prepare(memory,345,wide.data(),unsigned(wide.size()),error,sizeof error) && wide==before,"Invalid view must not partially publish");
+        frame=original;p32(pool+0x808,pool+8);sprite(0,0,4,3,0,false,2);
         require(!wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)) && std::memcmp(&frame,&original,sizeof(frame))==0,"Unsupported sprite family must publish no partial texture");
         std::cout<<"MM9 logical tile/sprite compositor contracts passed; live copy/queue qualification pending\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

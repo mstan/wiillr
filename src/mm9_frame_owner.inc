@@ -43,6 +43,7 @@ void wii_mm9_renderer_frame_marker(CPUState* cpu,u32 address) {
         if(!owned.attested)owned.attested=owned_attest(cpu);
         if(!owned.attested){owned_stop(cpu,"original frame identity");return;}
         owned.scope=true;owned.active=owned.view_ready=false;
+        view_ready=false;
     } else if(address==0x8009de3c) {
         if(owned.deferred)owned_stop(cpu,"unfinished frame publication");
         if(owned.active) {
@@ -271,6 +272,11 @@ static int owned_call(CPUState* cpu,u32 address) {
         }
         GcWiiNativeClear clear;GcWiiNativeDisplayCopy copy;
         if(owned_effects(cpu,&clear,&copy,true)!=1)return owned_stop(cpu,"final copy settings");
+        if(view_enabled) {
+            const bool wide=view_ready && view_width>256 && !r8(cpu,0x80316d2b) && !r8(cpu,0x80316d29);
+            const GcWiiNativePresentationFrame image={view_rgba,view_width,240,256,view_width*240*4};
+            if(!owner->presentation->set_frame(copy.destination,wide?&image:NULL))return failure(cpu,"host view binding");
+        }
         /* With native startup there is no SDK draw-done waiter/interrupt to
          * wake. The typed barrier retires the same ordered copy effects. */
         if(!ordered_boundary() || !frame_api->display_copy(&copy) ||

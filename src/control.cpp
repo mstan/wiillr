@@ -264,6 +264,21 @@ struct WiiControl {
       return "{\"ok\":true,\"width\":"+std::to_string(frame.width)+",\"height\":"+std::to_string(frame.height)+",\"stride\":"+
         std::to_string(frame.stride)+",\"data\":\""+hex(frame.bytes,frame.size)+"\"}";
     }
+    if(args[0]=="window" && args.size()==3) {
+      const auto width=number(args[1],10),height=number(args[2],10);
+      if(!paused || width>8192 || height>8192 || !gx->presentation ||
+         !gx->presentation->resize_window(u32(width),u32(height)))throw std::runtime_error("window unavailable");
+      return "{\"ok\":true}";
+    }
+    if(args[0]=="display" && args.size()==1) {
+      u32 width=0,height=0;
+      if(!paused || !gx->presentation || !gx->presentation->read_rgba(nullptr,0,&width,&height) ||
+         !width || !height || u64(width)*height*4>16777216)throw std::runtime_error("presentation unavailable");
+      std::vector<u8> rgba(size_t(width)*height*4);
+      if(!gx->presentation->read_rgba(rgba.data(),u32(rgba.size()),&width,&height))throw std::runtime_error("presentation read failed");
+      return "{\"ok\":true,\"format\":\"rgba8\",\"width\":"+std::to_string(width)+",\"height\":"+std::to_string(height)+
+        ",\"stride\":"+std::to_string(width*4)+",\"data\":\""+hex(rgba.data(),rgba.size())+"\"}";
+    }
     throw std::runtime_error("unknown command or arguments");
   }
   void pump() {

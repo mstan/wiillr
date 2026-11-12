@@ -97,6 +97,12 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     GcWiiNativeVideoGetApi video_get=g->library?(GcWiiNativeVideoGetApi)dlsym(g->library,"gc_wii_native_video_get_api"):NULL;
 #endif
     g->video=video_get?video_get(GC_WII_NATIVE_VIDEO_ABI):NULL;
+#ifdef _WIN32
+    GcWiiNativePresentationGetApi presentation_get=(GcWiiNativePresentationGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_presentation_get_api");
+#else
+    GcWiiNativePresentationGetApi presentation_get=(GcWiiNativePresentationGetApi)dlsym(g->library,"gc_wii_native_presentation_get_api");
+#endif
+    g->presentation=presentation_get?presentation_get(GC_WII_NATIVE_PRESENTATION_ABI):NULL;
     if(g->video){m->hollywood.idle_dimming=idle_dimming;m->hollywood.video_user=g;}
 #if WIILLR_MENU_PICTURES || WIILLR_MM9_RENDERER
 #ifdef _WIN32
@@ -166,6 +172,7 @@ bool wii_gx_tick(WiiGx* g) {
             const u64 extent=(u64)(height-1)*stride+(u64)width*2;
             if(!width || !height || width>1024 || height>1024 || extent>0xffffffffu ||
                !resolve(g,address,(u32)extent,&range))return false;
+            if(g->presentation && !g->presentation->select_source(address))return false;
             const int resident=wii_gx_output_present(g,address,width,height,stride);
             if(resident<0 || (!resident && !g->api->present(range.bytes,width,height,stride)))return false;
             g->scanout_address=address;g->scanout_width=width;g->scanout_height=height;g->scanout_stride=stride;
@@ -224,7 +231,7 @@ void wii_gx_stop(WiiGx* g) {
     if(g->machine && g->machine->hollywood.video_user==g) {
         g->machine->hollywood.idle_dimming=NULL;g->machine->hollywood.video_user=NULL;
     }
-    g->video=NULL;
+    g->video=NULL;g->presentation=NULL;
 #if WIILLR_MM9_RENDERER
     wii_mm9_renderer_hook_stop();
 #endif

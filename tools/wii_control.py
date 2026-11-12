@@ -13,7 +13,8 @@ class Control:
 
     def command(self, command):
         self.socket.sendall(command.encode('ascii') + b'\n')
-        line = self.stream.readline(8 * 1024 * 1024)
+        # display is bounded at 16 MiB RGBA, encoded as hex plus JSON metadata.
+        line = self.stream.readline(32 * 1024 * 1024 + 4096)
         if not line.endswith(b'\n'):
             raise RuntimeError('Missing or oversized control response')
         result = json.loads(line)
@@ -30,6 +31,8 @@ def frame_image(frame):
     from PIL import Image
     data = bytes.fromhex(frame['data'])
     width, height, stride = (frame[key] for key in ('width', 'height', 'stride'))
+    if frame.get('format') == 'rgba8':
+        return Image.frombytes('RGBA', (width, height), data, 'raw', 'RGBA', stride).convert('RGB')
     output = bytearray(width * height * 3)
     def clip(value): return max(0, min(255, value))
     for y in range(height):
