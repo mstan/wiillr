@@ -10,6 +10,14 @@ bool wii_mm9_renderer_hook_start(WiiGx*,const GcWiiNativeRenderApi*,const GcWiiN
 bool wii_mm9_renderer_bind_hbm(const GcWiiNativeRenderApi*,const GcWiiNativeGuiApi*,
     const GcWiiNativeGuiLayersApi*,const GcWiiNativeGuiMaskApi*,const GcWiiNativeGuiEffectsApi*);
 void wii_mm9_renderer_bind_output(const GcWiiNativeOutputApi*);
+typedef enum {
+    WII_MM9_VIEW_ORIGINAL,
+    WII_MM9_VIEW_16_9,
+    WII_MM9_VIEW_21_9,
+    WII_MM9_VIEW_FIT
+} WiiMm9View;
+bool wii_mm9_renderer_view_supported(void);
+bool wii_mm9_renderer_set_view(WiiGx*,WiiMm9View);
 void wii_mm9_renderer_hook_stop(void);
 void wii_mm9_renderer_hook_invalidate(u32,u32);
 int wii_mm9_renderer_hook_call(CPUState*,u32);

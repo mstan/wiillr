@@ -19,7 +19,12 @@ unbinding a direction removes that alias. Mouse IR and its A/B buttons remain
 available. F1 opens the shared settings during play. The game pauses behind
 them; Resume or closing the settings window returns to the same point, while
 Quit Game exits. Display, input and host volume edits persist and apply when
-resuming. Render scale and widescreen controls are not yet connected.
+resuming. With the native MM9 frame provider, View offers Original 4:3, 16:9,
+21:9 and adaptive Fit to screen. Fresh settings default to Fit to screen;
+explicit saved choices persist. Resume preserves a manually resized window.
+This presentation extension uses the game's cached tiles and queued sprites;
+world bounds, margin entities and HUD placement still need qualification.
+It does not increase internal resolution; render scale remains unconnected.
 F10 presses the virtual console's Sync button for first-time Remote pairing.
 
 Wii low-level static recompiler, sharing GameCube compiler and device foundations

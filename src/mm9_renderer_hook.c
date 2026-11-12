@@ -34,6 +34,18 @@ static bool view_enabled,view_ready;
 static u32 view_fixed_width,view_width;
 static u8* view_rgba;
 static u32 view_capacity;
+bool wii_mm9_renderer_view_supported(void) {
+    return WIILLR_MM9_RENDERER_MODE>=2 && WIILLR_MM9_FRAME_MODE;
+}
+bool wii_mm9_renderer_set_view(WiiGx* gx,WiiMm9View mode) {
+    if(!wii_mm9_renderer_view_supported() || gx!=owner || !gx || !gx->presentation ||
+       gx->title!=0x0001000157523945ull || mode<WII_MM9_VIEW_ORIGINAL || mode>WII_MM9_VIEW_FIT)
+        return false;
+    view_enabled=mode!=WII_MM9_VIEW_ORIGINAL;
+    view_fixed_width=mode==WII_MM9_VIEW_16_9?342:mode==WII_MM9_VIEW_21_9?448:0;
+    view_ready=false;
+    return true;
+}
 static const u8* read_memory(void*,u32,u32);
 static bool prepare_view(CPUState* cpu) {
     view_ready=false;

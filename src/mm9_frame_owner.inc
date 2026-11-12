@@ -272,8 +272,8 @@ static int owned_call(CPUState* cpu,u32 address) {
         }
         GcWiiNativeClear clear;GcWiiNativeDisplayCopy copy;
         if(owned_effects(cpu,&clear,&copy,true)!=1)return owned_stop(cpu,"final copy settings");
-        if(view_enabled) {
-            const bool wide=view_ready && view_width>256 && !r8(cpu,0x80316d2b) && !r8(cpu,0x80316d29);
+        if(owner->presentation) {
+            const bool wide=view_enabled && view_ready && view_width>256 && !r8(cpu,0x80316d2b) && !r8(cpu,0x80316d29);
             const GcWiiNativePresentationFrame image={view_rgba,view_width,240,256,view_width*240*4};
             if(!owner->presentation->set_frame(copy.destination,wide?&image:NULL))return failure(cpu,"host view binding");
         }

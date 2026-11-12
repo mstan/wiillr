@@ -7,17 +7,29 @@
 #include "launcher_settings.h"
 #include "sha256.h"
 #include "host/host_audio.h"
+#if WIILLR_MM9_RENDERER
+#include "wiillr/mm9_renderer_hook.h"
+#endif
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static RecompLauncherCSettings settings;
+static RecompLauncherCSettings default_settings;
 static unsigned char expected[1][32];
 static bool active;
 static RecompLauncherCGameInfo game_info;
 static char config_path[32768],boot_image[32768];
 static bool settings_key_held,input_release;
+static const char* const view_labels[]={"Original 4:3","16:9","21:9","Fit to screen"};
+static bool view_supported(void) {
+#if WIILLR_MM9_RENDERER
+    return wii_mm9_renderer_view_supported();
+#else
+    return false;
+#endif
+}
 static const char* game_caption(const WiiGx* gx) {
     return gx->title==0x0000000100000002ull?"Wii Menu":"Mega Man 9";
 }
@@ -95,13 +107,19 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     game.known_sha256=(const uint8_t(*)[32])expected;game.num_known_sha256=1;
     game.num_players=1;game.config_path=config_path;
     game.settings_bindings=1;
+    if(view_supported()) {
+        game.aspect_labels=view_labels;game.num_aspect_labels=4;
+        game.aspect_setting_label="View";
+        game.aspect_setting_help="Fit to screen adapts the gameplay view to the window. Original 4:3 keeps the original view.";
+    }
     memset(&settings,0,sizeof settings);
     settings.window_scale=2;settings.enable_audio=1;settings.audio_freq=32000;
     settings.volume=100;settings.player_src[0]=1;
+    settings.aspect_index=view_supported()?3:0;
     if(SDL_InitSubSystem(SDL_INIT_GAMEPAD) && SDL_HasGamepad())settings.player_src[0]=2;
     wii_launcher_input_defaults(&settings);
-    const RecompLauncherCSettings defaults=settings;
-    game.default_settings=&defaults;
+    default_settings=settings;
+    game.default_settings=&default_settings;
     launcher_settings_load(&settings,&game);
     int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
     /* Keep the launcher's selected SDL instance valid for the game. */
@@ -116,7 +134,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
         return 2;
     }
     if(strlen(selected)>=sizeof boot_image)return 2;
-    strcpy(boot_image,selected);game_info=game;game_info.default_settings=NULL;
+    strcpy(boot_image,selected);game_info=game;
     char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
     if(!set_env("WIILLR_WINDOW","1") || !set_env("GCN_WINDOW","1") ||
        !set_env("WIILLR_WINDOW_TITLE","Mega Man 9") ||
@@ -175,9 +193,22 @@ static void session_input(void* user,GcnllrPad* pad) {
 
 bool wii_launcher_window(WiiGx* gx) {
     if(!active)return true;
+    static int applied_scale,applied_fullscreen,applied_view;
+    const bool mm9=gx->title==0x0001000157523945ull;
+    const int view=mm9 && view_supported()?settings.aspect_index:0;
+    const bool resize=gx->host_input!=session_input || applied_scale!=settings.window_scale ||
+        applied_fullscreen!=settings.fullscreen || applied_view!=view;
+#if WIILLR_MM9_RENDERER
+    if(mm9 && view_supported() && !wii_mm9_renderer_set_view(gx,(WiiMm9View)view))return false;
+#endif
     gx->host_input_user=gx;gx->host_input=session_input;
     gx->host_settings=gx->title==0x0001000157523945ull?session_settings:NULL;
     gx->host_input_stop=wii_launcher_input_stop;
+    /* Audio/input edits and Resume preserve a manually resized Fit window. */
+    if(!resize)return true;
+    const int width=640*settings.window_scale;
+    const int height=view==2?2*((width*9/21+1)/2):
+        view?2*((width*9/16+1)/2):480*settings.window_scale;
     int count=0;SDL_Window** windows=SDL_GetWindows(&count);
     bool ok=false;
     for(int i=0;windows && i<count;++i) {
@@ -186,14 +217,17 @@ bool wii_launcher_window(WiiGx* gx) {
         if(settings.fullscreen==2) {
             SDL_DisplayMode mode;
             if(!SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window),
-                640*settings.window_scale,480*settings.window_scale,0,false,&mode) ||
+                width,height,0,false,&mode) ||
                !SDL_SetWindowFullscreenMode(window,&mode))break;
         } else if(!SDL_SetWindowFullscreenMode(window,NULL))break;
-        ok=SDL_SetWindowSize(window,640*settings.window_scale,480*settings.window_scale) &&
+        ok=SDL_SetWindowSize(window,width,height) &&
             SDL_SetWindowFullscreen(window,settings.fullscreen!=0);
         break;
     }
     SDL_free(windows);
+    if(ok) {
+        applied_scale=settings.window_scale;applied_fullscreen=settings.fullscreen;applied_view=view;
+    }
     if(!ok)fprintf(stderr,"launcher: unable to apply game window settings: %s\n",SDL_GetError());
     return ok;
 }
