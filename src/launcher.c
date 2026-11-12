@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/launcher.h"
+#include "wiillr/launcher_input.h"
 #include "wiillr/fs.h"
 #include "recomp_launcher.h"
 #include "launcher_profile.h"
@@ -86,14 +87,19 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     launcher_profile_apply("wii",&game);
     game.name="Mega Man 9";game.region="USA";
     game.known_sha256=(const uint8_t(*)[32])expected;game.num_known_sha256=1;
-    game.num_players=1;game.lock_device=1;game.config_path=config;
-    /* Hide binding cards until the gameplay input path consumes edits. */
-    game.settings_bindings=0;
+    game.num_players=1;game.config_path=config;
+    game.settings_bindings=1;
     memset(&settings,0,sizeof settings);
     settings.window_scale=2;settings.enable_audio=1;settings.audio_freq=32000;
     settings.volume=100;settings.player_src[0]=1;
+    if(SDL_InitSubSystem(SDL_INIT_GAMEPAD) && SDL_HasGamepad())settings.player_src[0]=2;
+    wii_launcher_input_defaults(&settings);
+    const RecompLauncherCSettings defaults=settings;
+    game.default_settings=&defaults;
     launcher_settings_load(&settings,&game);
     int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
+    /* Keep the launcher's selected SDL instance valid for the game. */
+    recomp_launcher_set_preserve_sdl(1);
     if(force || !settings.skip_launcher)
         action=recomp_launcher_run_window("Mega Man 9",&settings,&game,NULL,
             image,selected,capacity);
@@ -109,11 +115,13 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
        !set_env("GCN_AUDIO_VOLUME",volume))return 2;
     /* An explicit automation override remains authoritative. */
     if(!getenv("GCN_AUDIO") && !set_env("GCN_AUDIO",settings.enable_audio?"1":"0"))return 2;
-    active=true;return 0;
+    wii_launcher_input_reset();active=true;return 0;
 }
 
-bool wii_launcher_window(void) {
+bool wii_launcher_window(WiiGx* gx) {
     if(!active)return true;
+    gx->host_input_user=&settings;gx->host_input=wii_launcher_input_poll;
+    gx->host_input_stop=wii_launcher_input_stop;
     int count=0;SDL_Window** windows=SDL_GetWindows(&count);
     bool ok=false;
     for(int i=0;windows && i<count;++i) {

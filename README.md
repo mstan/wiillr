@@ -12,8 +12,11 @@ Window scale, fullscreen and audio settings use the shared launcher INI store
 under the platform's per-user Mega Man 9 preferences directory. An existing
 `WIILLR_USER_DIR` overrides that directory. `GCN_AUDIO=0` and
 `GCN_AUDIO_MUTE=1` remain available for silent automation. Native NAND saves
-stay in their existing profile. Input rebinding, runtime UI, render scale and
-widescreen controls are not yet connected in this integration.
+stay in their existing profile. Keyboard/gamepad source, device selection,
+deadzone and button remaps reach gameplay and persist in the same INI store.
+The original D-pad assignments also accept the left stick; remapping or
+unbinding a direction removes that alias. Mouse IR and its A/B buttons remain
+available. Runtime UI, render scale and widescreen are not yet connected.
 
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
 with gcnllr. Initial targets are the original Startup Menu and Mega Man 9.

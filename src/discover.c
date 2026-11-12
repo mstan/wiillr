@@ -108,7 +108,7 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     m->ios.fs=wii_fs_mount(profile,launch.uid,launch.gid);ok=ok && m->ios.fs;
     if(ok && library)ok=wii_gx_start(gx,m,cpu,library,data,cache);
 #ifdef RECOMP_LAUNCHER
-    if(ok && library)ok=wii_launcher_window();
+    if(ok && library)ok=wii_launcher_window(gx);
 #endif
     if(ok && dsp)ok=wii_dsp_start(&m->dsp,cpu,irom,coef);
     m->dsp.output_sink=sink;m->dsp.output_user=sink_user;m->dsp.output_rate=rate;
@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
 #if WIILLR_GX_NATIVE || WIILLR_GX_SOFTWARE
         if(!wii_gx_start(&gx,&machine,&cpu,gx_library,gx_data,gx_cache)
 #ifdef RECOMP_LAUNCHER
-            || !wii_launcher_window()
+            || !wii_launcher_window(&gx)
 #endif
            ) {
             fprintf(stderr,"native GX start failed\n");wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;

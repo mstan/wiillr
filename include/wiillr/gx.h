@@ -16,6 +16,10 @@ typedef struct {
     bool visible,input_sent,mouse_active,quit;
     u64 input_field;
     WiiBluetoothInput input;
+    /* Optional host controls; the renderer's mouse IR path remains shared. */
+    void* host_input_user;
+    void (*host_input)(void*,GcnllrPad*);
+    void (*host_input_stop)(void*);
 } WiiGx;
 bool wii_gx_start(WiiGx*,WiiMachine*,CPUState*,const char* library,const char* data,const char* cache);
 bool wii_gx_tick(WiiGx*);
