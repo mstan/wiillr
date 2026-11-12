@@ -23,6 +23,8 @@ static RecompLauncherCGameInfo game_info;
 static char config_path[32768],boot_image[32768];
 static bool settings_key_held,input_release;
 static const char* const view_labels[]={"Original 4:3","16:9","21:9","Fit to screen"};
+static const char* const resolution_labels[]={"Original (1x)","2x","3x","4x","8x","16x"};
+static const int resolution_values[]={1,960,1440,1920,3840,7680};
 static bool view_supported(void) {
 #if WIILLR_MM9_RENDERER
     return wii_mm9_renderer_view_supported();
@@ -108,6 +110,11 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     game.num_players=1;game.config_path=config_path;
     game.settings_bindings=1;
     if(view_supported()) {
+        game.has_supersampling=1;
+        game.internal_resolution_labels=resolution_labels;
+        game.internal_resolution_values=resolution_values;
+        game.num_internal_resolutions=6;
+        game.internal_resolution_note="Raster resolution for geometry and effects. Bitmap artwork retains its original detail.";
         game.aspect_labels=view_labels;game.num_aspect_labels=4;
         game.aspect_setting_label="View";
         game.aspect_setting_help="Fit to screen adapts the gameplay view to the window. Original 4:3 keeps the original view.";
@@ -116,6 +123,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     settings.window_scale=2;settings.enable_audio=1;settings.audio_freq=32000;
     settings.volume=100;settings.player_src[0]=1;
     settings.aspect_index=view_supported()?3:0;
+    settings.internal_resolution=1;
     if(SDL_InitSubSystem(SDL_INIT_GAMEPAD) && SDL_HasGamepad())settings.player_src[0]=2;
     wii_launcher_input_defaults(&settings);
     default_settings=settings;
@@ -196,6 +204,13 @@ bool wii_launcher_window(WiiGx* gx) {
     static int applied_scale,applied_fullscreen,applied_view;
     const bool mm9=gx->title==0x0001000157523945ull;
     const int view=mm9 && view_supported()?settings.aspect_index:0;
+    const unsigned raster_scale=mm9 && view_supported() && settings.internal_resolution>1?
+        (unsigned)settings.internal_resolution/480:1;
+    if(gx->resolution) {
+        if(!gx->resolution->set_scale(raster_scale))return false;
+    } else if(raster_scale!=1) {
+        fprintf(stderr,"launcher: this graphics service does not support internal resolution\n");return false;
+    }
     const bool resize=gx->host_input!=session_input || applied_scale!=settings.window_scale ||
         applied_fullscreen!=settings.fullscreen || applied_view!=view;
 #if WIILLR_MM9_RENDERER

@@ -111,6 +111,12 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     GcWiiNativePresentationGetApi presentation_get=(GcWiiNativePresentationGetApi)dlsym(g->library,"gc_wii_native_presentation_get_api");
 #endif
     g->presentation=presentation_get?presentation_get(GC_WII_NATIVE_PRESENTATION_ABI):NULL;
+#ifdef _WIN32
+    GcWiiNativeResolutionGetApi resolution_get=(GcWiiNativeResolutionGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_resolution_get_api");
+#else
+    GcWiiNativeResolutionGetApi resolution_get=(GcWiiNativeResolutionGetApi)dlsym(g->library,"gc_wii_native_resolution_get_api");
+#endif
+    g->resolution=resolution_get?resolution_get(GC_WII_NATIVE_RESOLUTION_ABI):NULL;
     if(g->video){m->hollywood.idle_dimming=idle_dimming;m->hollywood.video_user=g;}
 #if WIILLR_MENU_PICTURES || WIILLR_MM9_RENDERER
 #ifdef _WIN32
@@ -242,7 +248,7 @@ void wii_gx_stop(WiiGx* g) {
     if(g->machine && g->machine->hollywood.video_user==g) {
         g->machine->hollywood.idle_dimming=NULL;g->machine->hollywood.video_user=NULL;
     }
-    g->video=NULL;g->presentation=NULL;
+    g->video=NULL;g->presentation=NULL;g->resolution=NULL;
 #if WIILLR_MM9_RENDERER
     wii_mm9_renderer_hook_stop();
 #endif

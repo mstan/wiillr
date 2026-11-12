@@ -5,12 +5,14 @@
 #include "gcnllr/native_gx.h"
 #include "gcnllr/native_video.h"
 #include "gcnllr/native_presentation.h"
+#include "gcnllr/native_resolution.h"
 typedef struct {
     void* library;
     void* output;
     const GcnllrNativeGxApi* api;
     const GcWiiNativeVideoApi* video;
     const GcWiiNativePresentationApi* presentation;
+    const GcWiiNativeResolutionApi* resolution;
     WiiMachine* machine;
     CPUState* cpu;
     u64 title;

@@ -34,7 +34,13 @@ world/bounds coverage,
 actor activation/culling and additional HUD/menu routes still need qualification.
 Rasterization uses prepared native atlas/map spans and per-frame RGB565 palettes;
 it resolves guest addresses before the pixel loops and observes next-frame edits.
-It does not increase internal resolution; render scale remains unconnected.
+The Internal resolution setting selects an independent GPU raster for native
+geometry and effects, from Original (1x) through 16x where supported. It uses
+the same prepared draw stream and preserves the original EFB, guest copies
+and CPU observations. The bitmap compositor and source artwork retain their
+logical detail. Each display generation retains its own raster resolution;
+saved preferences apply at boot and on resuming settings. Whole-title upscale
+performance and broader renderer coverage remain unqualified.
 F10 presses the virtual console's Sync button for first-time Remote pairing.
 
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
