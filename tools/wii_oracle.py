@@ -36,7 +36,7 @@ def wait_paused(control, process, timeout):
 
 
 def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=False,
-            after_checkpoints=None, extra_cycles=0):
+            after_checkpoint=None, after_checkpoints=None, extra_cycles=0):
     root.mkdir()
     original_profile = Path(receipt['writable_nand_profile']).resolve(strict=True)
     profile = root / 'nand'
@@ -57,8 +57,9 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
     command[4] = '0'
     at = command.index('--gx')
     selected_library = args.baseline_gx if root.name == 'baseline' else args.candidate_gx
-    library = selected_library or args.gx_library or Path(command[at + 1])
-    command[at + 1:at + 4] = [str(library.resolve(strict=True)),
+    library = selected_library or args.gx_library or command[at + 1]
+    software = str(library) == 'software'
+    command[at + 1:at + 4] = ['software' if software else str(Path(library).resolve(strict=True)),
                                      str(root / 'gx-data'), str(root / 'gx-cache')]
     (root / 'gx-data').mkdir()
     (root / 'gx-cache').mkdir()
@@ -77,7 +78,8 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
     env.pop('GCN_INTERP_BLOB_DIR', None)
     if os.name == 'nt':
         env['PATH'] = 'C:/msys64/mingw64/bin' + os.pathsep + env.get('PATH', '')
-    result = dict(executable=identity(executable), gx_library=identity(library),
+    result = dict(executable=identity(executable),
+                  gx_library=dict(provider='software') if software else identity(library),
                   inputs=identity(args.inputs), epoch=args.epoch, command=command,
                   host_audio_output=env['GCN_AUDIO'] == '1', checkpoints=[])
     if getattr(args, 'launcher', False):
@@ -109,6 +111,8 @@ def capture(args, receipt, executable, root, checkpoints, *, choose_boundaries=F
                                                'dsp_interpreter', 'dsp_misses')):
                     raise ValueError('Oracle requires native execution with zero misses')
                 result['checkpoints'].append(point)
+                if after_checkpoint is not None:
+                    after_checkpoint(control, process, target, point)
                 if args.candidate_cost and root.name == 'candidate':
                     costs = control.command('cost 120')['cost']
                     (root / f'cost-{point["cycles"]}.json').write_text(json.dumps(costs, indent=2) + '\n')
@@ -151,7 +155,8 @@ def main():
     parser.add_argument('--inputs', type=Path, required=True)
     parser.add_argument('--baseline', type=Path, required=True)
     parser.add_argument('--candidate', type=Path, required=True)
-    parser.add_argument('--gx-library', type=Path)
+    parser.add_argument('--gx-library', type=Path,
+                        help="Override the GX library path, or 'software' for the build-selected CPU reference")
     parser.add_argument('--baseline-gx', type=Path)
     parser.add_argument('--candidate-gx', type=Path)
     parser.add_argument('--candidate-cost', action='store_true')
