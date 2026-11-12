@@ -25,8 +25,13 @@ explicit saved choices persist. Resume preserves a manually resized window.
 The standard foreground loader's margins read mutable world metatiles directly,
 with level rectangle bounds. Other layers use the game's cached maps. A native
 animation emitter preserves the CPU-visible sprite queue while retaining full
-coordinates for margin sprites. Other layer types, broader world/bounds coverage,
-actor activation/culling and HUD placement still need qualification.
+coordinates for margin sprites. The health meter retains its left-edge inset
+in widened views, using the original HUD wrapper's queue provenance. The host
+view follows the original screen color level, including fades; Original mode
+retains the original layout. The weapon screen stays centered, and modal layer
+reuse releases the parked world's camera binding. Other layer types, broader
+world/bounds coverage,
+actor activation/culling and additional HUD/menu routes still need qualification.
 Rasterization uses prepared native atlas/map spans and per-frame RGB565 palettes;
 it resolves guest addresses before the pixel loops and observes next-frame edits.
 It does not increase internal resolution; render scale remains unconnected.

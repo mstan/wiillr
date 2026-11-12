@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <wiillr/mm9_compositor.h>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -70,6 +71,32 @@ void sprite_emitter_contract() {
     require(pixel_at()==0x001f,"Margin sprite retains order before the following guest sprite");
     extra.before=pool+16;render();require(pixel_at()==0xf800,"Margin sprite retains order after preceding guest sprites");
 }
+}
+void hud_layout_contract() {
+    fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
+    fill(sprite_graphics,32,0x22);
+    sprite(0,0,16,10,0);sprite(1,0,224,10,0);sprite(2,0,100,10,0);
+    std::array<uint8_t,24> queue{};std::copy_n(ram.data()+(pool&0x1fffffff),24,queue.data());
+    WiiMm9Frame original{},stock{};require(wii_mm9_composite_prepare(memory,&original,error,sizeof error),error);
+    const WiiMm9SpriteAnchor anchors[]={{pool,pool+8,-1},{pool+8,pool+16,1}};
+    WiiMm9ViewLayout layout{nullptr,0,anchors,2,32};
+    std::vector<uint8_t> view(344*240*4);
+    auto prepare=[&](unsigned width){return wii_mm9_composite_layout_prepare(memory,width,&layout,&stock,view.data(),unsigned(view.size()),error,sizeof error);};
+    require(prepare(256),error);
+    require(!std::memcmp(&original,&stock,sizeof stock),"Original layout retains every pixel and counter with tagged HUD sprites");
+    require(prepare(344),error);
+    auto color=[&](unsigned x,unsigned y){const auto* p=view.data()+(y*344+x)*4;return uint32_t(p[0])<<16|uint32_t(p[1])<<8|p[2];};
+    require(color(16,18)==0x00ff00 && color(312,18)==0x00ff00,"HUD bars retain their original left and right edge insets");
+    require(color(60,18)==0xff0000 && color(268,18)==0xff0000 && color(144,18)==0x00ff00,"Anchoring removes old HUD images and preserves world sprite placement");
+    require(pixel(stock,16,18)==0xf800 && pixel(stock,100,18)==0x07e0,"Physical center is the enhanced layout crop, without duplicate HUD");
+    require(!std::memcmp(queue.data(),ram.data()+(pool&0x1fffffff),24),"Host anchoring never rewrites the original packed sprite queue");
+    const auto untinted=stock;layout.color_level=16;
+    require(prepare(344),error);
+    require(color(16,18)==0x008200 && color(60,18)==0x840000,"Wide HUD and world use the original screen tint including RGB565 green precision");
+    require(!std::memcmp(&stock,&untinted,sizeof stock),"Screen tint is not applied twice to the physical stock texture");
+    layout.color_level=0;require(prepare(344),error);require(color(16,18)==0 && color(60,18)==0,"Full screen fade also hides anchored HUD and margins");
+    const auto before=view;WiiMm9SpriteAnchor invalid{pool+4,pool+8,-1};layout.anchors=&invalid;layout.anchor_count=1;
+    require(!prepare(344) && view==before && !std::memcmp(&stock,&untinted,sizeof stock),"Invalid anchor spans publish neither a partial view nor stock texture");
 }
 int main() {
     try {
@@ -145,6 +172,21 @@ int main() {
         require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
         require(!std::memcmp(&stock,&combined,sizeof stock),"Direct world margins keep stock pixels/counters exact");
         require(view_pixel(44-8,8)==0x001f && view_pixel(44+280,8)==0x001f,"Uncached margins come from real world cells");
+        const auto gameplay_view=wide;
+        p16(config+0x10,0);p32(scene+4,0);
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        const auto modal_view=wide;const auto modal_stock=combined;
+        p32(scene+4,0x8009f1a8);
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        require(wide==modal_view && !std::memcmp(&combined,&modal_stock,sizeof combined),"Modal layer reuse cannot bind a parked world's camera or cells");
+        p16(0x803140c0,0x0101);
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error),error);
+        require(!std::memcmp(&combined,&modal_stock,sizeof combined),"Weapon panel preserves its original stock layout and counters");
+        for(unsigned y=0;y<240;++y)for(unsigned x=0;x<344;++x)
+            if(x<44 || x>=300)require(view_pixel(x,y)==0,"Weapon panel cannot repeat maps or sprites into host margins");
+        p16(0x803140c0,0);
+        p16(config+0x10,16);
+        require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error) && wide==gameplay_view,"World source rebinds when gameplay restores its published origin");
         require(view_pixel(44-16,8)==0xf800 && view_pixel(44-16,16)==0x07e0 &&
                 view_pixel(44-8,16)==0,"World metatile quadrants preserve order and transparency");
         require(view_pixel(0,8)==0,"Negative world coordinates cannot wrap to the opposite side");
@@ -162,6 +204,7 @@ int main() {
         frame=original;p32(pool+0x808,pool+8);sprite(0,0,4,3,0,false,2);
         require(!wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)) && std::memcmp(&frame,&original,sizeof(frame))==0,"Unsupported sprite family must publish no partial texture");
         sprite_emitter_contract();
+        hud_layout_contract();
         std::cout<<"MM9 logical tile/sprite compositor contracts passed; live copy/queue qualification pending\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

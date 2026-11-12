@@ -33,6 +33,19 @@ typedef struct WiiMm9SpriteBatch {
     uint8_t packed[1024];
     WiiMm9MarginSprite margins[255];
 } WiiMm9SpriteBatch;
+/* Host layout provenance for an actual span of the original packed queue.
+ * The queue bytes stay unchanged. Edge -1/+1 preserves the left/right inset
+ * when producing an enhanced view; width256 retains original coordinates. */
+typedef struct WiiMm9SpriteAnchor {
+    uint32_t begin,end;
+    int32_t edge;
+} WiiMm9SpriteAnchor;
+typedef struct WiiMm9ViewLayout {
+    const WiiMm9MarginSprite* margins;
+    uint32_t margin_count;
+    const WiiMm9SpriteAnchor* anchors;
+    uint32_t anchor_count,color_level;
+} WiiMm9ViewLayout;
 /* Prepare the original WR9E animation emitter's CPU-visible queue writes and
  * uncropped components in one pass. No guest memory is written. */
 int wii_mm9_sprites_prepare(WiiMm9Memory,uint32_t object,uint32_t camera,
@@ -60,6 +73,11 @@ int wii_mm9_composite_present_prepare(WiiMm9Memory,uint32_t width,WiiMm9Frame*,
 int wii_mm9_composite_present_sprites_prepare(WiiMm9Memory,uint32_t width,
     const WiiMm9MarginSprite*,uint32_t count,WiiMm9Frame*,uint8_t* rgba,
     uint32_t capacity,char*,uint32_t);
+/* Explicit enhanced layout. Stock is the 256-column crop of that layout;
+ * its untinted texture feeds the original screen draw/copy. The wide pixels
+ * receive the screen's color level, while Original leaves layout unchanged. */
+int wii_mm9_composite_layout_prepare(WiiMm9Memory,uint32_t width,
+    const WiiMm9ViewLayout*,WiiMm9Frame*,uint8_t* rgba,uint32_t capacity,char*,uint32_t);
 #ifdef __cplusplus
 }
 #endif

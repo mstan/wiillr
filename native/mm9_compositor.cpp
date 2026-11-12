@@ -64,6 +64,13 @@ void world_source(const Reader& r,unsigned id,Layer& layer) {
         const auto object=state+0x20+n*0x94;
         if(r.u32(object+0x5c)!=id || r.u32(object+4)!=0x8009f1a8 ||
            r.u16(object+0xc) || layer.mode)continue;
+        const int world_x=int32_t(r.u32(object+0x14)),world_y=int32_t(r.u32(object+0x18));
+        // Modal scenes reuse the live layer maps/scroll while the gameplay
+        // loader remains parked at its old camera. Those maps no longer
+        // belong to that world origin. Rebind on a later matching frame;
+        // never substitute the parked world's cells for the modal image.
+        if((unsigned(world_x)&511)!=(layer.u&511) ||
+           (unsigned(world_y)&511)!=(layer.v&511))continue;
         const auto layout=r.u32(object+0x28),definitions=r.u32(object+0x20);
         const auto attributes=r.u32(state+0x270);
         need(layout && definitions && definitions==r.u32(state+0x274) &&
@@ -74,9 +81,7 @@ void world_source(const Reader& r,unsigned id,Layer& layer) {
              "Invalid MM9 world dimensions");
         // These are the loader's published coordinates, including incremental
         // scroll updates. Its target at +34/+38 can still name the prior cell.
-        layer.world_x=int32_t(r.u32(object+0x14));layer.world_y=int32_t(r.u32(object+0x18));
-        need((unsigned(layer.world_x)&511)==(layer.u&511) &&
-             (unsigned(layer.world_y)&511)==(layer.v&511),"MM9 world/cache origin mismatch");
+        layer.world_x=world_x;layer.world_y=world_y;
         layer.world_grid=grid+4;layer.world_definitions=definitions;
         layer.world_stride=stride;layer.world_width=columns*256;layer.world_height=rows*224;
         layer.world_count=(attributes-definitions)/8;
@@ -87,10 +92,14 @@ void world_source(const Reader& r,unsigned id,Layer& layer) {
 }
 struct Sprite {uint32_t tiles{},position{};unsigned width{},height{},palette{},priority{},kind{};int x{},y{};bool flip_x{},flip_y{},limited{},margin{};const uint8_t* tile_data{};};
 template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
-    const WiiMm9MarginSprite* margins=nullptr,unsigned margin_count=0) {
+    const WiiMm9MarginSprite* margins=nullptr,unsigned margin_count=0,
+    const WiiMm9SpriteAnchor* anchors=nullptr,unsigned anchor_count=0) {
     WiiMm9Frame out{};std::array<Layer,4> layers{};
     NativePalette background_palette{r,0},sprite_palette{r,1};
     const int left=int(width-256)/2;
+    // The original weapon screen is a fixed-size panel, not a scrolling world.
+    // Keep its layout centered instead of repeating its maps into the margins.
+    const bool centered_panel=r.u16(0x803140c0)==0x0101;
     const auto config=r.u32(world+0x40),flags=r.u32(world),enabled=r.u32(config)>>8;
     const auto graphics=r.u32(resources+0x258);
     for(unsigned order=0;order<4;++order) {
@@ -105,10 +114,18 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         need(layer.mode<=3 && (!layer.mode || layer.scroll),"Unbound MM9 per-line scroll mode");
         layer.map_data=r.bytes(layer.map,(layer.width/8)*(layer.height/8)*2);
         layer.tile_data=r.bytes(layer.tiles,256*256/2);
-        if(width>256)world_source(r,id,layer);
+        if(width>256 && !centered_panel)world_source(r,id,layer);
     }
     const auto begin=r.u32(sprite_pool+0x80c),end=r.u32(sprite_pool+0x808);
     need(begin>=sprite_pool && end>=begin && end<=sprite_pool+0x800 && (end-begin)%8==0,"Invalid MM9 sprite pool span");
+    need(anchor_count<=128 && (!anchor_count || anchors),"Invalid MM9 sprite anchor list");
+    for(unsigned n=0;n<anchor_count;++n) {
+        const auto& a=anchors[n];
+        need(a.begin>=sprite_pool && a.end<=sprite_pool+0x800 && a.begin<a.end &&
+             !((a.begin-sprite_pool)&7) && !((a.end-sprite_pool)&7) &&
+             (a.edge==-1 || a.edge==1) && (!n || a.begin>=anchors[n-1].end),"Invalid MM9 sprite anchor span");
+    }
+    unsigned anchor=0;
     std::vector<Sprite> sprites;const auto sprite_tiles=r.u32(resources+0x25c);
     need(margin_count<=4096 && (!margin_count || margins),"Invalid MM9 margin sprite list");
     unsigned next_margin=0;
@@ -136,6 +153,9 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         sprite.tiles=sprite_tiles+(descriptor>>16)*32;sprite.palette=(descriptor>>8)&255;sprite.priority=descriptor&3;
         sprite.kind=(position>>6)&7;need(sprite.kind<=1,"Unbound MM9 sprite draw function");
         sprite.x=signed10(position>>12);sprite.y=signed10(position>>22);sprite.flip_x=(position>>10)&1;sprite.flip_y=(position>>11)&1;sprite.limited=(position>>9)&1;
+        while(anchor<anchor_count && anchors[anchor].end<=address)++anchor;
+        if(!centered_panel && anchor<anchor_count && anchors[anchor].begin<=address && address<anchors[anchor].end)
+            sprite.x+=anchors[anchor].edge*left;
         if(!sprite.kind)sprite.tile_data=r.bytes(sprite.tiles,sprite.width*sprite.height/2);
         sprites.push_back(sprite);
     }
@@ -144,7 +164,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     // Border/clear and exact copy sampling still require the live gate.
     const auto clear=r.u16(0x8038b2f8+0x26bc);const auto backdrop=rgb565(clear&0x7fff);const auto limit=r.u32(0x803b930c);
     for(unsigned y=0;y<224;++y) {
-        for(unsigned x=0;x<width;++x)put(out,x,y+8,backdrop);
+        for(unsigned x=0;x<width;++x)put(out,x,y+8,centered_panel && (x<unsigned(left) || x>=unsigned(left+256))?0:backdrop);
         unsigned count=0,margin_budget=0;
         for(int priority=3;priority>=0;--priority) {
             // The original layer order is 3,2,1,0 within each priority.
@@ -154,7 +174,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 if(layer.mode==1)u=r.u16(layer.scroll+y*2);else if(layer.mode==2)v=r.u16(layer.scroll+y*2);
                 else if(layer.mode==3){const auto scroll=r.u32(layer.scroll+y*4);u=scroll&65535;v=scroll>>16;}
                 v=(v+y)&(layer.height-1);
-                for(unsigned x=0;x<width;++x) {
+                for(unsigned x=centered_panel?unsigned(left):0;x<(centered_panel?unsigned(left+256):width);++x) {
                     unsigned source_x=(u+x-unsigned(left))&(layer.width-1),source_y=v;
                     const unsigned page_x=source_x/256,page_y=v/256;
                     const unsigned tile=(page_y*(layer.width/256)+page_x)*1024+((v%256)/8)*32+(source_x%256)/8;
@@ -183,6 +203,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 const auto sy=unsigned(int(y)-sprite.y);const auto py=sprite.flip_y?sprite.height-1-sy:sy;
                 for(unsigned sx=0;sx<sprite.width;++sx) {
                     const int x=sprite.x+int(sx)+left;if(x<0 || x>=int(width))continue;
+                    if(centered_panel && (x<left || x>=left+256))continue;
                     if(sprite.margin && x>=left && x<left+256)continue;
                     const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(sprite.tile_data,sprite.width,px,py);if(!index)continue;
                     put(out,unsigned(x),y+8,sprite_palette.get(sprite.palette,index));if(x>=left && x<left+256)++out.sprite_pixels;
@@ -206,7 +227,13 @@ extern "C" int wii_mm9_composite_present_prepare(WiiMm9Memory memory,uint32_t wi
 extern "C" int wii_mm9_composite_present_sprites_prepare(WiiMm9Memory memory,uint32_t width,
     const WiiMm9MarginSprite* margins,uint32_t margin_count,WiiMm9Frame* stock,
     uint8_t* rgba,uint32_t capacity,char* error,uint32_t size) {
-    if(!memory.read || !rgba || width<256 || width>WII_MM9_VIEW_MAX_WIDTH ||
+    const WiiMm9ViewLayout layout{margins,margin_count,nullptr,0,32};
+    return wii_mm9_composite_layout_prepare(memory,width,&layout,stock,rgba,capacity,error,size);
+}
+extern "C" int wii_mm9_composite_layout_prepare(WiiMm9Memory memory,uint32_t width,
+    const WiiMm9ViewLayout* layout,WiiMm9Frame* stock,
+    uint8_t* rgba,uint32_t capacity,char* error,uint32_t size) {
+    if(!memory.read || !layout || !rgba || width<256 || width>WII_MM9_VIEW_MAX_WIDTH ||
        (width&1) || uint64_t(width)*240*4>capacity) {
         if(error && size)std::snprintf(error,size,"Invalid MM9 host view");return 0;
     }
@@ -214,13 +241,19 @@ extern "C" int wii_mm9_composite_present_sprites_prepare(WiiMm9Memory memory,uin
         std::vector<uint8_t> prepared(size_t(width)*240*4);
         for(size_t i=3;i<prepared.size();i+=4)prepared[i]=255;
         const unsigned left=(width-256)/2;
+        const auto level=layout->color_level;
+        const unsigned tint=level>=32?65535:((level&31)<<11)|((level&31)<<6)|(level&31);
+        const unsigned tr=((tint>>11)<<3)|((tint>>11)>>2),tg=(((tint>>5)&63)<<2)|(((tint>>5)&63)>>4),tb=((tint&31)<<3)|((tint&31)>>2);
         const auto frame=compose({memory},width,[&](WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value) {
             if(x>=left && x<left+256)pixel(out,x-left,y,value);
             auto* p=prepared.data()+(size_t(y)*width+x)*4;
             const unsigned red=value>>11,green=(value>>5)&63,blue=value&31;
             p[0]=uint8_t((red<<3)|(red>>2));p[1]=uint8_t((green<<2)|(green>>4));
             p[2]=uint8_t((blue<<3)|(blue>>2));p[3]=255;
-        },margins,margin_count);
+            if(level<32) {
+                p[0]=uint8_t((unsigned(p[0])*tr+127)/255);p[1]=uint8_t((unsigned(p[1])*tg+127)/255);p[2]=uint8_t((unsigned(p[2])*tb+127)/255);
+            }
+        },layout->margins,layout->margin_count,layout->anchors,layout->anchor_count);
         if(stock)*stock=frame;
         std::memcpy(rgba,prepared.data(),prepared.size());if(error && size)*error=0;return 1;
     }catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
