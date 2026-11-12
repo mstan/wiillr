@@ -142,7 +142,9 @@ with the RecompCore checkout and `WIILLR_DSP_HOST_SOURCE` with its BlueWake host
 adapter checkout; `WIILLR_DSP_FMT_SOURCE` optionally supplies matching fmt
 sources. The build derives its console-aware adapter without editing either
 donor. Wii MEM2 is supported and unknown DSP tasks stop explicitly. This
-selection requires its own title/audio qualification; the separately selected
+selection requires its own title/audio qualification. A bounded MM9 load/Magma/
+shooting replay matches AOT's complete PCM, stock scanout and captured mailbox/
+interrupt order. Other routes and the final audio handoff remain open. The separately selected
 AOT and development interpreter remain available as LLE references.
 `WIILLR_DSP_TRACE=ON` builds a bounded mailbox/control/IRQ trace into the DSP
 transport for protocol QA. It records at most 512 events to the existing log;
@@ -218,3 +220,7 @@ guest RAM. Copy publication invalidates reservations and executable identities;
 later byte materialization is only a representation change. MEM2 keeps eager,
 bank-qualified copies. Other hosts retain the functioning eager output floor.
 The option defaults off and does not change audio, guest timing or pacing.
+The GPU service's separate `GCNLLR_NATIVE_OUTPUT_SUBMISSION=queued` selection
+records immutable copy buffers and queues copy encoding, scanout and host margins
+together. Actual CPU observations and physical completion still wait. Its default
+`serial` mode remains available; queued MM9 qualification does not qualify other titles.
