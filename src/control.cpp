@@ -177,6 +177,8 @@ struct WiiControl {
       if(!paused || (args[1]!="show" && args[1]!="hide") || volume>100 ||
          !gx->host_review || !gx->host_review(gx->host_input_user,args[1]=="show",u32(volume)))
         throw std::runtime_error("paused review window unavailable");
+      gx->scripted_input=args[1]=="hide";
+      gx->input_sent=false; /* publish current physical controls on resume */
       return "{\"ok\":true}";
     }
     if(args[0]=="fingerprint" && args.size()==1)return fingerprint();

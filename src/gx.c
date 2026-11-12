@@ -63,6 +63,7 @@ static int fifo(void* user,const u8* bytes,u32 size) {WiiGx* g=user;return g->ap
 static void drain(void* user) {WiiGx* g=user;if(!g->api->drain())g->cpu->halted=true;}
 bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const char* data,const char* cache) {
     memset(g,0,sizeof *g);g->machine=m;g->cpu=cpu;
+    g->scripted_input=getenv("WIILLR_INPUT_SCRIPT")!=NULL;
     if(m->ios.fs)(void)wii_fs_boot_title(m->ios.fs,&g->title);
 #if WIILLR_GX_SOFTWARE
     extern const GcnllrNativeGxApi* wii_gx_software_api(WiiMachine*,CPUState*);
@@ -206,9 +207,9 @@ bool wii_gx_tick(WiiGx* g) {
     GcnllrNativeGxStatus status={0};g->api->status(&status);
     g->quit=status.quit!=0;
     if(g->quit)return !status.failed;
-    /* Explicit scripted input is authoritative, including with a launcher
-     * window. Do not overwrite its reports with background host controls. */
-    if(g->visible && !getenv("WIILLR_INPUT_SCRIPT") && g->machine->ios.bluetooth &&
+    /* Setup owns input until review explicitly hands it to the player. The
+     * startup journal remains in the environment after its events finish. */
+    if(g->visible && !g->scripted_input && g->machine->ios.bluetooth &&
        (!g->input_sent || g->input_field!=g->machine->fields)) {
         g->input_field=g->machine->fields;
         WiiBluetoothInput next=g->input;next.buttons=0;

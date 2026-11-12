@@ -28,6 +28,7 @@ typedef struct {
     bool (*host_settings)(void*); /* optional owner-thread in-session UI */
     bool (*host_review)(void*,bool,u32); /* paused test window visibility/volume */
     bool host_input_capture; /* host menu holds input until its controls release */
+    bool scripted_input; /* setup owns input until the explicit review handoff */
 } WiiGx;
 bool wii_gx_start(WiiGx*,WiiMachine*,CPUState*,const char* library,const char* data,const char* cache);
 bool wii_gx_tick(WiiGx*);
