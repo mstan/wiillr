@@ -7,3 +7,6 @@
 [submodule "external/arm-recomp-core"]
 	path = external/arm-recomp-core
 	url = git@github.com:mstan/arm-recomp-core.git
+[submodule "external/recomp-ui"]
+	path = external/recomp-ui
+	url = https://github.com/RetroPortingToolKit/recomp-ui.git

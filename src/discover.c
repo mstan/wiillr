@@ -8,6 +8,9 @@
 #include "wiillr/gx.h"
 #include "wiillr/gx_output.h"
 #include "wiillr/control.h"
+#ifdef RECOMP_LAUNCHER
+#include "wiillr/launcher.h"
+#endif
 #include "debug/cost_ring.h"
 #include "host/host_audio.h"
 #include "memory/memory.h"
@@ -104,6 +107,9 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     m->ios.validate_launch=validate_launch;m->ios.launch_user=cpu;
     m->ios.fs=wii_fs_mount(profile,launch.uid,launch.gid);ok=ok && m->ios.fs;
     if(ok && library)ok=wii_gx_start(gx,m,cpu,library,data,cache);
+#ifdef RECOMP_LAUNCHER
+    if(ok && library)ok=wii_launcher_window();
+#endif
     if(ok && dsp)ok=wii_dsp_start(&m->dsp,cpu,irom,coef);
     m->dsp.output_sink=sink;m->dsp.output_user=sink_user;m->dsp.output_rate=rate;
 #if WIILLR_PPC_STATIC
@@ -116,6 +122,16 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     wii_es_release_launch(&launch);return ok;
 }
 int main(int argc, char** argv) {
+    bool launcher=false,launcher_force=false,launcher_check=false;
+#ifdef RECOMP_LAUNCHER
+    if(argc>1 && (!strcmp(argv[1],"--launcher") ||
+        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check"))) {
+        launcher=true;launcher_force=!strcmp(argv[1],"--launcher-settings");
+        launcher_check=!strcmp(argv[1],"--launcher-check");
+        for(int i=1;i<argc;++i)argv[i]=argv[i+1];
+        --argc;
+    }
+#endif
     InputEvent inputs[1024];const int input_count=load_inputs(inputs,1024);
     if(input_count<0){fprintf(stderr,"invalid virtual remote input script\n");return 2;}
     u64 sync_at=0;bool sync_pending=false;
@@ -139,7 +155,7 @@ int main(int argc, char** argv) {
     }
     if (argc != 5 && argc != 7 && argc != 8 && argc != 10) {
 #if WIILLR_PPC_STATIC
-        fprintf(stderr,"usage: wiillr-native ORIGINAL-DOL MAX-CYCLES MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID] [--gx LIB DATA CACHE]\n");
+        fprintf(stderr,"usage: wiillr-native [--launcher|--launcher-settings|--launcher-check] ORIGINAL-DOL MAX-CYCLES MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID] [--gx LIB DATA CACHE] [--ios-profile 4|37|80]\n");
 #else
         fprintf(stderr, "usage: wiillr-discover ORIGINAL-DOL MAX-STEPS MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID]\n"
                         "Discovery only; all guest instructions are interpreted. STOP-PC=0 disables.\n");
@@ -151,12 +167,26 @@ int main(int argc, char** argv) {
     u64 limit = strtoull(argv[2], &end, 0);
     const char* visible_window=getenv("WIILLR_WINDOW");
     /* Allow a visible interactive session up to 24 hours of Broadway time. */
-    const u64 maximum_limit=visible_window && !strcmp(visible_window,"1") ?
+    const u64 maximum_limit=launcher || (visible_window && !strcmp(visible_window,"1")) ?
         62985600000000ull:500000000000ull;
     if (errno || *end || !limit || limit > maximum_limit) return 2;
     errno = 0;
     unsigned long stop = strtoul(argv[4], &end, 0);
     if (errno || *end || stop > 0xfffffffful || (stop & 3)) return 2;
+#ifdef RECOMP_LAUNCHER
+    char launcher_image[32768];
+    if(launcher) {
+        if((argc!=8 && argc!=10) || (!launcher_check && !gx_library))return 2;
+        errno=0;unsigned long uid=strtoul(argv[argc-2],&end,10);
+        if(errno || !*argv[argc-2] || *end || uid>0xfffffffful)return 2;
+        errno=0;unsigned long gid=strtoul(argv[argc-1],&end,10);
+        if(errno || !*argv[argc-1] || *end || gid>0xfffful)return 2;
+        int action=wii_launcher_start(argv[1],argv[argc-3],(unsigned)uid,(unsigned)gid,
+            launcher_force,launcher_check,launcher_image,sizeof launcher_image);
+        if(action || launcher_check)return action==1?0:action;
+        argv[1]=launcher_image;
+    }
+#endif
     FILE* input = fopen(argv[1], "rb");
     if (!input) return 2;
     if (fseek(input, 0, SEEK_END)) { fclose(input); return 2; }
@@ -168,6 +198,11 @@ int main(int argc, char** argv) {
     if (!image) { fclose(input); return 2; }
     size_t got = fread(image, 1, (size_t)length, input);
     fclose(input);
+#ifdef RECOMP_LAUNCHER
+    if(launcher && (got!=(size_t)length || !wii_launcher_verify(image,got))) {
+        fprintf(stderr,"launcher: boot content changed after selection\n");free(image);return 2;
+    }
+#endif
     CPUState cpu;
     if (!cpu_init(&cpu)) { free(image); return 2; }
     u32 entry;
@@ -203,8 +238,12 @@ int main(int argc, char** argv) {
     WiiGx gx={0};
     if(gx_library) {
 #if WIILLR_GX_NATIVE || WIILLR_GX_SOFTWARE
-        if(!wii_gx_start(&gx,&machine,&cpu,gx_library,gx_data,gx_cache)) {
-            fprintf(stderr,"native GX start failed\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+        if(!wii_gx_start(&gx,&machine,&cpu,gx_library,gx_data,gx_cache)
+#ifdef RECOMP_LAUNCHER
+            || !wii_launcher_window()
+#endif
+           ) {
+            fprintf(stderr,"native GX start failed\n");wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
         }
 #else
         fprintf(stderr,"GX needs a build-selected provider\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;

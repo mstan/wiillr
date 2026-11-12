@@ -1,5 +1,20 @@
 # wiillr
 
+An optional shared pre-boot UI is available in the strict native build with
+`-DWIILLR_LAUNCHER=ON` (SDL3, native IOS and native graphics required).
+Prefix the existing `wiillr-native` arguments with `--launcher`; use
+`--launcher-settings` to reopen settings after enabling Skip launcher.
+The first supported title is Mega Man 9 (USA). Its boot image must match the
+installed ticket/TMD in the copied NAND profile. `--launcher-check` verifies
+that identity without opening a window or booting the game.
+
+Window scale, fullscreen and audio settings use the shared launcher INI store
+under the platform's per-user Mega Man 9 preferences directory. An existing
+`WIILLR_USER_DIR` overrides that directory. `GCN_AUDIO=0` and
+`GCN_AUDIO_MUTE=1` remain available for silent automation. Native NAND saves
+stay in their existing profile. Input rebinding, runtime UI, render scale and
+widescreen controls are not yet connected in this integration.
+
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
 with gcnllr. Initial targets are the original Startup Menu and Mega Man 9.
 
