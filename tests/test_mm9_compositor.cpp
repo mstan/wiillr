@@ -7,9 +7,10 @@
 #include <vector>
 namespace {
 std::vector<uint8_t> ram(24*1024*1024);
+uint64_t memory_reads;
 constexpr uint32_t config=0x80001000,graphics=0x80600000,sprite_graphics=0x80700000,pool=0x8037c428,palettes=0x803bb320;
 void require(bool b,const char* why){if(!b)throw std::runtime_error(why);}
-const uint8_t* read(void*,uint32_t address,uint32_t size){address&=0x1fffffff;return address<=ram.size() && size<=ram.size()-address?ram.data()+address:nullptr;}
+const uint8_t* read(void*,uint32_t address,uint32_t size){++memory_reads;address&=0x1fffffff;return address<=ram.size() && size<=ram.size()-address?ram.data()+address:nullptr;}
 void p16(uint32_t a,uint16_t v){a&=0x1fffffff;ram.at(a)=v>>8;ram.at(a+1)=v&255;}
 void p32(uint32_t a,uint32_t v){p16(a,v>>16);p16(a+2,v&65535);}
 void fill(uint32_t a,unsigned n,uint8_t value){a&=0x1fffffff;std::fill_n(ram.begin()+a,n,value);}
@@ -73,9 +74,15 @@ void sprite_emitter_contract() {
 int main() {
     try {
         fixture();const WiiMm9Memory memory{nullptr,read};WiiMm9Frame frame{};char error[192];
+        memory_reads=0;
         require(wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)),error);
+        require(memory_reads<200,"Pixel rasterization must use prepared native resources, not per-pixel guest address resolution");
         require(pixel(frame,0,8)==0xf800 && pixel(frame,255,231)==0xf800 && pixel(frame,0,0)==0,"Logical background and RGB565 tiled output");
         require(frame.background_pixels==256*224 && frame.sprite_pixels==0,"Logical background coverage");
+        p16(0x80500002,0x07c0);
+        require(wii_mm9_composite_prepare(memory,&frame,error,sizeof error),error);
+        require(pixel(frame,0,8)==0x07e0,"Native palette preparation observes next-frame color changes");
+        p16(0x80500002,0xf800);
         fill(sprite_graphics,32,0x22);sprite(0,0,4,3,0);
         require(wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)),error);
         require(pixel(frame,4,11)==0x07e0 && pixel(frame,3,11)==0xf800 && pixel(frame,12,11)==0xf800,"Sprite placement, bounds and RGB555 green expansion");

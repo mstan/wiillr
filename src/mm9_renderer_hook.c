@@ -6,6 +6,7 @@
 #include <wiillr/mm9_hbm.h>
 #include <memory/memory.h>
 #include <cpu/native_code.h>
+#include <debug/cost_ring.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -320,7 +321,10 @@ int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
         cpu->pc=cpu->lr;++cpu->cycles;return 1;
     }
     if(cpu->lr!=0x8009dd4c)return unsupported(cpu,"compositor caller");
-    if(!prepare_view(cpu))return unsupported(cpu,"host view preparation");
+    gcn_cost_owner_boundary(GCN_COST_OWNER_GRAPHICS);
+    const bool view_ok=prepare_view(cpu);
+    gcn_cost_owner_boundary(GCN_COST_OWNER_EXECUTION);
+    if(!view_ok)return unsupported(cpu,"host view preparation");
     if(WIILLR_MM9_RENDERER_MODE==1){if(oracle_entry)memcpy(oracle_entry,cpu->ram,cpu->ram_size);oracle_pending=true;return 0;}
     GcWiiNativeClear clear;GcWiiNativeDisplayCopy copy;if(!frame_effects(cpu,&clear,&copy))return unsupported(cpu,"frame copy settings");
     if(!ordered_boundary())return failure(cpu,"frame prior completion");

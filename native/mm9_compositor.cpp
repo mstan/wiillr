@@ -18,14 +18,29 @@ struct Reader {
 constexpr uint32_t backgrounds=0x8039b190,world=0x80301280,palettes=0x803bb320,resources=0x8043ca80,sprite_pool=0x8037c428;
 int signed10(uint32_t n){return int(n&1023)-int((n&512)<<1);}
 uint16_t rgb565(uint16_t rgb555){return uint16_t((rgb555&0x7c00)<<1|(rgb555&0x03e0)<<1|(rgb555&0x0200)>>4|(rgb555&31));}
-uint16_t color(const Reader& r,unsigned group,unsigned palette,unsigned index) {
-    need(group<2 && r.u32(palettes+0x30+group*4)==0,"MM9 palette family needs qualification");
-    need(palette<r.u32(palettes+0x20+group*4) && index<16,"Invalid MM9 palette selection");
-    return rgb565(r.u16(r.u32(palettes+0x10+group*4)+(palette*16+index)*2)>>1);
-}
-unsigned nibble(const Reader& r,uint32_t base,unsigned width,unsigned x,unsigned y) {
+uint16_t half(const uint8_t* data,unsigned offset){return uint16_t(data[offset])<<8|data[offset+1];}
+struct NativePalette {
+    const Reader& reader;unsigned group;
+    uint32_t count{};bool ready{};std::vector<uint16_t> colors;
+    uint16_t get(unsigned palette,unsigned index) {
+        if(!ready) {
+            need(reader.u32(palettes+0x30+group*4)==0,"MM9 palette family needs qualification");
+            count=reader.u32(palettes+0x20+group*4);
+            // Maps select four-bit palettes; sprite records select eight-bit
+            // palettes. Resolve the address once for this immutable frame.
+            const unsigned entries=(count<256?count:256)*16;
+            const auto* source=reader.bytes(reader.u32(palettes+0x10+group*4),entries*2);
+            colors.resize(entries);
+            for(unsigned n=0;n<entries;++n)colors[n]=rgb565(half(source,n*2)>>1);
+            ready=true;
+        }
+        need(palette<count && palette<256 && index<16,"Invalid MM9 palette selection");
+        return colors[palette*16+index];
+    }
+};
+unsigned nibble(const uint8_t* data,unsigned width,unsigned x,unsigned y) {
     const unsigned at=((y/8)*(width/8)+x/8)*32+(y%8)*4+(x%8)/2;
-    const auto b=r.u8(base+at);return (x&1)?(b&15):(b>>4);
+    const auto b=data[at];return (x&1)?(b&15):(b>>4);
 }
 void pixel(WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value) {
     const unsigned at=((y/4)*64+x/4)*32+(y%4)*8+(x%4)*2;
@@ -37,6 +52,8 @@ struct Layer {
     uint32_t world_grid{},world_definitions{};
     unsigned world_stride{},world_width{},world_height{},world_count{};
     int world_x{},world_y{};
+    const uint8_t* map_data{};const uint8_t* tile_data{};
+    const uint8_t* world_grid_data{};const uint8_t* world_definition_data{};
 };
 void world_source(const Reader& r,unsigned id,Layer& layer) {
     // WR9E's 8009f1a8 / 800c9704 loader expands mutable 16x16 world cells
@@ -63,15 +80,16 @@ void world_source(const Reader& r,unsigned id,Layer& layer) {
         layer.world_grid=grid+4;layer.world_definitions=definitions;
         layer.world_stride=stride;layer.world_width=columns*256;layer.world_height=rows*224;
         layer.world_count=(attributes-definitions)/8;
-        r.bytes(layer.world_grid,stride*rows*14*2);
-        r.bytes(definitions,attributes-definitions);
+        layer.world_grid_data=r.bytes(layer.world_grid,stride*rows*14*2);
+        layer.world_definition_data=r.bytes(definitions,attributes-definitions);
         return;
     }
 }
-struct Sprite {uint32_t tiles{},position{};unsigned width{},height{},palette{},priority{},kind{};int x{},y{};bool flip_x{},flip_y{},limited{},margin{};};
+struct Sprite {uint32_t tiles{},position{};unsigned width{},height{},palette{},priority{},kind{};int x{},y{};bool flip_x{},flip_y{},limited{},margin{};const uint8_t* tile_data{};};
 template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     const WiiMm9MarginSprite* margins=nullptr,unsigned margin_count=0) {
     WiiMm9Frame out{};std::array<Layer,4> layers{};
+    NativePalette background_palette{r,0},sprite_palette{r,1};
     const int left=int(width-256)/2;
     const auto config=r.u32(world+0x40),flags=r.u32(world),enabled=r.u32(config)>>8;
     const auto graphics=r.u32(resources+0x258);
@@ -85,7 +103,8 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         layer.u=r.u16(config+0x10+layer.slot*4);layer.v=r.u16(config+0x12+layer.slot*4);
         layer.mode=r.u8(backgrounds+0x90+order);layer.scroll=r.u32(backgrounds+0x94+order*4);
         need(layer.mode<=3 && (!layer.mode || layer.scroll),"Unbound MM9 per-line scroll mode");
-        r.bytes(layer.map,(layer.width/8)*(layer.height/8)*2);r.bytes(layer.tiles,256*256/2);
+        layer.map_data=r.bytes(layer.map,(layer.width/8)*(layer.height/8)*2);
+        layer.tile_data=r.bytes(layer.tiles,256*256/2);
         if(width>256)world_source(r,id,layer);
     }
     const auto begin=r.u32(sprite_pool+0x80c),end=r.u32(sprite_pool+0x808);
@@ -106,7 +125,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
             Sprite sprite{};sprite.tiles=sprite_tiles+input.tile*32;sprite.width=input.width;sprite.height=input.height;
             sprite.palette=input.palette;sprite.priority=input.priority;sprite.x=input.x;sprite.y=input.y;
             sprite.flip_x=input.flags&1;sprite.flip_y=input.flags&2;sprite.limited=input.flags&4;sprite.margin=true;
-            r.bytes(sprite.tiles,sprite.width*sprite.height/2);sprites.push_back(sprite);
+            sprite.tile_data=r.bytes(sprite.tiles,sprite.width*sprite.height/2);sprites.push_back(sprite);
         }
     };
     for(auto address=begin;address<end;address+=8) {
@@ -117,7 +136,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         sprite.tiles=sprite_tiles+(descriptor>>16)*32;sprite.palette=(descriptor>>8)&255;sprite.priority=descriptor&3;
         sprite.kind=(position>>6)&7;need(sprite.kind<=1,"Unbound MM9 sprite draw function");
         sprite.x=signed10(position>>12);sprite.y=signed10(position>>22);sprite.flip_x=(position>>10)&1;sprite.flip_y=(position>>11)&1;sprite.limited=(position>>9)&1;
-        if(!sprite.kind)r.bytes(sprite.tiles,sprite.width*sprite.height/2);
+        if(!sprite.kind)sprite.tile_data=r.bytes(sprite.tiles,sprite.width*sprite.height/2);
         sprites.push_back(sprite);
     }
     insert_margins(end);need(next_margin==margin_count,"MM9 margin sprite queue changed");
@@ -143,15 +162,15 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                     if(layer.world_grid && (x<unsigned(left) || x>=unsigned(left+256))) {
                         const int wx=layer.world_x+int(x)-left,wy=layer.world_y+int(y);
                         if(wx<0 || wy<0 || unsigned(wx)>=layer.world_width || unsigned(wy)>=layer.world_height)continue;
-                        const auto cell=r.u16(layer.world_grid+((unsigned(wy)/16)*layer.world_stride+unsigned(wx)/16)*2);
+                        const auto cell=half(layer.world_grid_data,((unsigned(wy)/16)*layer.world_stride+unsigned(wx)/16)*2);
                         need(cell<layer.world_count,"Invalid MM9 world metatile");
-                        item=r.u16(layer.world_definitions+cell*8+((unsigned(wy)/8)&1)*4+((unsigned(wx)/8)&1)*2);
+                        item=half(layer.world_definition_data,cell*8+((unsigned(wy)/8)&1)*4+((unsigned(wx)/8)&1)*2);
                         source_x=unsigned(wx);source_y=unsigned(wy);
-                    } else item=r.u16(layer.map+tile*2);
+                    } else item=half(layer.map_data,tile*2);
                     const unsigned tx=(item>>6)&31,ty=item>>11;
                     const auto px=(item&32)?7-(source_x&7):(source_x&7),py=(item&16)?7-(source_y&7):(source_y&7);
-                    const auto index=nibble(r,layer.tiles,256,tx*8+px,ty*8+py);if(!index)continue;
-                    put(out,x,y+8,color(r,0,item&15,index));if(x>=unsigned(left) && x<unsigned(left+256))++out.background_pixels;
+                    const auto index=nibble(layer.tile_data,256,tx*8+px,ty*8+py);if(!index)continue;
+                    put(out,x,y+8,background_palette.get(item&15,index));if(x>=unsigned(left) && x<unsigned(left+256))++out.background_pixels;
                 }
             }
             for(const auto& sprite:sprites) {
@@ -165,8 +184,8 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 for(unsigned sx=0;sx<sprite.width;++sx) {
                     const int x=sprite.x+int(sx)+left;if(x<0 || x>=int(width))continue;
                     if(sprite.margin && x>=left && x<left+256)continue;
-                    const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(r,sprite.tiles,sprite.width,px,py);if(!index)continue;
-                    put(out,unsigned(x),y+8,color(r,1,sprite.palette,index));if(x>=left && x<left+256)++out.sprite_pixels;
+                    const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(sprite.tile_data,sprite.width,px,py);if(!index)continue;
+                    put(out,unsigned(x),y+8,sprite_palette.get(sprite.palette,index));if(x>=left && x<left+256)++out.sprite_pixels;
                 }
             }
         }

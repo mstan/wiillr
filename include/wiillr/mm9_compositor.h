@@ -9,6 +9,7 @@ extern "C" {
 #define WII_MM9_VIEW_MAX_WIDTH 864u
 typedef struct WiiMm9Memory {
     void* user;
+    /* Returned spans must remain valid and immutable until preparation returns. */
     const uint8_t* (*read)(void*,uint32_t,uint32_t);
 } WiiMm9Memory;
 typedef struct WiiMm9Frame {

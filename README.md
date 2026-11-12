@@ -27,6 +27,8 @@ with level rectangle bounds. Other layers use the game's cached maps. A native
 animation emitter preserves the CPU-visible sprite queue while retaining full
 coordinates for margin sprites. Other layer types, broader world/bounds coverage,
 actor activation/culling and HUD placement still need qualification.
+Rasterization uses prepared native atlas/map spans and per-frame RGB565 palettes;
+it resolves guest addresses before the pixel loops and observes next-frame edits.
 It does not increase internal resolution; render scale remains unconnected.
 F10 presses the virtual console's Sync button for first-time Remote pairing.
 
@@ -148,7 +150,9 @@ the normal build compiles it out.
 
 `WIILLR_PACING=field` (default) paces the host at the VI device's field period.
 `WIILLR_PACING=none` builds the unpaced configuration used for throughput
-measurements. Pacing uses a monotonic clock without changing guest cycles or
+measurements. Development runs may also set `WIILLR_UNPACED=1` to disable only
+the host wait in a field-paced build. Normal launches remain paced by default.
+Pacing uses a monotonic clock without changing guest cycles or
 skipping frames. Resuming a paused TCP session starts a fresh host deadline;
 ordinary late fields retain the accumulated deadline to avoid timing drift.
 Windows uses a high-resolution waitable timer when available, with portable

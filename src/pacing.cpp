@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <thread>
+#include <cstdlib>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -31,6 +32,11 @@ void wii_pacing_on_field(WiiPacing* pacing,double period_seconds) {
 #if WIILLR_PACING_FIELD
     using Clock=std::chrono::steady_clock;
     using namespace std::chrono;
+    // Development headroom runs keep guest clocks/fields unchanged and remove
+    // only the host sleep. Normal launches retain field pacing by default.
+    static const bool unpaced=[](){const char* value=std::getenv("WIILLR_UNPACED");
+        return value && value[0]=='1' && !value[1];}();
+    if(unpaced)return;
     if(!std::isfinite(period_seconds) || period_seconds<=0) {
         wii_pacing_reset(pacing);
         return;
