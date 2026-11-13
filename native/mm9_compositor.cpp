@@ -143,7 +143,8 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     const int left=int(width-256)/2;
     // The original weapon screen is a fixed-size panel, not a scrolling world.
     // Keep its layout centered instead of repeating its maps into the margins.
-    const bool centered_panel=r.u16(0x803140c0)==0x0101;
+    const auto scene=r.u16(0x803140c0);
+    const bool centered_panel=scene==0x0101,stage_selection=scene==0x0202;
     const auto config=r.u32(world+0x40),flags=r.u32(world),enabled=r.u32(config)>>8;
     const auto graphics=r.u32(resources+0x258);
     for(unsigned order=0;order<4;++order) {
@@ -158,7 +159,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         need(layer.mode<=3 && (!layer.mode || layer.scroll),"Unbound MM9 per-line scroll mode");
         layer.map_data=r.bytes(layer.map,(layer.width/8)*(layer.height/8)*2);
         layer.tile_data=r.bytes(layer.tiles,256*256/2);
-        if(width>256 && !centered_panel)world_source(r,id,layer);
+        if(width>256 && !centered_panel && !stage_selection)world_source(r,id,layer);
     }
     const auto room=room_view(r,layers);
     std::array<bool,WII_MM9_VIEW_MAX_WIDTH> world_visible{};
@@ -225,7 +226,11 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 v=(v+y)&(layer.height-1);
                 for(unsigned x=centered_panel?unsigned(left):0;x<(centered_panel?unsigned(left+256):width);++x) {
                     if(!world_visible[x])continue;
-                    unsigned source_x=(u+x-unsigned(left))&(layer.width-1),source_y=v;
+                    // Stage selection is a finite canvas. Its quiet edge
+                    // columns extend the background stripes, while wrapping
+                    // the map would repeat portraits and menu labels.
+                    const int column=stage_selection?std::clamp(int(x)-left,0,255):int(x)-left;
+                    unsigned source_x=(u+unsigned(column))&(layer.width-1),source_y=v;
                     const unsigned page_x=source_x/256,page_y=v/256;
                     const unsigned tile=(page_y*(layer.width/256)+page_x)*1024+((v%256)/8)*32+(source_x%256)/8;
                     uint16_t item;
@@ -253,7 +258,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 const auto sy=unsigned(int(y)-sprite.y);const auto py=sprite.flip_y?sprite.height-1-sy:sy;
                 for(unsigned sx=0;sx<sprite.width;++sx) {
                     const int x=sprite.x+int(sx)+left;if(x<0 || x>=int(width))continue;
-                    if(centered_panel && (x<left || x>=left+256))continue;
+                    if((centered_panel || stage_selection) && (x<left || x>=left+256))continue;
                     if(!sprite.anchored && !world_visible[unsigned(x)])continue;
                     if(sprite.margin && x>=left && x<left+256)continue;
                     const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(sprite.tile_data,sprite.width,px,py);if(!index)continue;

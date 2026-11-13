@@ -128,6 +128,27 @@ void camera_room_contract() {
     require(!prepare() && view==valid && !std::memcmp(&stock,&before,sizeof stock),"A parked camera cannot bind another world's layout");
     require(wii_mm9_composite_prepare(memory,&stock,error,sizeof error),"Original layout does not require enhancement camera metadata");
 }
+void stage_selection_contract() {
+    fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
+    p16(0x803140c0,0x0202);fill(graphics+0x10000+32,32,0x33);
+    for(unsigned row=0;row<32;++row)p16(graphics+(row*32+31)*2,64);
+    fill(sprite_graphics,32,0x22);sprite(0,0,16,10,0);sprite(1,0,260,10,0);
+    WiiMm9Frame original{},stock{};require(wii_mm9_composite_prepare(memory,&original,error,sizeof error),error);
+    const WiiMm9MarginSprite extra{pool+16,0,8,8,0,0,0,-8,30};
+    const WiiMm9ViewLayout layout{&extra,1,nullptr,0,32};
+    for(unsigned width:{344u,448u,864u}) {
+        std::vector<uint8_t> view(width*240*4);const unsigned left=(width-256)/2;
+        require(wii_mm9_composite_layout_prepare(memory,width,&layout,&stock,view.data(),unsigned(view.size()),error,sizeof error),error);
+        require(!std::memcmp(&stock,&original,sizeof stock),"Stage selection retains its original centered menu and counters");
+        for(unsigned y=8;y<232;++y)for(unsigned x=0;x<width;++x) {
+            if(x>=left && x<left+256)continue;
+            const auto* p=view.data()+(y*width+x)*4;
+            const uint32_t color=uint32_t(p[0])<<16|uint32_t(p[1])<<8|p[2];
+            require(color==(x<left?0xff0000u:0x0000ffu),
+                    "Stage selection extends each background edge without wrapping map or sprite contents");
+        }
+    }
+}
 void hud_layout_contract() {
     fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
     fill(sprite_graphics,32,0x22);
@@ -262,6 +283,7 @@ int main() {
         require(!wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)) && std::memcmp(&frame,&original,sizeof(frame))==0,"Unsupported sprite family must publish no partial texture");
         sprite_emitter_contract();
         camera_room_contract();
+        stage_selection_contract();
         hud_layout_contract();
         std::cout<<"MM9 logical tile/sprite compositor contracts passed; live copy/queue qualification pending\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
