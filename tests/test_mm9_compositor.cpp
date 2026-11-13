@@ -97,6 +97,9 @@ void camera_room_contract() {
     require(prepare(),error);
     require(!std::memcmp(&stock,&before,sizeof stock),"Room clipping preserves the complete original center and counters");
     require(color(308,18)==0 && color(330,8)==0,"Unavailable camera screens expose neither filler tiles nor world sprites");
+    require(view[(8*width+330)*4+3]==0 && view[330*4+3]==0 &&
+            view[(18*width+16)*4+3]==255 && view[(8*width+44)*4+3]==255,
+            "Room coverage excludes full-height pillarboxes while retaining the original center and anchored HUD");
     require(color(16,18)==0x00ff00,"Anchored HUD remains visible over a finite room's margins");
     ram[(mask+4+4+1)&0x1fffffff]=1;require(prepare(),error);
     require(color(308,18)==0x00ff00,"Original adjacent camera classes remain connected");

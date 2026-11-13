@@ -33,6 +33,7 @@ static u32 oracle_max_delta;
 static const char* oracle_directory;
 static bool view_enabled,view_ready,camera_attested;
 static u32 view_fixed_width,view_width;
+static u32 view_tint;
 static u8* view_rgba;
 static u32 view_capacity;
 static WiiMm9MarginSprite margin_sprites[4096];
@@ -95,7 +96,12 @@ static bool prepare_view(CPUState* cpu) {
         view_rgba=next;view_capacity=bytes;
     }
     input_invalid=false;
-    const WiiMm9ViewLayout layout={margin_sprites,margin_sprite_count,hud_anchors,hud_anchor_count,r32(cpu,0x803bb32c)};
+    const u32 level=r32(cpu,0x803bb32c);
+    const u32 tint=level>=32?65535u:((level&31)<<11)|((level&31)<<6)|(level&31);
+    const u32 red=tint>>11,green=(tint>>5)&63,blue=tint&31;
+    view_tint=((red<<3)|(red>>2))|(((green<<2)|(green>>4))<<8)|(((blue<<3)|(blue>>2))<<16)|0xff000000u;
+    const bool filtered=owner->presentation->abi>=2 && owner->presentation->set_filtered_frame;
+    const WiiMm9ViewLayout layout={margin_sprites,margin_sprite_count,hud_anchors,hud_anchor_count,filtered?32:level};
     if(input_invalid){fprintf(stderr,"Native MM9 view: unreadable color level\n");return false;}
     if(!wii_mm9_composite_layout_prepare(memory,width,&layout,
         prepared,view_rgba,view_capacity,error,sizeof error)) {

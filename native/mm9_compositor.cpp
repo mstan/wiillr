@@ -43,7 +43,7 @@ unsigned nibble(const uint8_t* data,unsigned width,unsigned x,unsigned y) {
     const unsigned at=((y/8)*(width/8)+x/8)*32+(y%8)*4+(x%8)/2;
     const auto b=data[at];return (x&1)?(b&15):(b>>4);
 }
-void pixel(WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value) {
+void pixel(WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value,uint8_t=255) {
     const unsigned at=((y/4)*64+x/4)*32+(y%4)*8+(x%4)*2;
     out.texture[at]=uint8_t(value>>8);out.texture[at+1]=uint8_t(value);
 }
@@ -212,9 +212,12 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     // The logical active screen occupies rows 8..231 of the 256x240 copy.
     // Border/clear and exact copy sampling still require the live gate.
     const auto clear=r.u16(0x8038b2f8+0x26bc);const auto backdrop=rgb565(clear&0x7fff);const auto limit=r.u32(0x803b930c);
+    const auto covered=[&](unsigned x){return world_visible[x] &&
+        (!centered_panel || (x>=unsigned(left) && x<unsigned(left+256)));};
+    for(unsigned y=0;y<240;++y)if(y<8 || y>=232)
+        for(unsigned x=0;x<width;++x)put(out,x,y,0,covered(x)?255:0);
     for(unsigned y=0;y<224;++y) {
-        for(unsigned x=0;x<width;++x)put(out,x,y+8,!world_visible[x] ||
-            (centered_panel && (x<unsigned(left) || x>=unsigned(left+256)))?0:backdrop);
+        for(unsigned x=0;x<width;++x)put(out,x,y+8,covered(x)?backdrop:0,covered(x)?255:0);
         unsigned count=0,margin_budget=0;
         for(int priority=3;priority>=0;--priority) {
             // The original layer order is 3,2,1,0 within each priority.
@@ -245,7 +248,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                     const unsigned tx=(item>>6)&31,ty=item>>11;
                     const auto px=(item&32)?7-(source_x&7):(source_x&7),py=(item&16)?7-(source_y&7):(source_y&7);
                     const auto index=nibble(layer.tile_data,256,tx*8+px,ty*8+py);if(!index)continue;
-                    put(out,x,y+8,background_palette.get(item&15,index));if(x>=unsigned(left) && x<unsigned(left+256))++out.background_pixels;
+                    put(out,x,y+8,background_palette.get(item&15,index),255);if(x>=unsigned(left) && x<unsigned(left+256))++out.background_pixels;
                 }
             }
             for(const auto& sprite:sprites) {
@@ -262,7 +265,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                     if(!sprite.anchored && !world_visible[unsigned(x)])continue;
                     if(sprite.margin && x>=left && x<left+256)continue;
                     const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(sprite.tile_data,sprite.width,px,py);if(!index)continue;
-                    put(out,unsigned(x),y+8,sprite_palette.get(sprite.palette,index));if(x>=left && x<left+256)++out.sprite_pixels;
+                    put(out,unsigned(x),y+8,sprite_palette.get(sprite.palette,index),255);if(x>=left && x<left+256)++out.sprite_pixels;
                 }
             }
         }
@@ -300,12 +303,12 @@ extern "C" int wii_mm9_composite_layout_prepare(WiiMm9Memory memory,uint32_t wid
         const auto level=layout->color_level;
         const unsigned tint=level>=32?65535:((level&31)<<11)|((level&31)<<6)|(level&31);
         const unsigned tr=((tint>>11)<<3)|((tint>>11)>>2),tg=(((tint>>5)&63)<<2)|(((tint>>5)&63)>>4),tb=((tint&31)<<3)|((tint&31)>>2);
-        const auto frame=compose({memory},width,[&](WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value) {
+        const auto frame=compose({memory},width,[&](WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value,uint8_t coverage) {
             if(x>=left && x<left+256)pixel(out,x-left,y,value);
             auto* p=prepared.data()+(size_t(y)*width+x)*4;
             const unsigned red=value>>11,green=(value>>5)&63,blue=value&31;
             p[0]=uint8_t((red<<3)|(red>>2));p[1]=uint8_t((green<<2)|(green>>4));
-            p[2]=uint8_t((blue<<3)|(blue>>2));p[3]=255;
+            p[2]=uint8_t((blue<<3)|(blue>>2));p[3]=coverage;
             if(level<32) {
                 p[0]=uint8_t((unsigned(p[0])*tr+127)/255);p[1]=uint8_t((unsigned(p[1])*tg+127)/255);p[2]=uint8_t((unsigned(p[2])*tb+127)/255);
             }

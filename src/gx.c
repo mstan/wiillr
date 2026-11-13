@@ -112,6 +112,7 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     GcWiiNativePresentationGetApi presentation_get=(GcWiiNativePresentationGetApi)dlsym(g->library,"gc_wii_native_presentation_get_api");
 #endif
     g->presentation=presentation_get?presentation_get(GC_WII_NATIVE_PRESENTATION_ABI):NULL;
+    if(!g->presentation && presentation_get)g->presentation=presentation_get(1);
 #ifdef _WIN32
     GcWiiNativeResolutionGetApi resolution_get=(GcWiiNativeResolutionGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_resolution_get_api");
 #else

@@ -62,6 +62,8 @@ int wii_mm9_composite_prepare(WiiMm9Memory,WiiMm9Frame*,char*,uint32_t);
  * maps, and sprites use queued positions. This does not publish a wider guest
  * texture or change simulation.
  * Width must be even, 256..864. The output is tightly packed RGBA8, 240 rows.
+ * Zero alpha marks excluded finite-canvas/room pixels for presentation clipping;
+ * visible world/HUD pixels have full coverage. The guest texture stays opaque.
  * Caller owns width*240*4 bytes. Failure leaves that output unchanged. */
 int wii_mm9_composite_view_prepare(WiiMm9Memory,uint32_t width,uint8_t* rgba,
     uint32_t capacity,char*,uint32_t);

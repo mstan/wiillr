@@ -275,7 +275,10 @@ static int owned_call(CPUState* cpu,u32 address) {
         if(owner->presentation) {
             const bool wide=view_enabled && view_ready && view_width>256 && !r8(cpu,0x80316d2b) && !r8(cpu,0x80316d29);
             const GcWiiNativePresentationFrame image={view_rgba,view_width,240,256,view_width*240*4};
-            if(!owner->presentation->set_frame(copy.destination,wide?&image:NULL))return failure(cpu,"host view binding");
+            const bool filtered=owner->presentation->abi>=2 && owner->presentation->set_filtered_frame;
+            const int bound=wide && filtered?owner->presentation->set_filtered_frame(copy.destination,&image,view_tint):
+                owner->presentation->set_frame(copy.destination,wide?&image:NULL);
+            if(!bound)return failure(cpu,"host view binding");
         }
         /* With native startup there is no SDK draw-done waiter/interrupt to
          * wake. The typed barrier retires the same ordered copy effects. */
