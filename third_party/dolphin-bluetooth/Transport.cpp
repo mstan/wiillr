@@ -50,12 +50,18 @@ void BluetoothEmuDevice::SavePairings() {
 void BluetoothEmuDevice::SetInput(const WiiBluetoothInput& input) {
   if(input.buttons&~WiimoteCommon::ButtonData::BUTTON_MASK || input.pointer_x>1023 || input.pointer_y>767 ||
      std::ranges::any_of(input.accel,[](u16 v){return v>1023;}))throw std::runtime_error("Invalid virtual remote input");
+  auto* current=m_wiimotes[0].get();
+  const bool trace=std::getenv("WIILLR_IOS_TRACE")!=nullptr;
+  const bool previous_source=trace && current->IsSourceValid(),previous_pairing=trace && current->IsPairing();
   if(!input_source && input.present)input_source=std::make_unique<WiimoteCommon::NativeRemote>();
   if(input_source)input_source->SetInput(input);
-  auto* current=m_wiimotes[0].get();
   current->SetPairing(input.pairing);
   if(input.present && !current->IsSourceValid())current->SetSource(input_source.get());
   if(!input.present && current->IsSourceValid())current->SetSource(nullptr);
+  if(trace && (previous_source!=current->IsSourceValid() || previous_pairing!=current->IsPairing()))
+    std::fprintf(stderr,"Bluetooth input transition cycles=%llu present=%u pair=%u source_valid=%u connected=%u\n",
+      static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(input.present),unsigned(input.pairing),
+      unsigned(current->IsSourceValid()),unsigned(current->IsConnected()));
 }
 void BluetoothEmuDevice::PressSync() {
   SQueuedEvent event(3,0);
@@ -211,6 +217,10 @@ void BluetoothEmuDevice::Update() {
   if(!m_event_queue.empty() && m_hci_endpoint) {
     const auto& event=m_event_queue.front();m_hci_endpoint->FillBuffer(event.buffer,event.size);
     m_kernel.EnqueueIPCReply(m_hci_endpoint->ios_request,event.size);
+    // This is the USB-buffer/IPC-completion boundary; guest consumption is asynchronous.
+    if(event.size>=3 && event.buffer[0]==0xff && event.buffer[2]==8 && std::getenv("WIILLR_IOS_TRACE"))
+      std::fprintf(stderr,"Bluetooth vendor Sync delivered path=deferred cycles=%llu event=%02x subtype=%02x size=%u\n",
+        static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(event.buffer[0]),unsigned(event.buffer[2]),unsigned(event.size));
     m_hci_endpoint.reset();m_event_queue.pop_front();
   }
   if(!m_acl_pool.IsEmpty() && m_acl_endpoint && m_event_queue.empty()) {

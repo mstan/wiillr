@@ -1,6 +1,8 @@
 // Copyright 2008 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "BTEmu.h"
+#include <cstdio>
+#include <cstdlib>
 namespace IOS::HLE {
 void BluetoothEmuDevice::SendToDevice(u16 connection_handle, u8* data, u32 size)
 {
@@ -64,6 +66,10 @@ void BluetoothEmuDevice::SendACLPacket(const bdaddr_t& source, const u8* data, u
 void BluetoothEmuDevice::AddEventToQueue(const SQueuedEvent& event)
 {
   if(m_event_queue.size()>=256)throw std::runtime_error("Bluetooth event queue overflow");
+  if(event.size>=3 && event.buffer[0]==0xff && event.buffer[2]==8 && std::getenv("WIILLR_IOS_TRACE"))
+    std::fprintf(stderr,"Bluetooth vendor Sync queued cycles=%llu event=%02x subtype=%02x size=%u hci_read=%u scan_enable=%02x\n",
+      static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(event.buffer[0]),unsigned(event.buffer[2]),
+      unsigned(event.size),unsigned(bool(m_hci_endpoint)),unsigned(m_scan_enable));
   DEBUG_LOG_FMT(IOS_WIIMOTE, "HCI event {:x} completed...",
                 ((hci_event_hdr_t*)event.buffer)->event);
 
@@ -77,6 +83,9 @@ void BluetoothEmuDevice::AddEventToQueue(const SQueuedEvent& event)
 
       // Send a reply to indicate HCI buffer is filled
       GetEmulationKernel().EnqueueIPCReply(m_hci_endpoint->ios_request, event.size);
+      if(event.size>=3 && event.buffer[0]==0xff && event.buffer[2]==8 && std::getenv("WIILLR_IOS_TRACE"))
+        std::fprintf(stderr,"Bluetooth vendor Sync delivered path=direct cycles=%llu event=%02x subtype=%02x size=%u\n",
+          static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(event.buffer[0]),unsigned(event.buffer[2]),unsigned(event.size));
       m_hci_endpoint.reset();
     }
     else  // push new one, pop oldest
@@ -94,6 +103,9 @@ void BluetoothEmuDevice::AddEventToQueue(const SQueuedEvent& event)
 
       // Send a reply to indicate HCI buffer is filled
       GetEmulationKernel().EnqueueIPCReply(m_hci_endpoint->ios_request, queued_event.size);
+      if(queued_event.size>=3 && queued_event.buffer[0]==0xff && queued_event.buffer[2]==8 && std::getenv("WIILLR_IOS_TRACE"))
+        std::fprintf(stderr,"Bluetooth vendor Sync delivered path=queued cycles=%llu event=%02x subtype=%02x size=%u\n",
+          static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(queued_event.buffer[0]),unsigned(queued_event.buffer[2]),unsigned(queued_event.size));
       m_hci_endpoint.reset();
       m_event_queue.pop_front();
     }
