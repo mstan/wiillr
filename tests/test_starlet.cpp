@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/starlet.hpp"
+#include "arm_decode.h"
+#include "thumb_decode.h"
 #include <vector>
 #include <cstdio>
 #include <stdexcept>
@@ -9,6 +11,116 @@ static bool faults(auto&& operation) {
 }
 int main() {
     std::vector<uint8_t> mem1(0x1800000),mem2(0x4000000);
+    {
+        wiillr::Starlet exception(mem1,mem2);
+        exception.coproc_write(15,0,1,0,0,0x500f8); /* Explicit low-vector case. */
+        exception.write32(8,0xe1b0f00e); /* Original handler-style MOVS PC,LR. */
+        exception.write32(0x100,0xef000001);
+        exception.cpu.cpsr.mode=uint8_t(armv4t::Mode::User);
+        exception.cpu.cpsr.i=false;exception.cpu.cpsr.f=false;
+        exception.cpu.cpsr.n=true;exception.cpu.cpsr.c=true;
+        exception.cpu.R[13]=0x1000;exception.cpu.R[14]=0x2345;
+        exception.cpu.banked_sp[armv4t::Bank_Supervisor]=0x400;
+        exception.cpu.R[15]=0x100;
+        exception.execute(armv4t::ArmDecoder::decode(exception.fetch32(0x100),0x100));
+        CHECK(exception.cpu.R[15]==8 && exception.cpu.R[14]==0x104);
+        CHECK(exception.cpu.R[13]==0x400 && exception.cpu.cpsr.i && !exception.cpu.cpsr.f);
+        CHECK(exception.cpu.banked_spsr[armv4t::Bank_Supervisor]==0xa0000010);
+        exception.execute(armv4t::ArmDecoder::decode(exception.fetch32(8),8));
+        CHECK(exception.cpu.R[15]==0x104 && exception.cpu.R[13]==0x1000);
+        CHECK(exception.cpu.cpsr.mode==uint8_t(armv4t::Mode::User) && !exception.cpu.cpsr.i);
+        /* ARM926 CP15.V changes the actual exception vector fetch. */
+        exception.cpu.cpsr.mode=uint8_t(armv4t::Mode::Supervisor);
+        exception.coproc_write(15,0,1,0,0,0x520f8);
+        exception.write32(0xffff0008,0xe1b0f00e);
+        exception.write16(0x200,0xdfab);
+        exception.cpu.cpsr.mode=uint8_t(armv4t::Mode::User);
+        exception.cpu.cpsr.t=true;exception.cpu.thumb=true;exception.cpu.R[15]=0x200;
+        exception.execute(armv4t::ThumbDecoder::decode(exception.fetch16(0x200),0x200));
+        CHECK(exception.cpu.R[15]==0xffff0008 && exception.cpu.R[14]==0x202);
+        CHECK(!exception.cpu.cpsr.t && exception.swi_entries()==2);
+        exception.execute(armv4t::ArmDecoder::decode(exception.fetch32(0xffff0008),0xffff0008));
+        CHECK(exception.cpu.R[15]==0x202 && exception.cpu.cpsr.t && exception.cpu.thumb);
+    }
+    {
+        wiillr::Starlet irq(mem1,mem2);
+        irq.write32(0xffff0018,0xe25ef004); /* SUBS PC,LR,#4 */
+        irq.write16(0x200,0x46c0); /* Thumb NOP */
+        irq.cpu.cpsr.mode=uint8_t(armv4t::Mode::User);
+        irq.cpu.cpsr.t=irq.cpu.thumb=true;irq.cpu.cpsr.i=false;irq.cpu.cpsr.f=false;
+        irq.cpu.R[13]=0x1000;irq.cpu.R[15]=0x200;
+        irq.cpu.banked_sp[armv4t::Bank_IRQ]=0x400;
+        WiiIpc shared;wii_ipc_init(&shared);irq.attach_ipc(shared,9000);
+        irq.write32(0x0d80000c,0x10);irq.write32(0x0d80003c,0x80000000);
+        CHECK(wii_ipc_write(&shared,0,0x123400,9000));
+        CHECK(wii_ipc_write(&shared,4,0x11,9000));
+        irq.advance(399);CHECK(!wii_ipc_arm_interrupt(&shared));
+        irq.advance(1);CHECK(wii_ipc_arm_interrupt(&shared));
+        CHECK(irq.read32(0x0d800000)==0x123400);
+        irq.step();
+        CHECK(irq.cpu.R[15]==0xffff0018 && irq.cpu.R[14]==0x206);
+        CHECK(irq.cpu.R[13]==0x400 && irq.cpu.cpsr.i && !irq.cpu.cpsr.f);
+        CHECK(irq.cpu.banked_spsr[armv4t::Bank_IRQ]==0x30 && irq.irq_entries()==1);
+        irq.write32(0x0d80000c,4);irq.write32(0x0d800038,0x80000000);
+        irq.step();
+        CHECK(irq.cpu.R[15]==0x202 && irq.cpu.cpsr.t && irq.cpu.thumb);
+        CHECK(irq.cpu.R[13]==0x1000 && !irq.cpu.cpsr.i);
+        irq.write32(0x0d800008,0x123400);irq.write32(0x0d80000c,1);
+        irq.write32(0x0d800034,0x40000000);
+        irq.advance(400);
+        uint32_t reply=0;CHECK(wii_ipc_read(&shared,8,&reply) && reply==0x123400);
+        CHECK(wii_ipc_ppc_interrupt(&shared));
+    }
+    {
+        wiillr::Starlet exception(mem1,mem2);
+        exception.write32(0xffff0004,0xe1b0f00e); /* MOVS PC,LR */
+        exception.write16(0x300,0xde00); /* Undefined Thumb instruction */
+        exception.cpu.cpsr.mode=uint8_t(armv4t::Mode::User);
+        exception.cpu.cpsr.t=exception.cpu.thumb=true;exception.cpu.R[15]=0x300;
+        exception.step();
+        CHECK(exception.cpu.R[15]==0xffff0004 && exception.cpu.R[14]==0x302);
+        CHECK(exception.undefined_entries()==1);
+        exception.step();CHECK(exception.cpu.R[15]==0x302 && exception.cpu.cpsr.t);
+        exception.cpu.cpsr.mode=uint8_t(armv4t::Mode::Supervisor);
+        exception.cpu.cpsr.t=exception.cpu.thumb=false;
+        /* An unmapped fetch takes the original prefetch-abort vector. */
+        exception.coproc_write(15,0,2,0,0,0x4000);
+        exception.coproc_write(15,0,3,0,0,0xffffffff);
+        exception.write32(0x4800,0);
+        exception.coproc_write(15,0,1,0,0,0x520f9);
+        exception.cpu.R[15]=0x20000000;exception.step();
+        CHECK(exception.cpu.R[15]==0xffff000c && exception.cpu.R[14]==0x20000004);
+        CHECK(exception.prefetch_aborts()==1 && exception.coproc_read(15,0,5,0,1)==5);
+        /* Decode is supplied separately to test a real data permission miss. */
+        exception.coproc_write(15,0,1,0,0,0x520f8);
+        exception.cpu.R[0]=0x20000000;exception.cpu.R[15]=0x400;
+        exception.coproc_write(15,0,1,0,0,0x520f9);
+        exception.execute(armv4t::ArmDecoder::decode(0xe5901000,0x400));
+        CHECK(exception.cpu.R[15]==0xffff0010 && exception.cpu.R[14]==0x408);
+        CHECK(exception.data_aborts()==1 && exception.coproc_read(15,0,6,0,0)==0x20000000);
+    }
+    {
+        wiillr::Starlet hardware(mem1,mem2);
+        hardware.write32(0x0d800014,3);hardware.write32(0x0d80003c,1);
+        hardware.advance(383);CHECK(!(hardware.ipc().arm_flags&1));
+        hardware.advance(1);CHECK(wii_ipc_arm_interrupt(&hardware.ipc()));
+        hardware.write32(0x0d800038,1);CHECK(!wii_ipc_arm_interrupt(&hardware.ipc()));
+        hardware.write32(0x0d8001ec,0x80000005);
+        CHECK(faults([&]{hardware.read32(0x0d8001f0);}));
+        std::array<uint8_t,128> otp;for(unsigned n=0;n<otp.size();++n)otp[n]=uint8_t(n);
+        hardware.load_otp(otp);CHECK(hardware.read32(0x0d8001f0)==0x14151617);
+        CHECK(faults([&]{hardware.load_otp(std::span<const uint8_t>(otp).first(127));}));
+        CHECK(faults([&]{hardware.write32(0x0d8001ec,0x40000005);}));
+        CHECK(hardware.read32(0x0d8001f0)==0x14151617);
+        hardware.write32(0x0d8000fc,0x20);hardware.write32(0x0d8000dc,0xffffff);
+        hardware.write32(0x0d8000e0,0x24);hardware.write32(0x0d8000c0,0x20);
+        CHECK(hardware.read32(0x0d8000e0)==0x24 && hardware.read32(0x0d8000c0)==0x20);
+        hardware.write32(0x0d8000fc,0);
+        CHECK(hardware.read32(0x0d8000c0)==0 && hardware.read32(0x0d8000e0)==0x24);
+        CHECK(hardware.read32(0x0d8000dc)==0xffffff);
+        CHECK(faults([&]{hardware.read32(0x0d8000e8);}));
+        CHECK(faults([&]{hardware.write32(0x0d010000,0x80000000);}));
+    }
     wiillr::Starlet machine(mem1,mem2);
     CHECK(machine.read32(0x0d800010)==0);
     machine.advance(127);CHECK(machine.read32(0x0d800010)==0);
@@ -105,9 +217,9 @@ int main() {
     CHECK(machine.read32(0x20000020)==0x11223344);
     CHECK(faults([&]{machine.coproc_read(14,0,1,0,0);}));
     cpwrite(1,0x500f8);
-    CHECK(machine.read32(0x0d800180)==0x53102);
+    CHECK(machine.read32(0x0d800180)==0);
     machine.write32(0x0d8001d0,0);CHECK(machine.read32(0x0d8001d0)==0);
-    machine.write32(0x0d800180,0x53002);
+    machine.write32(0x0d800180,0x100);
     machine.write32(0x0d8001cc,wii_audio_pll_preset(false));
     CHECK(machine.read32(0x0d8001cc)==wii_audio_pll_preset(false));
     CHECK(faults([&]{machine.write32(0x0d800180,0xffffffff);}));

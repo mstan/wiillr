@@ -1,0 +1,34 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef WIILLR_IOS_LLE_H
+#define WIILLR_IOS_LLE_H
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include "wiillr/ipc.h"
+#include "wiillr/hollywood.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+typedef struct CPUState CPUState;
+typedef struct WiiIosLle WiiIosLle;
+typedef struct {
+    uint64_t instructions,arm_cycles,swi_entries,irq_entries,undefined_entries;
+    uint32_t pc;
+    bool stopped;
+} WiiIosLleStatus;
+/* Original instructions, shared physical MEM1/MEM2 and actual IPC registers.
+ * No native service replies, captured initialization or synthetic fuse values.
+ * OTP may be absent; the first actual OTP data read then stops explicitly.
+ * Create before PPC execution: successful creation establishes the shared
+ * Hollywood original-kernel clock/compatibility profile, not a title handoff.
+ * The consumer retains CPU/RAM/IPC/hardware ownership until destroy. */
+WiiIosLle* wii_ios_lle_create(CPUState*,WiiIpc*,WiiHollywood*,const uint8_t* ios,size_t ios_size,
+    const uint8_t* otp,size_t otp_size,uint64_t ppc_origin);
+bool wii_ios_lle_tick(WiiIosLle*,uint64_t ppc_cycles);
+WiiIosLleStatus wii_ios_lle_status(const WiiIosLle*);
+const char* wii_ios_lle_error(const WiiIosLle*);
+void wii_ios_lle_destroy(WiiIosLle*);
+#ifdef __cplusplus
+}
+#endif
+#endif

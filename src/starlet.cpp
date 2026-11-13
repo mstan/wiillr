@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/starlet.hpp"
+#include "interpreter.h"
+#include "arm_decode.h"
+#include "thumb_decode.h"
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -7,8 +10,20 @@
 #include <atomic>
 
 namespace {
+class MemoryAbort final : public std::runtime_error {
+public:explicit MemoryAbort(const char* message):std::runtime_error(message) {}
+};
 uint32_t be32(const uint8_t* p) {return uint32_t(p[0])<<24|uint32_t(p[1])<<16|uint32_t(p[2])<<8|p[3];}
 uint16_t be16(const uint8_t* p) {return uint16_t(p[0])<<8|p[1];}
+int usb_phy_index(uint32_t address) {
+    switch(address) {
+    case 0x0d0400a4:return 0; /* UTMI_CTRL */
+    case 0x0d0400b0:return 1; /* USB_PHYCMN_CAL */
+    case 0x0d0400b4:return 2; /* PHYADJ_CTRL */
+    case 0x0d0400cc:return 3; /* USB_CHICKENBITS */
+    default:return -1;
+    }
+}
 [[noreturn]] void unsupported(const char* operation,uint32_t pc,uint32_t address) {
     char message[128];
     std::snprintf(message,sizeof message,"Starlet unsupported %s pc=%08x address=%08x",operation,pc,address);
@@ -17,9 +32,77 @@ uint16_t be16(const uint8_t* p) {return uint16_t(p[0])<<8|p[1];}
 }
 namespace wiillr {
 Starlet::Starlet(std::span<uint8_t> mem1,std::span<uint8_t> mem2):mem1_(mem1),mem2_(mem2) {
-    wii_hollywood_init(&hollywood_);
+    /* An isolated original-kernel entry, not the native NAND-title handoff:
+     * original IOS must program compatibility and audio clocks itself. */
+    wii_ipc_init(&owned_ipc_);
     cpu.cpsr.mode=uint8_t(armv4t::Mode::Supervisor);
     cpu.cpsr.i=true;cpu.cpsr.f=true;
+}
+void Starlet::advance(uint64_t arm_cycles) {
+    const uint64_t old_timer=cycles_/128;
+    cycles_+=arm_cycles;
+    const uint64_t ticks=cycles_/128-old_timer;
+    const uint32_t distance=alarm_-uint32_t(old_timer);
+    if(ticks>=(distance ? uint64_t(distance):0x100000000ull))ipc_->arm_flags|=1;
+    wii_ipc_tick(ipc_,ppc_origin_+cycles_*3);
+}
+void Starlet::exception(armv4t::Mode mode,uint32_t vector,uint32_t link) {
+    auto bank=[](uint8_t current) {
+        using namespace armv4t;
+        switch(Mode(current)) {
+        case Mode::FIQ:return Bank_FIQ;case Mode::IRQ:return Bank_IRQ;
+        case Mode::Supervisor:return Bank_Supervisor;case Mode::Abort:return Bank_Abort;
+        case Mode::Undefined:return Bank_Undefined;default:return Bank_User;
+        }
+    };
+    const auto old_bank=bank(cpu.cpsr.mode),new_bank=bank(uint8_t(mode));
+    const uint32_t status=uint32_t(cpu.cpsr.n)<<31|uint32_t(cpu.cpsr.z)<<30|
+        uint32_t(cpu.cpsr.c)<<29|uint32_t(cpu.cpsr.v)<<28|uint32_t(cpu.cpsr.q)<<27|
+        uint32_t(cpu.cpsr.i)<<7|uint32_t(cpu.cpsr.f)<<6|uint32_t(cpu.cpsr.t)<<5|cpu.cpsr.mode;
+    cpu.banked_sp[old_bank]=cpu.R[13];cpu.banked_lr[old_bank]=cpu.R[14];
+    if(old_bank==armv4t::Bank_FIQ) {
+        for(unsigned i=0;i<5;++i) {cpu.r8_12_fiq[i]=cpu.R[i+8];cpu.R[i+8]=cpu.r8_12_user[i];}
+    }
+    cpu.banked_spsr[new_bank]=status;
+    cpu.R[13]=cpu.banked_sp[new_bank];cpu.R[14]=link;
+    cpu.cpsr.mode=uint8_t(mode);cpu.cpsr.t=false;cpu.cpsr.i=true;cpu.thumb=false;
+    cpu.R[15]=((sctl_&(1u<<13))?0xffff0000u:0)|vector;
+}
+uint32_t Starlet::step() {
+    const uint32_t pc=cpu.R[15];
+    try {
+        const auto instruction=cpu.cpsr.t ? armv4t::ThumbDecoder::decode(fetch16(pc),pc):
+            armv4t::ArmDecoder::decode(fetch32(pc),pc);
+        return execute(instruction);
+    }catch(const MemoryAbort&) {
+        exception(armv4t::Mode::Abort,0xc,pc+4);++prefetch_aborts_;
+        advance(3);return 3;
+    }
+}
+uint32_t Starlet::execute(const armv4t::Instr& instruction) {
+    uint32_t cost=0;
+    armv4t::Interpreter::Result result;
+    try {result=armv4t::Interpreter::step(cpu,*this,instruction,&cost);}
+    catch(const MemoryAbort&) {
+        exception(armv4t::Mode::Abort,0x10,instruction.pc+8);++data_aborts_;
+        advance(3);return 3;
+    }
+    if(result==armv4t::Interpreter::Result::NotImplemented)
+        unsupported("ARM/Thumb instruction",instruction.pc,instruction.raw);
+    if(result==armv4t::Interpreter::Result::Undefined) {
+        exception(armv4t::Mode::Undefined,4,instruction.pc+(instruction.thumb?2u:4u));
+        ++undefined_entries_;
+    }
+    if(result==armv4t::Interpreter::Result::Swi) {
+        exception(armv4t::Mode::Supervisor,8,instruction.pc+(instruction.thumb?2u:4u));
+        ++swi_entries_;
+    }
+    advance(cost);
+    if(!cpu.cpsr.i && wii_ipc_arm_interrupt(ipc_)) {
+        exception(armv4t::Mode::IRQ,0x18,cpu.R[15]+4); /* IRQ preserves F. */
+        ++irq_entries_;
+    }
+    return cost;
 }
 uint8_t* Starlet::physical(uint32_t address,uint32_t size) {
     if(address<=mem1_.size() && size<=mem1_.size()-address)return mem1_.data()+address;
@@ -42,8 +125,9 @@ uint32_t Starlet::translate(uint32_t original,bool writing) {
     uint32_t result,ap;
     bool section=type==2;
     auto fault=[&](uint32_t status) {
-        dfsr_=(domain<<4)|status;far_=original;
-        unsupported("MMU fault",cpu.R[15],original);
+        if(fetching_)ifsr_=(domain<<4)|status;
+        else {dfsr_=(domain<<4)|status;far_=original;}
+        throw MemoryAbort("Starlet MMU translation/domain/permission fault");
     };
     if(!type)fault(5);
     const uint32_t access=(dacr_>>(domain*2))&3;
@@ -81,8 +165,9 @@ uint32_t Starlet::translate(uint32_t original,bool writing) {
 }
 void Starlet::check_alignment(uint32_t address,uint32_t size) {
     if((sctl_&2) && (address&(size-1))) {
-        dfsr_=1;far_=address;
-        unsupported("alignment fault",cpu.R[15],address);
+        if(fetching_)ifsr_=1;
+        else {dfsr_=1;far_=address;}
+        throw MemoryAbort("Starlet alignment fault");
     }
 }
 uint32_t Starlet::load_ios(std::span<const uint8_t> b) {
@@ -119,8 +204,16 @@ uint32_t Starlet::load_ios(std::span<const uint8_t> b) {
         const auto* p=e.data()+table+n*stride;
         if(be32(p)==1)std::memcpy(physical(be32(p+12),be32(p+16)),e.data()+be32(p+4),be32(p+16));
     }
+    if(store_observer_)for(uint32_t n=0;n<count;++n) {
+        const auto* p=e.data()+table+n*stride;
+        if(be32(p)==1 && be32(p+20))store_observer_(store_user_,be32(p+12),be32(p+20));
+    }
     cpu.R[15]=entry;
     return entry;
+}
+void Starlet::load_otp(std::span<const uint8_t> bytes) {
+    if(bytes.size()!=otp_.size())throw std::runtime_error("Starlet OTP must contain exactly 128 original bytes");
+    std::memcpy(otp_.data(),bytes.data(),otp_.size());otp_loaded_=true;
 }
 uint8_t Starlet::read8(uint32_t at) {
     auto* p=physical(translate(at,false),1);if(!p)unsupported("read8",cpu.R[15],at);return *p;
@@ -138,11 +231,40 @@ uint16_t Starlet::read16(uint32_t at) {
 uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
-    /* HW_TIMER: free-running AHB/128 counter (243MHz /128). MINI's udelay
-     * uses this same approximately1.9MHz timebase; reads do not advance time.
-     * Alarm/interrupt routing remains unsupported until actually implemented. */
+    uint32_t ipc_value;
+    if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
+       wii_ipc_read(ipc_,bus_address-0x0d800000u,&ipc_value))return ipc_value;
+    /* HW_TIMER: free-running AHB/128 counter (243MHz /128). */
     if(bus_address==0x0d800010u)return uint32_t(cycles_/128);
-    uint32_t hollywood_value;if(wii_hollywood_read(&hollywood_,bus_address,&hollywood_value))return hollywood_value;
+    if(bus_address==0x0d800014u)return alarm_;
+    if(bus_address==0x0d800040u)return 0; /* FIQ source mask, currently all IRQ. */
+    if(bus_address==0x0d80005cu)return debug_irq_enable_;
+    if(bus_address==0x0d800064u)return ahb_protection_;
+    if(bus_address==0x0d800194u)return resets_;
+    if(bus_address==0x0d8001ecu)return otp_command_;
+    if(bus_address==0x0d8001f0u) {
+        if(!(otp_command_&0x80000000u))unsupported("OTP read without read command",cpu.R[15],otp_command_);
+        if(!otp_loaded_)throw std::runtime_error("Starlet original 128-byte OTP input is required for OTP data read");
+        return be32(otp_.data()+(otp_command_&31u)*4);
+    }
+    if(bus_address>=0x0d010000u && bus_address<=0x0d030000u && !(bus_address&0xffffu))
+        return dma_control_[(bus_address-0x0d010000u)/0x10000];
+    if(bus_address>=0x0d8001e0u && bus_address<=0x0d8001e8u && !(bus_address&3))
+        return io_strength_[(bus_address-0x0d8001e0u)/4];
+    if(bus_address==0x0d8001c4u)return vi_pll_;
+    if(bus_address==0x0d8001c8u)return vi_pll_ext_;
+    if(bus_address==0x0d8001d4u)return usb_pll_;
+    if(bus_address==0x0d8001d8u)return usb_pll_ext_;
+    if(bus_address==0x0d800088u)return usb_force_reset_;
+    if(const int index=usb_phy_index(bus_address);index>=0)return usb_phy_[index];
+    if(bus_address==0x0d8000dcu)return gpio_enable_;
+    if(bus_address>=0x0d8000c0u && bus_address<=0x0d8000fcu && !(bus_address&3)) {
+        const uint32_t index=((bus_address-0x0d8000c0u)/4)&7;
+        if(index==2 || index==6)unsupported("unattached GPIO input/straps",cpu.R[15],bus_address);
+        const uint32_t mask=bus_address<0x0d8000e0u && index!=7 ? gpio_[7]:0xffffffu;
+        return gpio_[index]&mask;
+    }
+    uint32_t hollywood_value;if(wii_hollywood_read(hollywood_,bus_address,&hollywood_value))return hollywood_value;
     if(bus_address==0x0d800214u)return 0x11; /* selected Hollywood1.1 board profile */
     if(bus_address==0x0d8b0008u)return ahb_flush_mask_;
     if(bus_address==0x0d800070u)return exi_control_;
@@ -153,7 +275,9 @@ uint32_t Starlet::read32(uint32_t at) {
     auto* p=physical(bus_address,4);if(!p)unsupported("read32",cpu.R[15],at);return be32(p);
 }
 void Starlet::write8(uint32_t at,uint8_t v) {
-    auto* p=physical(translate(at,true),1);if(!p)unsupported("write8",cpu.R[15],at);*p=v;
+    const auto address=translate(at,true);
+    auto* p=physical(address,1);if(!p)unsupported("write8",cpu.R[15],at);*p=v;
+    if(store_observer_)store_observer_(store_user_,address,1);
 }
 void Starlet::write16(uint32_t at,uint16_t v) {
     check_alignment(at,2);
@@ -178,11 +302,74 @@ void Starlet::write16(uint32_t at,uint16_t v) {
         return;
     }
     auto* p=physical(bus_address,2);if(!p)unsupported("write16",cpu.R[15],at);p[0]=uint8_t(v>>8);p[1]=uint8_t(v);
+    if(store_observer_)store_observer_(store_user_,bus_address,2);
 }
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
-    if(wii_hollywood_write(&hollywood_,bus_address,v))return;
+    if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
+       wii_ipc_write(ipc_,bus_address-0x0d800000u,v,ppc_origin_+cycles_*3))return;
+    if(bus_address==0x0d800014u) {alarm_=v;return;}
+    if(bus_address==0x0d8001ecu) {
+        if((v&~31u)!=0x80000000u)unsupported("unsupported OTP command",cpu.R[15],v);
+        otp_command_=v;return;
+    }
+    if(bus_address==0x0d80005cu) {debug_irq_enable_=v;return;}
+    if(bus_address==0x0d800064u) {ahb_protection_=v;return;}
+    if(bus_address==0x0d800040u) {
+        if(v)unsupported("FIQ source routing",cpu.R[15],v);
+        return;
+    }
+    if(bus_address==0x0d800194u) {
+        if(!(v&0x08000000u))unsupported("IOP reset",cpu.R[15],v);
+        resets_=v&0x7fffffffu;return;
+    }
+    if(bus_address>=0x0d010000u && bus_address<=0x0d030000u && !(bus_address&0xffffu)) {
+        /* Original IOS clears the NAND/AES/SHA command words before setup.
+         * Idle/clear is meaningful without media or keys; starting a command
+         * still fails explicitly until that actual device is implemented. */
+        if(v)unsupported("unimplemented NAND/AES/SHA command/control",cpu.R[15],v);
+        dma_control_[(bus_address-0x0d010000u)/0x10000]=0;return;
+    }
+    /* I/O pad drive-strength configuration; no data or completion bits. */
+    if(bus_address>=0x0d8001e0u && bus_address<=0x0d8001e8u && !(bus_address&3)) {
+        io_strength_[(bus_address-0x0d8001e0u)/4]=v;return;
+    }
+    /* This IOS-entry profile leaves the VI PLL disabled. The original IOS
+     * clock sequence programs these retained configuration registers; there
+     * is no VI consumer in the standalone Starlet route. */
+    if(bus_address==0x0d8001c4u) {vi_pll_=v;return;}
+    if(bus_address==0x0d8001c8u) {vi_pll_ext_=v;return;}
+    if(bus_address==0x0d8001d4u) {usb_pll_=v;return;}
+    if(bus_address==0x0d8001d8u) {usb_pll_ext_=v;return;}
+    /* Original clock startup programs intermediate AI PLL configuration too;
+     * the native title-handoff helper only accepts completed clock presets. */
+    if(bus_address==0x0d8001ccu) {hollywood_->audio_pll=v;return;}
+    if(bus_address==0x0d8001d0u) {hollywood_->audio_control=v;return;}
+    if(bus_address==0x0d800180u && !((v^hollywood_->compat)&~0x106u)) {
+        /* Kernel boot also sets COMPAT.B1/B2. Its PPC-side interface is not
+         * attached here; preserve the control without changing other bits. */
+        hollywood_->compat=v;return;
+    }
+    /* HW_USBFRCRST: USB reset output configuration, not a completion flag.
+     * No USB host is attached to this isolated IOS-entry machine. */
+    if(bus_address==0x0d800088u) {usb_force_reset_=v;return;}
+    /* EHCI analogue PHY setup only. Controller commands/status and USB DMA
+     * remain unsupported; these output controls never synthesize a device. */
+    if(const int index=usb_phy_index(bus_address);index>=0) {usb_phy_[index]=v;return;}
+    if(bus_address==0x0d8000dcu) {gpio_enable_=v&0xffffffu;return;}
+    if(bus_address>=0x0d8000c0u && bus_address<=0x0d8000fcu && !(bus_address&3)) {
+        const uint32_t index=((bus_address-0x0d8000c0u)/4)&7;
+        if(index==2 || index==6)unsupported("read-only GPIO input/straps write",cpu.R[15],bus_address);
+        /* GPIOB is a masked window on the same physical pin controls. The
+         * Starlet window can read all pins, but only write its owned pins. */
+        const uint32_t mask=index==7 ? 0xffffffu:
+            (bus_address<0x0d8000e0u ? gpio_[7]:~gpio_[7])&0xffffffu;
+        if(index==4)gpio_[index]&=~(v&mask); /* W1C interrupt latch */
+        else gpio_[index]=(gpio_[index]&~mask)|(v&mask);
+        return;
+    }
+    if(wii_hollywood_write(hollywood_,bus_address,v))return;
     if(bus_address==0x0d80018cu) {
         /* IOS initializes the decoupled graphics/PI reset lines. They have no
          * attached PPC/GX in this isolated route. Boot-ROM remapping requires
@@ -210,10 +397,12 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     }
     auto* p=physical(bus_address,4);if(!p)unsupported("write32",cpu.R[15],at);
     p[0]=uint8_t(v>>24);p[1]=uint8_t(v>>16);p[2]=uint8_t(v>>8);p[3]=uint8_t(v);
+    if(store_observer_)store_observer_(store_user_,bus_address,4);
 }
 void Starlet::coproc_write(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uint32_t op2,uint32_t value) {
     if(cpu.cpsr.mode==uint8_t(armv4t::Mode::User))unsupported("unprivileged coprocessor write",cpu.R[15],cp);
     if(cp==15 && op==0) {
+        if(crn==5 && crm==0 && op2==1) {ifsr_=value;return;}
         if(crm==0 && op2==0) {
             switch(crn) {
             case 1:if(!(value&0x80u))unsupported("little-endian SCTLR",cpu.R[15],value);sctl_=value;return;
@@ -237,6 +426,7 @@ void Starlet::coproc_write(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uin
 }
 uint32_t Starlet::coproc_read(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uint32_t op2) {
     if(cpu.cpsr.mode==uint8_t(armv4t::Mode::User))unsupported("unprivileged coprocessor read",cpu.R[15],cp);
+    if(cp==15 && op==0 && crn==5 && crm==0 && op2==1)return ifsr_;
     if(cp==15 && op==0 && crm==0 && op2==0) {
         switch(crn) {
         case 0:return 0x41069265u; /* ARM926EJ-S r0p5 processor ID */
@@ -255,6 +445,14 @@ void Starlet::coproc_cdp(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uint3
     std::fprintf(stderr,"Starlet CDP cp=%u op1=%u c%u,c%u op2=%u\n",cp,op,crn,crm,op2);
     unsupported("CDP",cpu.R[15],crn);
 }
-uint32_t Starlet::fetch32(uint32_t at) {return read32(at);}
-uint16_t Starlet::fetch16(uint32_t at) {return read16(at);}
+uint32_t Starlet::fetch32(uint32_t at) {
+    fetching_=true;
+    try {const auto value=read32(at);fetching_=false;return value;}
+    catch(...) {fetching_=false;throw;}
+}
+uint16_t Starlet::fetch16(uint32_t at) {
+    fetching_=true;
+    try {const auto value=read16(at);fetching_=false;return value;}
+    catch(...) {fetching_=false;throw;}
+}
 }

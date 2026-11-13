@@ -1,0 +1,67 @@
+/* SPDX-License-Identifier: MIT */
+/* ROM-free architectural bus fixture, not evidence of an original IOS reply. */
+#include "wiillr/machine.h"
+#include <stdio.h>
+#include <string.h>
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}}while(0)
+static void put32(unsigned char* p,unsigned value) {
+    p[0]=(unsigned char)(value>>24);p[1]=(unsigned char)(value>>16);
+    p[2]=(unsigned char)(value>>8);p[3]=(unsigned char)value;
+}
+static void put16(unsigned char* p,unsigned value) {p[0]=(unsigned char)(value>>8);p[1]=(unsigned char)value;}
+int main(void) {
+    CPUState cpu;CHECK(cpu_init(&cpu));CHECK(cpu_alloc_mem2(&cpu,WII_MEM2_SIZE));
+    WiiMachine machine;wii_machine_init(&machine,&cpu);
+    unsigned char image[16+84+0x44]={0};unsigned char* elf=image+16;
+    put32(image,16);put32(image+8,sizeof image-16);
+    put32(elf,0x7f454c46);elf[4]=1;elf[5]=2;elf[6]=1;
+    put16(elf+16,2);put16(elf+18,40);put32(elf+20,1);put32(elf+24,0xffff0000);
+    put32(elf+28,52);put16(elf+40,52);put16(elf+42,32);put16(elf+44,1);
+    put32(elf+52,1);put32(elf+56,84);put32(elf+60,0xffff0000);put32(elf+64,0xffff0000);
+    put32(elf+68,0x44);put32(elf+72,0x44);put32(elf+76,5);put32(elf+80,4);
+    const unsigned words[]={
+        0xe59f0030,0xe3a01010,0xe5801000,0xe59f2028,0xe59f3028,
+        0xe5934000,0xe5945000,0xe5845004,0xe5824000,0xe3a01005,
+        0xe5801000,0xeafffffe,0,0,0x0d80000c,0x0d800008,0x0d800000};
+    for(unsigned n=0;n<sizeof words/sizeof *words;++n)put32(elf+84+4*n,words[n]);
+    cpu.cycles=300;
+    machine.ios_lle=wii_ios_lle_create(&cpu,&machine.ipc,&machine.hollywood,image,sizeof image,NULL,0,cpu.cycles);
+    CHECK(machine.ios_lle);
+    mem_write32(&cpu,0x90000400,0x12345678,0);
+    mem_write32(&cpu,0x80000404,0xaabbccdd,0);
+    cpu.reserve_addr=0xd0000404;cpu.reserve_valid=true;
+#if WIILLR_IOS_LLE
+    mem_write32(&cpu,0xcd000000,0x10000400,0);
+    mem_write32(&cpu,0xcd000034,0x40000000,0);
+    mem_write32(&cpu,0xcd000004,0x11,0);
+#else
+    CHECK(wii_ipc_write(&machine.ipc,0,0x10000400,cpu.cycles));
+    CHECK(wii_ipc_write(&machine.ipc,0x34,0x40000000,cpu.cycles));
+    CHECK(wii_ipc_write(&machine.ipc,4,0x11,cpu.cycles));
+#endif
+    cpu.cycles=12300;
+#if WIILLR_IOS_LLE
+    wii_machine_tick(&machine,&cpu);CHECK(!cpu.halted);
+#else
+    CHECK(wii_ios_lle_tick(machine.ios_lle,cpu.cycles));
+#endif
+    CHECK(mem_read32(&cpu,0x90000404,0)==0x12345678);
+    CHECK(mem_read32(&cpu,0x80000404,0)==0xaabbccdd && !cpu.reserve_valid);
+    CHECK(machine.ipc.arm_message==0x10000400 && !(machine.ipc.x&1));
+    CHECK(wii_ipc_ppc_interrupt(&machine.ipc));
+    const WiiIosLleStatus status=wii_ios_lle_status(machine.ios_lle);
+    CHECK(status.instructions>10 && status.arm_cycles>=4000 && status.arm_cycles<4004 && !status.stopped);
+    CHECK(!wii_ios_lle_tick(machine.ios_lle,cpu.cycles-1));
+    CHECK(strstr(wii_ios_lle_error(machine.ios_lle),"monotonic"));
+    wii_ios_lle_destroy(machine.ios_lle);
+    /* Missing fuse input must remain an explicit failure through the C ABI. */
+    put32(elf+84,0xe59f0030);put32(elf+88,0xe3a01102);
+    put32(elf+92,0xe5801000);put32(elf+96,0xe5902004);
+    put32(elf+84+0x38,0x0d8001ec);
+    machine.ios_lle=wii_ios_lle_create(&cpu,&machine.ipc,&machine.hollywood,image,sizeof image,NULL,0,cpu.cycles);
+    CHECK(machine.ios_lle && !wii_ios_lle_tick(machine.ios_lle,cpu.cycles+1000));
+    CHECK(wii_ios_lle_status(machine.ios_lle).stopped);
+    CHECK(strstr(wii_ios_lle_error(machine.ios_lle),"128-byte OTP"));
+    wii_ios_lle_destroy(machine.ios_lle);machine.ios_lle=NULL;
+    wii_ios_native_destroy(&machine.ios);cpu_free(&cpu);return 0;
+}

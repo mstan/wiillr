@@ -1,8 +1,5 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/starlet.hpp"
-#include "arm_decode.h"
-#include "thumb_decode.h"
-#include "interpreter.h"
 #include <fstream>
 #include <iterator>
 #include <vector>
@@ -10,9 +7,9 @@
 #include <stdexcept>
 
 int main(int argc,char** argv) {
-    if(argc!=3) {std::fprintf(stderr,"usage: wiillr-starlet-discover ORIGINAL-IOS-CONTENT MAX-STEPS\n");return 2;}
-    uint64_t retired=0,cycles=0;
-    uint32_t pc=0,raw=0;
+    if(argc!=3 && argc!=4) {std::fprintf(stderr,"usage: wiillr-starlet-discover ORIGINAL-IOS-CONTENT MAX-STEPS [ORIGINAL-128-BYTE-OTP]\n");return 2;}
+    uint64_t retired=0,cycles=0,swis=0,irqs=0,undefined=0;
+    uint32_t pc=0,lr=0;
     try {
         size_t used;
         const std::string count=argv[2];const uint64_t limit=std::stoull(count,&used,0);
@@ -22,27 +19,29 @@ int main(int argc,char** argv) {
         std::vector<uint8_t> binary((std::istreambuf_iterator<char>(input)),{});
         std::vector<uint8_t> mem1(0x1800000),mem2(0x4000000);
         wiillr::Starlet machine(mem1,mem2);
+        if(argc==4) {
+            std::ifstream otp_input(argv[3],std::ios::binary);
+            if(!otp_input)throw std::runtime_error("Cannot open original OTP input");
+            const std::vector<uint8_t> otp((std::istreambuf_iterator<char>(otp_input)),{});
+            machine.load_otp(otp);
+        }
         machine.load_ios(binary);
         while(retired<limit) {
             pc=machine.cpu.R[15];
-            raw=machine.cpu.cpsr.t ? machine.fetch16(pc):machine.fetch32(pc);
-            const auto instruction=machine.cpu.cpsr.t ? armv4t::ThumbDecoder::decode(uint16_t(raw),pc):
-                armv4t::ArmDecoder::decode(raw,pc);
-            uint32_t cost;
-            const auto result=armv4t::Interpreter::step(machine.cpu,machine,instruction,&cost);
-            if(result==armv4t::Interpreter::Result::Undefined || result==armv4t::Interpreter::Result::NotImplemented)
-                throw std::runtime_error("Unsupported ARM/Thumb instruction");
-            if(result==armv4t::Interpreter::Result::Swi)
-                throw std::runtime_error("SWI exception routing is not implemented yet");
-            ++retired;cycles+=cost;machine.advance(cost);
+            lr=machine.cpu.R[14];
+            const uint32_t cost=machine.step();
+            ++retired;cycles+=cost;
+            swis=machine.swi_entries();irqs=machine.irq_entries();undefined=machine.undefined_entries();
         }
-        std::printf("{\"execution\":\"ARM-discovery-interpreter\",\"instructions\":%llu,\"cycles\":%llu,\"pc\":%u,\"limited\":true}\n",
-                    static_cast<unsigned long long>(retired),static_cast<unsigned long long>(cycles),machine.cpu.R[15]);
+        std::printf("{\"execution\":\"ARM-discovery-interpreter\",\"instructions\":%llu,\"cycles\":%llu,\"pc\":%u,\"swi_entries\":%llu,\"limited\":true}\n",
+                    static_cast<unsigned long long>(retired),static_cast<unsigned long long>(cycles),machine.cpu.R[15],
+                    static_cast<unsigned long long>(machine.swi_entries()));
         return 0;
     }catch(const std::exception& error) {
         std::fprintf(stderr,"%s\n",error.what());
-        std::printf("{\"execution\":\"ARM-discovery-interpreter\",\"instructions\":%llu,\"cycles\":%llu,\"pc\":%u,\"raw\":%u,\"stopped\":true}\n",
-                    static_cast<unsigned long long>(retired),static_cast<unsigned long long>(cycles),pc,raw);
+        std::printf("{\"execution\":\"ARM-discovery-interpreter\",\"instructions\":%llu,\"cycles\":%llu,\"pc\":%u,\"lr\":%u,\"swi_entries\":%llu,\"irq_entries\":%llu,\"undefined_entries\":%llu,\"stopped\":true}\n",
+                    static_cast<unsigned long long>(retired),static_cast<unsigned long long>(cycles),pc,lr,
+                    static_cast<unsigned long long>(swis),static_cast<unsigned long long>(irqs),static_cast<unsigned long long>(undefined));
         return 1;
     }
 }

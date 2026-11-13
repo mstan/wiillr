@@ -218,7 +218,7 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
             fprintf(stderr,"native IOS request queue unavailable\n");cpu->halted=true;
         }
         wii_machine_observe_register(m,cpu,physical);
-        if (!WIILLR_IOS_NATIVE && (m->ipc.x & 1)) {
+        if (!WIILLR_IOS_NATIVE && !(WIILLR_IOS_LLE && m->ios_lle) && (m->ipc.x & 1)) {
             /* Discovery stops at the real service boundary until an IOS
              * implementation is attached. Never acknowledge or invent success. */
             fprintf(stderr, "IOS request awaiting provider pc=%08x message=%08x\n",
@@ -344,6 +344,10 @@ void wii_machine_tick(WiiMachine* m, CPUState* cpu) {
     gcn_cost_enter(GCN_COST_DI);
     gcn_di_tick(cpu, (u32)elapsed);
     gcn_cost_enter(GCN_COST_IOS);
+    if(WIILLR_IOS_LLE && !wii_ios_lle_tick(m->ios_lle,cpu->cycles)) {
+        fprintf(stderr,"original IOS stopped: %s\n",wii_ios_lle_error(m->ios_lle));
+        cpu->halted=true;
+    }
     if(WIILLR_IOS_NATIVE && !wii_ios_native_tick(&m->ios,&m->ipc,cpu)) {
         fprintf(stderr,"native IOS stopped at unsupported operation pc=%08x message=%08x\n",
                 cpu->pc,m->ipc.ppc_message);

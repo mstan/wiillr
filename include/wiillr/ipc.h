@@ -3,6 +3,9 @@
 #define WIILLR_IPC_H
 #include <stdbool.h>
 #include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 typedef struct {
     uint32_t ppc_message, arm_message;
     uint32_t ppc_flags, ppc_mask, arm_flags, arm_mask;
@@ -19,4 +22,7 @@ bool wii_ipc_arm_interrupt(const WiiIpc* ipc);
 /* The receiver must acknowledge both mailbox bits and the latched interrupt
  * before the producer may publish another ACK or reply. */
 bool wii_ipc_ready(const WiiIpc* ipc);
+#ifdef __cplusplus
+}
+#endif
 #endif

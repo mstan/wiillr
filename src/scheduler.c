@@ -133,6 +133,7 @@ static bool advance(void* user,u32 domain,u64 elapsed,u64 target) {
     case GCN_DOMAIN_IO:
         gcn_cost_enter(GCN_COST_DI);gcn_di_tick(cpu,(u32)elapsed);
         gcn_cost_enter(GCN_COST_IOS);
+        if(WIILLR_IOS_LLE)ok=wii_ios_lle_tick(m->ios_lle,target);
         if(WIILLR_IOS_NATIVE)ok=wii_ios_native_tick(&m->ios,&m->ipc,cpu);
         gcn_cost_enter(GCN_COST_IPC);wii_ipc_tick(&m->ipc,target);
         gcn_pi_set_interrupt(&m->pi,0x4000,wii_ipc_ppc_interrupt(&m->ipc));break;

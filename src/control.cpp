@@ -152,6 +152,14 @@ struct WiiControl {
         << ",\"gx_draws\":" << graphics.draws
         << ",\"gx_display_copies\":" << graphics.display_copies
         << ",\"gx_texture_copies\":" << graphics.texture_copies;
+#if WIILLR_IOS_LLE
+    const auto arm=wii_ios_lle_status(machine->ios_lle);
+    out << ",\"ios_provider\":\"original\",\"ARM_interpreter_instructions\":" << arm.instructions
+        << ",\"ARM_cycles\":" << arm.arm_cycles << ",\"ARM_pc\":" << arm.pc
+        << ",\"ARM_swi_entries\":" << arm.swi_entries << ",\"ARM_irq_entries\":" << arm.irq_entries
+        << ",\"ARM_undefined_entries\":" << arm.undefined_entries
+        << ",\"ARM_stopped\":" << (arm.stopped?"true":"false");
+#endif
     if(native_module) {
       out << ",\"native_dispatches\":" << native_module->dispatches
           << ",\"content_hashes\":" << native_module->hashes

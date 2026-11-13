@@ -509,6 +509,11 @@ static int run(int argc, char** argv) {
     return !saved ? 2 : cpu.halted ? 1 : 0;
 }
 int main(int argc,char** argv) {
+#if WIILLR_IOS_LLE
+    /* The native title handoff cannot stand in for original kernel startup. */
+    fprintf(stderr,"Original IOS requires a firmware context; the native NAND-title handoff is unavailable in this build.\n");
+    return 2;
+#endif
     const int result=run(argc,argv);
 #ifdef RECOMP_LAUNCHER
     const char* hidden=getenv("GCNLLR_RENDER_HIDDEN");const char* test=getenv("LNG_TEST_HIDDEN");

@@ -5,6 +5,7 @@
 #include "pi/pi.h"
 #include "wiillr/ipc.h"
 #include "wiillr/ios.h"
+#include "wiillr/ios_lle.h"
 #include "wiillr/ave.h"
 #include "wiillr/hollywood.h"
 #include "mi/mi.h"
@@ -23,6 +24,7 @@ typedef struct {
     GcnPi pi;
     WiiIpc ipc;
     WiiIosNative ios;
+    WiiIosLle* ios_lle; /* optional original-code engine, consumer-owned */
     GcnMi mi;
     GcnVi vi;
     WiiDsp dsp;

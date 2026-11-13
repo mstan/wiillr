@@ -119,6 +119,17 @@ It allocates/releases STM descriptors and holds event-hook requests until a
 modeled hardware event occurs; unsupported service operations stop
 before acknowledgement. Original ARM execution and a functioning LLE service
 counterpart are not yet qualified for this native route.
+`WIILLR_IOS=original` separately selects the original-code development engine.
+The consumer attaches a `WiiIosLle` context to `WiiMachine.ios_lle`, borrowing
+the PPC's physical MEM1/MEM2 and IPC mailbox. Existing device scheduling advances
+the ARM interpreter at the 729:243 MHz clock ratio; ARM stores publish through
+the PPC reservation and code-invalidation observers. The engine does not call
+the native service provider or manufacture IPC results. Missing hardware stops
+explicitly. `wiillr-starlet-discover ORIGINAL-IOS MAX-STEPS [ORIGINAL-OTP]`
+also supports this exception-enabled original execution. OTP input must contain
+exactly 128 original bytes, and an actual fuse-data read fails when it is absent.
+ROM-free tests cover exception returns and shared-memory/mailbox wiring; an
+original IOS service reply and the full LLE service floor remain unqualified.
 The native disc resource borrows the shared device for register queries,
 interrupt controls and resets. It does not replace drive state with canned
 successful reads.
