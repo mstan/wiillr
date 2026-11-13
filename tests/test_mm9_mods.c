@@ -29,8 +29,10 @@ void mem_write16_cia(CPUState* c,u32 a,u16 v,u32 cia){mem_write8_cia(c,a,(u8)(v>
 void mem_write32_cia(CPUState* c,u32 a,u32 v,u32 cia){mem_write16_cia(c,a,(u16)(v>>16),cia);mem_write16_cia(c,a+2,(u16)v,cia);}
 static CPUState cpu;
 static WiiGx gx;
-static unsigned calls[16],called_count,loader_calls;
-static bool fail_loader;
+static unsigned calls[512],called_count,loader_calls;
+static bool fail_loader,fail_effect;
+static unsigned selected_pool;
+enum { TEST_FX=0x80560000u };
 static void seed_file(unsigned n,unsigned type) {
     const u32 p=0x80600000u+n*0x1000u+(type-1)*0x100u;
     w32(&cpu,0x80383e70u+(type==1?4u:0x804u)+character_files[n].id*4u,p);
@@ -43,8 +45,11 @@ static void setup(bool characters,bool weapons) {
     gx.cpu=&cpu;gx.title=0x0001000157523945ull;owned=true;
     wii_mm9_mods_configure(characters,weapons);wii_mm9_mods_bind(&gx);
     state.attested=true; /* synthetic instruction identity intentionally omitted */
+    state.freeze_ready=true;
     w32(&cpu,STAGE,0x000a0000);w32(&cpu,STAGE+0x2290,PLAYER);
     w16(&cpu,PLAYER+0xb6,28);w16(&cpu,PLAYER+0xb8,28);
+    w8(&cpu,PLAYER+0xa,1);
+    w32(&cpu,FX_SENTINEL,FX_SENTINEL);w32(&cpu,FX_SENTINEL+4,FX_SENTINEL);
     w8(&cpu,PLAYER+0x14c,4);w8(&cpu,SAVED,4);
     w32(&cpu,PLAYER+0x164,1u|(1u<<3)|(1u<<7));
     for(unsigned n=0;n<WEAPONS;n++)w16(&cpu,PLAYER+0x14eu+n*2,0x1c00);
@@ -52,14 +57,14 @@ static void setup(bool characters,bool weapons) {
     w32(&cpu,0x80383e70u,0x80610000u);
     /* Real normal-game setup has Mega/109 files; Proto/181 are absent. */
     for(unsigned t=1;t<=2;t++){seed_file(0,t);seed_file(2,t);}
-    cpu.pc=FRAME;called_count=loader_calls=0;fail_loader=false;
+    cpu.pc=FRAME;called_count=loader_calls=0;fail_loader=fail_effect=false;selected_pool=0;
 }
 static bool tick(unsigned actions,bool minus) {
     wii_mm9_mods_host_actions(actions);w32(&cpu,HELD,minus?MINUS:0);
     w32(&cpu,PRESSED,minus?MINUS:0);w16(&cpu,REPEAT,minus?MINUS:0);
     cpu.pc=FRAME;return wii_mm9_mods_dispatch(&cpu,FRAME);
 }
-static void finish_calls(void) {
+static void finish_native_calls(void) {
     unsigned remaining=24;
     while(state.flight!=IDLE) {
         CHECK(remaining--);CHECK(called_count<sizeof calls/sizeof calls[0]);
@@ -81,16 +86,50 @@ static void finish_calls(void) {
             w16(&cpu,PLAYER+0x24,character_files[n].id);
             const u32 object=file_pointer(&cpu,n,2);
             w32(&cpu,PLAYER+0x48,object+r32(&cpu,object)+4);
+        } else if(target==TELEPORT_FACTORY) {
+            CHECK(cpu.gpr[3]<=1 && cpu.gpr[4]==0 && cpu.gpr[5]==PLAYER+0x60);
+            CHECK(cpu.gpr[6]==((r8(&cpu,PLAYER+0xa)>>4)&1u));
+            if(fail_effect)cpu.gpr[3]=0;
+            else {
+                const u32 first=r32(&cpu,FX_SENTINEL);
+                w32(&cpu,TEST_FX,first);w32(&cpu,TEST_FX+4,FX_SENTINEL);
+                w32(&cpu,first+4,TEST_FX);w32(&cpu,FX_SENTINEL,TEST_FX);
+                w8(&cpu,TEST_FX+8,8);w8(&cpu,TEST_FX+9,2);w8(&cpu,TEST_FX+0x10,0);
+                w32(&cpu,TEST_FX+0x18,FX_INIT);cpu.gpr[3]=TEST_FX;
+            }
+        } else if(target==FX_POOL_SELECT) {
+            CHECK(cpu.gpr[3]==FX_POOL);selected_pool=FX_POOL;
+        } else if(target==FX_INIT || target==FX_TICK || target==FX_DEATH || target==FX_FREE) {
+            CHECK(cpu.gpr[3]==TEST_FX && selected_pool==FX_POOL);
+            CHECK(r16(&cpu,TEST_FX+0x32)==0x100);
+            if(target==FX_INIT){w8(&cpu,TEST_FX+0x10,1);w32(&cpu,TEST_FX+0x18,FX_TICK);}
+            else if(target==FX_DEATH){w8(&cpu,TEST_FX+0x10,4);w32(&cpu,TEST_FX+0x18,FX_FREE);}
+            else if(target==FX_FREE) {
+                const u32 next=r32(&cpu,TEST_FX),previous=r32(&cpu,TEST_FX+4);
+                w32(&cpu,previous,next);w32(&cpu,next+4,previous);
+            }
+            selected_pool=0; /* Every callback must select its pool again. */
         } else CHECK(target==CLEANUP || target==SOUND);
         const u32 ret=cpu.lr;
         /* Model arbitrary allowed guest ABI clobbers. Restoring only args or LR
          * would corrupt the original frame; all registers must survive. */
-        cpu.gpr[0]^=0x55aa55aa;if(target!=FILES)cpu.gpr[3]^=0xa5a5a5a5;
+        cpu.gpr[0]^=0x55aa55aa;if(target!=FILES && target!=TELEPORT_FACTORY)cpu.gpr[3]^=0xa5a5a5a5;
         cpu.fpr[0]=99;cpu.ps1[0]=-3;cpu.cr^=0x12345678;cpu.ctr=0;
         cpu.xer^=1;cpu.fpscr^=3;cpu.gqr[0]^=9;
         cpu.pc=ret;CHECK(ret==FRAME);CHECK(wii_mm9_mods_dispatch(&cpu,ret));
     }
     CHECK(!wii_mm9_mods_dispatch(&cpu,cpu.pc)); /* original resume exactly once */
+}
+static void finish_calls(void) {
+    finish_native_calls();
+    for(unsigned n=0;state.teleport!=TELEPORT_NONE;n++) {
+        CHECK(n<100);
+        if(state.effect && live_effect(&cpu)) {
+            /* Test-controlled native completion, not an animation model. */
+            w8(&cpu,state.effect+0x10,2);w32(&cpu,state.effect+0x18,FX_DEATH);
+        }
+        if(tick(0,false))finish_native_calls();
+    }
 }
 static void short_press(void){CHECK(!tick(0,true));CHECK(tick(0,false));finish_calls();}
 
@@ -112,7 +151,10 @@ int main(void) {
         wii_mm9_mods_invalidate((code_heads[n][0]&0x1fffffffu)+63,1);
         CHECK(!state.attested && !state.rejected);
         state.attested=true;
-        wii_mm9_mods_invalidate(code_heads[n][0]+64,1);CHECK(state.attested);
+        const u32 end=code_heads[n][0]+64;bool overlaps=false;
+        for(unsigned k=0;k<sizeof code_heads/sizeof code_heads[0];++k)
+            if(end>=code_heads[k][0] && end<code_heads[k][0]+64)overlaps=true;
+        wii_mm9_mods_invalidate(end,1);CHECK(state.attested==!overlaps);
     }
     /* Invalidating an identity while a guest helper is in flight must stop
      * safely rather than resume FRAME with that helper's live registers. */
@@ -125,6 +167,47 @@ int main(void) {
     setup(true,false);owned=false;
     CHECK(!tick(0,true));CHECK(r32(&cpu,PRESSED)==MINUS);
     CHECK(!tick(0,false));CHECK(r8(&cpu,PLAYER+9)==0);
+
+    /* Departure must finish before the character changes. A native modal
+     * pause must not consume the exchange delay, and arrival must finish
+     * before input/visibility return. Native effect completion is controlled
+     * explicitly here; actual animation/rendering is a separate game check. */
+    setup(true,true);CHECK(!tick(0,false));
+    w8(&cpu,PLAYER+0xa,0x11);w16(&cpu,PLAYER+0xb6,13);w16(&cpu,PLAYER+0xb8,13);
+    w16(&cpu,PLAYER+0x154,0x0a5f);w32(&cpu,PLAYER+0x38,0x8056a000);
+    w32(&cpu,PLAYER+0x104,0x12340000);CHECK(!wii_mm9_mods_stage_frozen(&cpu));
+    CHECK(!tick(0,true));CHECK(tick(0,false));finish_native_calls();
+    CHECK(state.teleport==TELEPORT_OUT && state.switches==0 && r8(&cpu,PLAYER+9)==0);
+    CHECK(!(r8(&cpu,PLAYER+0xa)&1) && wii_mm9_mods_stage_frozen(&cpu));
+    for(unsigned n=0;n<4;n++) {
+        CHECK(tick(3,true));finish_native_calls();
+        CHECK(state.teleport==TELEPORT_OUT && !state.switches && r8(&cpu,PLAYER+9)==0);
+        CHECK(!r32(&cpu,HELD) && !r32(&cpu,PRESSED) && !state.pending_weapon);
+    }
+    w8(&cpu,TEST_FX+0x10,2);w32(&cpu,TEST_FX+0x18,FX_DEATH);
+    CHECK(tick(0,false));finish_native_calls();
+    CHECK(state.teleport==TELEPORT_GAP && !state.effect && r8(&cpu,PLAYER+9)==0);
+    for(unsigned n=1;n<EXCHANGE_FIELDS;n++)CHECK(!tick(0,false));
+    w32(&cpu,STAGE+0x2148,1);
+    for(unsigned n=0;n<50;n++)CHECK(!tick(0,false));
+    CHECK(state.teleport_fields==EXCHANGE_FIELDS-1 && r8(&cpu,PLAYER+9)==0);
+    w32(&cpu,STAGE+0x2148,0);CHECK(tick(0,false));finish_native_calls();
+    CHECK(state.teleport==TELEPORT_IN && r8(&cpu,PLAYER+9)==2 && !state.switches);
+    CHECK(!(r8(&cpu,PLAYER+0xa)&1) && state.pools[0].hp==13 && state.pools[0].ammo[3]==0x0a5f);
+    CHECK(r32(&cpu,PLAYER+0x38)==0x8056a000 && r32(&cpu,PLAYER+0x104)==0x12340000);
+    CHECK(tick(0,false));finish_native_calls();CHECK(!state.switches);
+    w8(&cpu,TEST_FX+0x10,2);w32(&cpu,TEST_FX+0x18,FX_DEATH);
+    CHECK(tick(0,false));finish_native_calls();
+    CHECK(state.teleport==TELEPORT_NONE && state.switches==1 && r8(&cpu,PLAYER+0xa)==0x11);
+    CHECK(!wii_mm9_mods_stage_frozen(&cpu) && r32(&cpu,FX_SENTINEL)==FX_SENTINEL);
+    CHECK(!state.long_presses && !state.cycles && !state.pending_weapon);
+    setup(true,false);fail_effect=true;short_press();
+    CHECK(!state.switches && state.resource_failures==1 && state.teleport==TELEPORT_NONE);
+    CHECK(r8(&cpu,PLAYER+9)==0 && r8(&cpu,PLAYER+0xa)==1);
+    setup(true,false);CHECK(!tick(0,true));CHECK(tick(0,false));finish_native_calls();
+    w8(&cpu,TEST_FX+9,3);CHECK(tick(0,false));finish_native_calls();
+    CHECK(state.teleport==TELEPORT_NONE && r8(&cpu,PLAYER+9)==0 && r8(&cpu,PLAYER+0xa)==1);
+    CHECK(state.resource_failures==1); /* Reused/nonowned effects are never ticked/freed. */
 
     setup(true,true);CHECK(!tick(0,false));
     w16(&cpu,PLAYER+0xb6,13);w16(&cpu,PLAYER+0xb8,13);

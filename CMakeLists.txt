@@ -352,6 +352,20 @@ if(WIILLR_PPC_GENERATED_DIR)
     endforeach()
     set(_wii_ppc_chunks ${_wii_selected_chunks})
   endif()
+  # The optional character exchange uses the original stage pause branch in
+  # every graphics build. Keep this independent of native rendering selection.
+  foreach(_chunk IN LISTS _wii_ppc_chunks)
+    get_filename_component(_name "${_chunk}" NAME)
+    if(_name STREQUAL "overlay_80089000_h85E6611173071FCD.c")
+      set(_mm9_gameplay_output "${CMAKE_BINARY_DIR}/native-gameplay-entries/${_name}")
+      execute_process(COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tools/native_renderer_entries.py"
+        --source "${_chunk}" --output "${_mm9_gameplay_output}" --gameplay COMMAND_ERROR_IS_FATAL ANY)
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_chunk}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/native_renderer_entries.py")
+      list(REMOVE_ITEM _wii_ppc_chunks "${_chunk}")
+      list(APPEND _wii_ppc_chunks "${_mm9_gameplay_output}")
+    endif()
+  endforeach()
   if(NOT WIILLR_MM9_RENDERER STREQUAL "none")
     set(_mm9_entry_count 0)
     set(_mm9_entry_names overlay_800D5000_hF28561AD0793EB68.c)

@@ -11,7 +11,7 @@ static const char* package="mm9.gameplay";
 static const char* ids[]={"character-switch","weapon-cycle"};
 static const char* names[]={"Mega Man / Proto Man switch","Quick weapon switching"};
 static const char* descriptions[]={
-    "Tap Select to exchange characters with separate health and weapon energy. Hold Select for two seconds for the leaderboard. Requires the installed Proto Man DLC.",
+    "Tap Select to teleport between characters with separate health and weapon energy. Hold Select for two seconds for the leaderboard. Requires the installed Proto Man DLC.",
     "L/R cycles acquired weapons during gameplay. Bind Previous/Next weapon under Controller. Default shoulders: L1/R1; Home: L2."};
 static struct {int staged[2],running[2];bool dlc,in_session;char path[32768],error[256];} state;
 static int feature_index(const char* pkg,const char* id) {

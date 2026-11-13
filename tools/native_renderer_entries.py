@@ -11,6 +11,7 @@ def main():
     parser.add_argument('--source',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--frame-owner',action='store_true')
+    parser.add_argument('--gameplay',action='store_true')
     args=parser.parse_args()
     source=args.source.resolve(strict=True);output=args.output.resolve()
     # This page identity belongs to the supported WR9E original. Runtime
@@ -27,13 +28,26 @@ def main():
         pages['overlay_80083000_h748FAA87F633CA31.c']=[0x80083730]
         pages['overlay_80113000_hB4BBDB2F39E5B955.c']=[0x801131a8]
         markers['overlay_8009D000_hD295BDE95AA6CA50.c']=[0x8009dcb8,0x8009de3c]
+    if args.gameplay:
+        if args.frame_owner:raise ValueError('Gameplay and graphics seams are selected separately')
+        pages={'overlay_80089000_h85E6611173071FCD.c':[]}
+        markers={}
     if source.name not in pages:raise ValueError('MM9 native entry requires its original verified page')
     header=source.parent.parent/'generated_abi.h'
     text=source.read_text(encoding='utf-8')
     include='#include "../generated_abi.h"'
     if text.count(include)!=1 or not header.is_file():
         raise ValueError('Prepared MM9 entry/header seam differs')
-    text=text.replace(include,'#include "'+header.as_posix()+'"\n#include "wiillr/mm9_renderer_hook.h"',1)
+    owner_header='wiillr/mm9_mods.h' if args.gameplay else 'wiillr/mm9_renderer_hook.h'
+    text=text.replace(include,'#include "'+header.as_posix()+'"\n#include "'+owner_header+'"',1)
+    if args.gameplay:
+        # The original rlwinm. sets CR for the following pause branch. Raise
+        # its existing predicate BEFORE that instruction, never after CR was
+        # computed. Native draw/audio/input work remains on the original path.
+        marker='\nlabel_80089F90:\n'
+        if text.count(marker)!=1:raise ValueError('Original stage pause predicate differs')
+        text=text.replace(marker,marker+
+            '    if (wii_mm9_mods_stage_frozen(ctx)) ctx->gpr[31] = 1u;\n',1)
     # Same-page BL shadow calls jump to this label directly. Publish the local
     # clock before the host boundary; an accepted HLE return retains its own
     # PC/cycles and discards only the optional host shadow stack. A decline

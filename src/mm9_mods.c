@@ -17,9 +17,15 @@ enum {
     CACHE=0x800b730cu, REFILL=0x800b5ac0u,
     NEW_MEGA=0x8008938cu, NEW_PROTO=0x80089604u,
     CLEANUP=0x800ba51cu, STAND=0x800b56a4u, WEAPON=0x800b5f90u,
+    TELEPORT_FACTORY=0x80041028u, FX_INIT=0x80041120u,
+    FX_TICK=0x800411b4u, FX_DEATH=0x800411ccu,
+    FX_IN=0x80041210u, FX_OUT=0x800413d4u,
+    FX_POOL_SELECT=0x800e8bd0u, FX_FREE=0x800e8c9cu,
+    FX_POOL=0x80314230u, FX_SENTINEL=FX_POOL+0x14u,
     SOUND=0x800d5234u, STAGE=0x803140c0u, PLAYER=0x80313e98u,
     SAVED=STAGE+0x21e0u, HELD=0x8031a5f8u, PRESSED=0x8031a600u,
-    REPEAT=0x8031a604u, MINUS=0x80u, WEAPONS=11, HOLD_FIELDS=120
+    REPEAT=0x8031a604u, MINUS=0x80u, WEAPONS=11, HOLD_FIELDS=120,
+    EXCHANGE_FIELDS=30
 };
 typedef struct {u16 hp,display,ammo[WEAPONS];u8 weapon,character;bool valid;} Pool;
 typedef struct {
@@ -33,7 +39,8 @@ static const struct {u16 id;u32 list;} character_files[]={
     {0x140,0x8027e3f0u},{0x180,0x8027e440u},
     {0x109,0x8027e404u},{0x181,0x8027e454u}
 };
-typedef enum {IDLE,LOADING,CHANGING,CYCLING} Flight;
+typedef enum {IDLE,LOADING,CHANGING,CYCLING,START_OUT,STEP_FX,RETIRE_FX} Flight;
+typedef enum {TELEPORT_NONE,TELEPORT_OUT,TELEPORT_GAP,TELEPORT_IN} Teleport;
 static WiiGx* owner;
 static bool character_mod,weapon_mod;
 static struct {
@@ -43,8 +50,12 @@ static struct {
     ResidentFile resident[4][2];
     unsigned previous_actions;int pending_weapon;
     u8 target_character;
+    bool freeze_ready;u8 visibility;
+    u32 effect,teleport_fields,retire_steps;
+    Teleport teleport;
     Flight flight;Registers saved;Pool pools[2];
     u64 switches,cycles,preloads,resets,long_presses,resource_failures;
+    u64 frozen_frames,effect_steps;
 } state;
 static _Atomic unsigned host_held,test_held,host_field;
 
@@ -63,8 +74,18 @@ static const u32 code_heads[][2]={
     {FRAME,0xe5840b5bu},{FILES,0x861cae27u},{SPAWN,0xd4e80e98u},
     {CACHE,0xbe825ba5u},{REFILL,0xfe346dd5u},{NEW_MEGA,0xc8946023u},
     {NEW_PROTO,0xd9e2767fu},{CLEANUP,0x52d86237u},{STAND,0xdd2eb4bfu},
-    {WEAPON,0x82515faau},{SOUND,0x0433e1e5u},{SAVE,0x2b1a7a4eu}
+    {WEAPON,0x82515faau},{SOUND,0x0433e1e5u},{SAVE,0x2b1a7a4eu},
+    {TELEPORT_FACTORY,0xa375bfcau},{FX_INIT,0x8e86f771u},
+    {FX_TICK,0xa7e461f4u},{FX_DEATH,0x612ccffcu},
+    {FX_IN,0xf55d10e5u},{FX_OUT,0xc1233962u},
+    {FX_POOL_SELECT,0xdcd27399u},{FX_FREE,0x9b30aaf0u}
 };
+bool wii_mm9_mods_stage_frozen(CPUState* c) {
+    if(!owner || owner->cpu!=c || owner->title!=0x0001000157523945ull)return false;
+    state.freeze_ready=true;
+    if(!character_mod || state.teleport==TELEPORT_NONE)return false;
+    ++state.frozen_frames;return true;
+}
 void wii_mm9_mods_invalidate(u32 address,u32 size) {
     const u32 a=address&0x1fffffffu;const u64 end=(u64)a+size;
     for(unsigned k=0;k<sizeof code_heads/sizeof code_heads[0];++k) {
@@ -107,6 +128,32 @@ static bool call(CPUState* c,u32 entry,u32 arg3,u32 arg4) {
     c->gpr[3]=arg3;c->gpr[4]=arg4;c->lr=FRAME;c->pc=entry;++c->cycles;
     return true;
 }
+static void restore_visibility(CPUState* c) {
+    if(ram(c,STAGE,0x22a0) && r32(c,STAGE+0x2290)==state.player &&
+       ram(c,state.player,0x228) && r16(c,state.player+0xb6) &&
+       !(r32(c,state.player+0xa0)&0x200))
+        w8(c,state.player+0xa,(u8)((r8(c,state.player+0xa)&~1u)|state.visibility));
+}
+static void cancel_teleport(CPUState* c) {
+    if(state.teleport!=TELEPORT_NONE)restore_visibility(c);
+    state.teleport=TELEPORT_NONE;state.effect=state.teleport_fields=0;
+    state.pending_character=false;state.pending_weapon=0;
+}
+static bool live_effect(CPUState* c) {
+    if(!state.effect || !ram(c,FX_SENTINEL,8))return false;
+    u32 node=r32(c,FX_SENTINEL);
+    for(unsigned n=0;n<64 && node!=FX_SENTINEL;n++) {
+        if(!ram(c,node,0x98))return false;
+        if(node==state.effect)return r8(c,node+8)==8 && r8(c,node+9)==2;
+        node=r32(c,node);
+    }
+    return false;
+}
+static bool call_teleport(CPUState* c,bool outgoing) {
+    call(c,TELEPORT_FACTORY,outgoing?1u:0u,0);
+    c->gpr[5]=state.player+0x60;
+    c->gpr[6]=(r8(c,state.player+0xa)>>4)&1u;return true;
+}
 static u32 file_pointer(CPUState* c,unsigned n,unsigned type) {
     return r32(c,0x80383e70u+(type==1?4u:0x804u)+character_files[n].id*4u);
 }
@@ -124,9 +171,10 @@ static bool file_valid(CPUState* c,unsigned n,unsigned type) {
     }
     return true;
 }
+static void capture(CPUState*,u32,Pool*);
 static bool resource_failure(CPUState* c,u32 reason) {
     state.resource_error=reason;++state.resource_failures;
-    state.pending_character=false;
+    cancel_teleport(c);
     fprintf(stderr,"MM9 optional mods: character resource validation failed %08x (loader %08x)\n",reason,state.loader_return);
     return restore_registers(c);
 }
@@ -159,7 +207,10 @@ static bool load_next_file(CPUState* c) {
                 return resource_failure(c,0x40000u|character_files[n].id);
         }
     }
-    ++state.preloads;state.resource_error=0;state.flight=CHANGING;state.step=0;
+    ++state.preloads;state.resource_error=0;state.flight=START_OUT;state.step=0;
+    const unsigned outgoing=r8(c,state.player+9)==2?1u:0u;
+    capture(c,state.player,&state.pools[outgoing]);
+    state.visibility=r8(c,state.player+0xa)&1u;
     return call(c,CLEANUP,state.player,0);
 }
 static void capture(CPUState* c,u32 p,Pool* pool) {
@@ -202,7 +253,6 @@ static bool gameplay(CPUState* c,u32* player) {
 static bool apply_character(CPUState* c) {
     const u32 p=state.player;
     const unsigned old=pool_index(r8(c,p+9)),next=old^1u;
-    capture(c,p,&state.pools[old]);
     const Pool* pool=&state.pools[next];
     if(!pool->valid || pool->hp<1 || pool->hp>28)return false;
     state.target_character=pool->character;
@@ -215,6 +265,16 @@ static bool apply_character(CPUState* c) {
     for(unsigned n=0;n<WEAPONS;n++)w16(c,p+0x14eu+n*2,pool->ammo[n]);
     return true;
 }
+static void consume_transition_input(CPUState* c) {
+    state.pending_character=false;state.pending_weapon=0;state.hold_fields=0;
+    state.minus_down=(r32(c,HELD)&MINUS)!=0;state.long_sent=state.minus_down;
+    w32(c,HELD,0);w32(c,PRESSED,0);w16(c,REPEAT,0);
+}
+static bool begin_effect_step(CPUState* c,bool retiring) {
+    state.flight=retiring?RETIRE_FX:STEP_FX;state.step=0;
+    if(retiring)state.retire_steps=0;
+    return call(c,FX_POOL_SELECT,FX_POOL,0x100);
+}
 static bool continuation(CPUState* c) {
     if(state.flight==LOADING) {
         state.loader_return=c->gpr[3];
@@ -222,19 +282,56 @@ static bool continuation(CPUState* c) {
             return resource_failure(c,0x50000u|character_files[state.load_index].id);
         return load_next_file(c);
     }
+    if(state.flight==START_OUT) {
+        if(state.step++==0)return call_teleport(c,true);
+        state.effect=c->gpr[3];
+        if(!live_effect(c))return resource_failure(c,0x60001u);
+        state.teleport=TELEPORT_OUT;state.teleport_fields=0;
+        return begin_effect_step(c,false);
+    }
     if(state.flight==CHANGING) {
         if(state.step==0) {
-            if(!apply_character(c))return restore_registers(c);
-            state.step=1;return call(c,STAND,state.player,0);
-        }
-        if(state.step==1) {
             /* Palette indices can match across characters; force the ORIGINAL
              * palette setter to publish the new character resource's palette. */
-            w8(c,state.player+0x100,0xff);state.step=2;
+            w8(c,state.player+0x100,0xff);state.step=1;
             return call(c,WEAPON,state.player,state.target_weapon);
         }
-        if(state.step==2) {state.step=3;return call(c,SOUND,3,0);}
-        ++state.switches;return restore_registers(c);
+        if(state.step==1){state.step=2;return call_teleport(c,false);}
+        state.effect=c->gpr[3];
+        if(!live_effect(c))return resource_failure(c,0x60002u);
+        state.teleport=TELEPORT_IN;state.teleport_fields=0;
+        return begin_effect_step(c,false);
+    }
+    if(state.flight==STEP_FX || state.flight==RETIRE_FX) {
+        const bool retiring=state.flight==RETIRE_FX;
+        if(state.step==0) {
+            if(!live_effect(c))return resource_failure(c,0x60003u);
+            const u32 callback=r32(c,state.effect+0x18);
+            if((retiring && callback!=FX_DEATH && callback!=FX_FREE) ||
+               (!retiring && callback!=FX_INIT && callback!=FX_TICK))
+                return resource_failure(c,0x60004u);
+            if(retiring && ++state.retire_steps>2)return resource_failure(c,0x60005u);
+            /* Original group8 dispatch selects its pool and publishes this
+             * timestep before invoking the actor's original callback. */
+            w16(c,state.effect+0x32,0x100);state.step=1;
+            return call(c,callback,state.effect,0x100);
+        }
+        if(retiring) {
+            if(live_effect(c)) {
+                state.step=0;return call(c,FX_POOL_SELECT,FX_POOL,0x100);
+            }
+            state.effect=0;state.teleport_fields=0;
+            if(state.teleport==TELEPORT_OUT)state.teleport=TELEPORT_GAP;
+            else {
+                restore_visibility(c);state.teleport=TELEPORT_NONE;
+                consume_transition_input(c);++state.switches;
+            }
+        } else {
+            if(!live_effect(c))return resource_failure(c,0x60006u);
+            w8(c,state.player+0xa,(u8)(r8(c,state.player+0xa)&~1u));
+            ++state.effect_steps;
+        }
+        return restore_registers(c);
     }
     if(state.flight==CYCLING) {
         if(state.step++==0)return call(c,SOUND,3,0);
@@ -251,6 +348,26 @@ static bool frame(CPUState* c) {
     state.field+=elapsed;
     u32 p=0;const bool playing=gameplay(c,&p);
     const bool characters=character_mod && wii_mm9_dlc_available();
+    if(state.teleport!=TELEPORT_NONE) {
+        if(!ram(c,state.player,0x228) || r32(c,STAGE)!=0x000a0000u ||
+           r32(c,STAGE+0x2290)!=state.player || !r16(c,state.player+0xb6) ||
+           (r32(c,state.player+0xa0)&0x200)) {
+            cancel_teleport(c);return false;
+        }
+        consume_transition_input(c);
+        if(!playing)return false; /* Native HOME/modal pauses the exchange. */
+        ++state.teleport_fields;
+        if(state.teleport==TELEPORT_GAP) {
+            if(state.teleport_fields<EXCHANGE_FIELDS)return false;
+            save_registers(c);state.resume=FRAME;state.flight=CHANGING;state.step=0;
+            if(!apply_character(c))return resource_failure(c,0x60007u);
+            return call(c,STAND,state.player,0);
+        }
+        save_registers(c);state.resume=FRAME;
+        if(!live_effect(c) || state.teleport_fields>300)return resource_failure(c,0x60008u);
+        if(r8(c,state.effect+0x10)>=2)return begin_effect_step(c,true);
+        return begin_effect_step(c,false);
+    }
     if(!playing) {
         state.pending_character=false;state.pending_weapon=0;
         const bool down=(r32(c,HELD)&MINUS)!=0;
@@ -291,7 +408,7 @@ static bool frame(CPUState* c) {
     }
     if(state.long_sent)return false;
     const u8 movement=r8(c,p+0x11);
-    if(characters && state.pending_character && movement==0) {
+    if(characters && state.pending_character && movement==0 && state.freeze_ready) {
         state.pending_character=false;state.pending_weapon=0;
         save_registers(c);state.resume=FRAME;state.player=p;state.step=0;state.flight=LOADING;
         state.load_index=0;snapshot_files(c);
@@ -380,6 +497,7 @@ bool wii_mm9_mods_dispatch(CPUState* c,u32 pc) {
        pc!=NEW_MEGA && pc!=NEW_PROTO)return false;
     if(!identity(c))return false;
     if(pc==NEW_MEGA || pc==NEW_PROTO) {
+        cancel_teleport(c);
         memset(state.pools,0,sizeof state.pools);state.reset_pending=true;
         state.pending_character=false;state.pending_weapon=0;state.minus_down=state.long_sent=false;
     } else if(pc==SPAWN) {
@@ -397,11 +515,15 @@ int wii_mm9_mods_status(char* text,size_t capacity) {
         "\"pending_weapon\":%d,\"switches\":%llu,\"weapon_changes\":%llu,"
         "\"preloads\":%llu,\"pool_resets\":%llu,\"long_presses\":%llu,"
         "\"resource_failures\":%llu,\"resource_error\":%u,\"loader_return\":%u,"
+        "\"teleport\":%u,\"effect\":%u,\"freeze_ready\":%s,"
+        "\"frozen_frames\":%llu,\"effect_steps\":%llu,"
         "\"mega_hp\":%u,\"proto_hp\":%u}",character_mod?"true":"false",weapon_mod?"true":"false",
         state.attested?"true":"false",state.rejected?"true":"false",(unsigned)state.flight,
         state.hold_fields,state.pending_character?"true":"false",state.pending_weapon,
         (unsigned long long)state.switches,(unsigned long long)state.cycles,
         (unsigned long long)state.preloads,(unsigned long long)state.resets,
         (unsigned long long)state.long_presses,(unsigned long long)state.resource_failures,
-        state.resource_error,state.loader_return,state.pools[0].hp,state.pools[1].hp);
+        state.resource_error,state.loader_return,(unsigned)state.teleport,state.effect,state.freeze_ready?"true":"false",
+        (unsigned long long)state.frozen_frames,(unsigned long long)state.effect_steps,
+        state.pools[0].hp,state.pools[1].hp);
 }
