@@ -178,6 +178,43 @@ void hud_layout_contract() {
     const auto before=view;WiiMm9SpriteAnchor invalid{pool+4,pool+8,-1};layout.anchors=&invalid;layout.anchor_count=1;
     require(!prepare(344) && view==before && !std::memcmp(&stock,&untinted,sizeof stock),"Invalid anchor spans publish neither a partial view nor stock texture");
 }
+void background_span_contract() {
+    fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
+    constexpr uint32_t scroll=0x80506000;
+    p16(config+8,0x4001); // 512-column map, alternating tile flips.
+    fill(0x8039b220,1,1);p32(0x8039b224,scroll);
+    constexpr unsigned offsets[]{7,12,255,510};
+    for(unsigned y=0;y<224;++y)p16(scroll+y*2,offsets[y%4]);
+    for(unsigned row=0;row<32;++row)for(unsigned column=0;column<64;++column)
+        p16(graphics+((column/32)*1024+row*32+column%32)*2,
+            ((column&1)?32:0)|((column&2)?16:0));
+    for(unsigned y=0;y<8;++y)for(unsigned pair=0;pair<4;++pair) {
+        const unsigned a=(y&1)?8-pair*2:1+pair*2,b=(y&1)?7-pair*2:2+pair*2;
+        fill(graphics+0x10000+y*4+pair,1,uint8_t(a*16+b));
+    }
+    for(unsigned n=1;n<=8;++n)p16(0x80500000+n*2,n*2);
+    WiiMm9Frame stock{};std::vector<uint8_t> wide(344*240*4);
+    const auto prepare=[&] {return wii_mm9_composite_present_prepare(memory,344,&stock,
+        wide.data(),unsigned(wide.size()),error,sizeof error);};
+    require(prepare(),error);
+    for(unsigned y=0;y<4;++y)for(unsigned x=0;x<344;++x) {
+        const unsigned source=(offsets[y]+x-44)&511,tile=source/8;
+        const unsigned px=(tile&1)?7-(source&7):(source&7),py=(tile&2)?7-y:y;
+        const unsigned expected=(py&1)?8-px:1+px;
+        const auto* color=wide.data()+((y+8)*344+x)*4;
+        require(!color[0] && !color[1] && (color[2]>>3)==expected,
+            "Per-line scroll preserves unaligned tile/page boundaries and both flips across wide margins");
+        if(x>=44 && x<300)require(pixel(stock,x-44,y+8)==expected,
+            "Batched background rows preserve the original tiled center");
+    }
+    p32(palettes+0x20,0);fill(graphics+0x10000,32,0);
+    require(prepare() && stock.background_pixels==0,
+        "Transparent tile rows do not require an unused palette");
+    const auto before=wide,original=std::vector<uint8_t>(stock.texture,stock.texture+sizeof stock.texture);
+    fill(graphics+0x10000,1,0x10);
+    require(!prepare() && wide==before && !std::memcmp(stock.texture,original.data(),original.size()),
+        "Invalid visible palettes cannot publish a partial batched row");
+}
 int main() {
     try {
         fixture();const WiiMm9Memory memory{nullptr,read};WiiMm9Frame frame{};char error[192];
@@ -288,6 +325,7 @@ int main() {
         camera_room_contract();
         stage_selection_contract();
         hud_layout_contract();
+        background_span_contract();
         std::cout<<"MM9 logical tile/sprite compositor contracts passed; live copy/queue qualification pending\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -23,7 +23,7 @@ uint16_t half(const uint8_t* data,unsigned offset){return uint16_t(data[offset])
 struct NativePalette {
     const Reader& reader;unsigned group;
     uint32_t count{};bool ready{};std::vector<uint16_t> colors;
-    uint16_t get(unsigned palette,unsigned index) {
+    const uint16_t* table(unsigned palette) {
         if(!ready) {
             need(reader.u32(palettes+0x30+group*4)==0,"MM9 palette family needs qualification");
             count=reader.u32(palettes+0x20+group*4);
@@ -35,8 +35,11 @@ struct NativePalette {
             for(unsigned n=0;n<entries;++n)colors[n]=rgb565(half(source,n*2)>>1);
             ready=true;
         }
-        need(palette<count && palette<256 && index<16,"Invalid MM9 palette selection");
-        return colors[palette*16+index];
+        need(palette<count && palette<256,"Invalid MM9 palette selection");
+        return colors.data()+palette*16;
+    }
+    uint16_t get(unsigned palette,unsigned index) {
+        need(index<16,"Invalid MM9 palette selection");return table(palette)[index];
     }
 };
 unsigned nibble(const uint8_t* data,unsigned width,unsigned x,unsigned y) {
@@ -227,8 +230,9 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 if(layer.mode==1)u=r.u16(layer.scroll+y*2);else if(layer.mode==2)v=r.u16(layer.scroll+y*2);
                 else if(layer.mode==3){const auto scroll=r.u32(layer.scroll+y*4);u=scroll&65535;v=scroll>>16;}
                 v=(v+y)&(layer.height-1);
-                for(unsigned x=centered_panel?unsigned(left):0;x<(centered_panel?unsigned(left+256):width);++x) {
-                    if(!world_visible[x])continue;
+                const unsigned stop=centered_panel?unsigned(left+256):width;
+                for(unsigned x=centered_panel?unsigned(left):0;x<stop;) {
+                    if(!world_visible[x]){++x;continue;}
                     // Stage selection is a finite canvas. Its quiet edge
                     // columns extend the background stripes, while wrapping
                     // the map would repeat portraits and menu labels.
@@ -239,16 +243,33 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                     uint16_t item;
                     if(layer.world_grid && (x<unsigned(left) || x>=unsigned(left+256))) {
                         const int wx=layer.world_x+int(x)-left,wy=layer.world_y+int(y);
-                        if(wx<0 || wy<0 || unsigned(wx)>=layer.world_width || unsigned(wy)>=layer.world_height)continue;
+                        if(wx<0 || wy<0 || unsigned(wx)>=layer.world_width || unsigned(wy)>=layer.world_height){++x;continue;}
                         const auto cell=half(layer.world_grid_data,((unsigned(wy)/16)*layer.world_stride+unsigned(wx)/16)*2);
                         need(cell<layer.world_count,"Invalid MM9 world metatile");
                         item=half(layer.world_definition_data,cell*8+((unsigned(wy)/8)&1)*4+((unsigned(wx)/8)&1)*2);
                         source_x=unsigned(wx);source_y=unsigned(wy);
                     } else item=half(layer.map_data,tile*2);
+                    // Resolve the map/metatile and palette once for a tile
+                    // row. Stop at the original center's cache boundary;
+                    // finite menu margins repeat one edge pixel, not a tile.
+                    const bool edge=stage_selection && (x<unsigned(left) || x>=unsigned(left+256));
+                    const unsigned boundary=x<unsigned(left)?unsigned(left):x<unsigned(left+256)?unsigned(left+256):stop;
+                    const unsigned span=std::min(std::min(stop,boundary)-x,edge?stop-x:8u-(source_x&7));
                     const unsigned tx=(item>>6)&31,ty=item>>11;
-                    const auto px=(item&32)?7-(source_x&7):(source_x&7),py=(item&16)?7-(source_y&7):(source_y&7);
-                    const auto index=nibble(layer.tile_data,256,tx*8+px,ty*8+py);if(!index)continue;
-                    put(out,x,y+8,background_palette.get(item&15,index),255);if(x>=unsigned(left) && x<unsigned(left+256))++out.background_pixels;
+                    const auto py=(item&16)?7-(source_y&7):(source_y&7);
+                    const auto* pixels=layer.tile_data+(ty*32+tx)*32+py*4;
+                    const uint16_t* colors=nullptr;
+                    for(unsigned n=0;n<span;++n) {
+                        if(!world_visible[x+n])continue;
+                        const unsigned column=(source_x&7)+(edge?0:n);
+                        const unsigned px=(item&32)?7-column:column;
+                        const unsigned byte=pixels[px/2],index=(px&1)?byte&15:byte>>4;
+                        if(!index)continue;
+                        if(!colors)colors=background_palette.table(item&15);
+                        put(out,x+n,y+8,colors[index],255);
+                        if(x+n>=unsigned(left) && x+n<unsigned(left+256))++out.background_pixels;
+                    }
+                    x+=span;
                 }
             }
             for(const auto& sprite:sprites) {
