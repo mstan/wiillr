@@ -27,6 +27,10 @@ typedef struct {
     u64 faults,eager_copies,resident_presents;
 } Output;
 static Output* active;
+u32 wii_gx_output_allocation_alignment(const WiiGx* g) {
+    const Output* o=g?g->output:NULL;
+    return o?o->page_size:32;
+}
 static bool protect(Output* o,bool enable) {
     bool ok=true;
     for(u32 page=0;page<o->page_count;page++) {
@@ -152,6 +156,7 @@ int wii_gx_output_present(WiiGx* g,u32 address,u32 width,u32 height,u32 stride) 
     return wii_gx_output_prepare(g,address,(height-1)*stride+width*2)?0:-1;
 }
 #else
+u32 wii_gx_output_allocation_alignment(const WiiGx* g){(void)g;return 32;}
 bool wii_gx_output_open(WiiGx* g){(void)g;return false;}
 bool wii_gx_output_close(WiiGx* g){(void)g;return true;}
 int wii_gx_output_own(void* g,const GcnllrNativeGxCopy* c){(void)g;(void)c;return 0;}

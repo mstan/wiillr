@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include <wiillr/menu_frame_hook.h>
 #include <wiillr/menu_picture_hook.h>
+#include <wiillr/gx_output.h>
 #include <memory/memory.h>
 #include <cpu/native_code.h>
 #include <math.h>
@@ -15,7 +16,7 @@
 static struct {
     WiiGx* owner;const GcWiiNativeRenderApi* render;const GcWiiNativeFrameApi* frame;const GcWiiNativeCaptureApi* capture;
     WiiMenuView view;float model[12];bool active,bad,projection_ready;u32 object;u64 mesh;
-    GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,uncovered,failed,fifo_start,fifo_bytes;
+    GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -191,7 +192,25 @@ void wii_menu_frame_capture(const GcWiiNativeCaptureApi* api) {
 int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;state.bad=false;
-    if(address==0x8133de74) {
+    if(address==0x8133e2d4) {
+        /* The two original XFB allocations otherwise share protected pages
+         * with live heap headers and neighboring objects. Their unrelated
+         * reads would force a full GPU download every frame. Keep the real
+         * guest allocator and ownership, but isolate its private buffers.
+         * Padding changes no displayed dimensions or RAM observation rule. */
+        u32 p;
+        if(!identity(cpu,0x8133e288,0x88,UINT64_C(0xc869ded5426aa24f)) ||
+           !mode(cpu,cpu->gpr[27],&p) || cpu->gpr[3]!=640u*456u*2u ||
+           cpu->gpr[5]!=32 || cpu->gpr[29]>1 || cpu->gpr[31]!=cpu->gpr[29]*4)
+            return stop(cpu,"framebuffer allocation identity/mode",false);
+        const u32 alignment=wii_gx_output_allocation_alignment(state.owner);
+        if(alignment<32 || (alignment&(alignment-1)) || alignment>0x10000)
+            return stop(cpu,"framebuffer allocation alignment",false);
+        cpu->gpr[3]=(cpu->gpr[3]+alignment-1)&~(alignment-1);
+        cpu->gpr[5]=alignment;
+        if(alignment>32)++state.isolated_buffers;
+        cpu->lr=address+4;cpu->pc=0x815f80d4;++cpu->cycles;return 1;
+    } else if(address==0x8133de74) {
         if(!identity(cpu,address,4,UINT64_C(0x381876d7414e6544)) || !set_viewport(cpu,cpu->gpr[3]))return stop(cpu,"frame begin identity/mode",false);
         if(!frontier())return stop(cpu,"earlier graphics completion",true);GcnllrNativeGxStatus s;state.owner->api->status(&s);state.fifo_start=s.fifo_bytes;
         state.active=true;++state.begins;
@@ -267,6 +286,6 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
 }
 void wii_menu_frame_stop(void) {
     if(!state.owner)return;if(state.mesh)state.render->destroy_mesh(state.mesh);
-    printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
+    printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"isolated_buffers\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.isolated_buffers,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
     memset(&state,0,sizeof state);
 }
