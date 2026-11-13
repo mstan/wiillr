@@ -24,6 +24,9 @@ int main() {
     check(out.vertices[1].uv[0]==8.f/256 && out.vertices[1].uv[1]==16.f/256,"CI4 atlas rectangle");
     check(out.draw.material.texture.palette_format==GC_WII_NATIVE_PALETTE_RGB5551_ZERO && out.draw.material.texture.size==32768,"native asset descriptor, not composed pixels");
     check(wii_mm9_screen_draw_prepared(renderer,1,&out)==1 && uploads==1 && indexed_draws==1 && !draws,"retained native indexed draw");
+    GcWiiNativeDraw retained{};
+    check(wii_mm9_indexed_retain(renderer,1,&out,&retained)==1 && retained.mesh==last.mesh &&
+        uploads==1 && indexed_draws==1 && !draws,"offscreen view shares stock mesh without a second draw or upload");
     input.palette+=32;check(wii_mm9_indexed_prepare(&input,&canvas,&out,error,sizeof error),error);
     check(wii_mm9_screen_draw_prepared(renderer,1,&out)==1 && uploads==1 && indexed_draws==2 && last.material.texture.palette_address==input.palette,"live palette does not reupload geometry");
     input.flips=3;check(wii_mm9_indexed_prepare(&input,&canvas,&out,error,sizeof error),error);

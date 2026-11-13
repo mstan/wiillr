@@ -80,15 +80,19 @@ extern "C" int wii_mm9_screen_draw(WiiMm9ScreenNative* renderer,uint32_t object,
     if(!wii_mm9_screen_prepare(renderer->memory,object,level,camera,&screen,renderer->status.error,sizeof(renderer->status.error))){++renderer->status.rejected;return 0;}
     return wii_mm9_screen_draw_prepared(renderer,object,&screen);
 }
-extern "C" int wii_mm9_screen_draw_prepared(WiiMm9ScreenNative* renderer,uint32_t key,const WiiMm9Screen* input) {
-    if(!renderer || !input)return -1;const auto& screen=*input;
+extern "C" int wii_mm9_indexed_retain(WiiMm9ScreenNative* renderer,uint32_t key,
+        const WiiMm9Screen* input,GcWiiNativeDraw* output) {
+    if(!renderer || !input || !output)return 0;const auto& screen=*input;
     auto& retained=renderer->meshes[key];
     if(!retained.handle || std::memcmp(retained.vertices.data(),screen.vertices,sizeof(screen.vertices))) {
         constexpr uint16_t indices[]{0,1,2,0,2,3};const GcWiiNativeMesh input{screen.vertices,indices,4,6};const auto mesh=renderer->backend->create_mesh(&input);
-        if(!mesh){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen mesh creation failed");++renderer->status.rejected;return -1;}
+        if(!mesh){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen mesh creation failed");++renderer->status.rejected;return 0;}
         if(retained.handle)renderer->backend->destroy_mesh(retained.handle);retained.handle=mesh;std::copy_n(screen.vertices,4,retained.vertices.begin());++renderer->status.mesh_uploads;
     }
-    auto draw=screen.draw;draw.mesh=retained.handle;
+    *output=screen.draw;output->mesh=retained.handle;return 1;
+}
+extern "C" int wii_mm9_screen_draw_prepared(WiiMm9ScreenNative* renderer,uint32_t key,const WiiMm9Screen* input) {
+    GcWiiNativeDraw draw{};if(!wii_mm9_indexed_retain(renderer,key,input,&draw))return -1;
     const bool indexed=draw.material.texture.palette_format==GC_WII_NATIVE_PALETTE_RGB5551_ZERO;
     const int submitted=indexed && renderer->indexed?renderer->indexed->draw(&draw):renderer->backend->draw(&draw);
     if(!submitted){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen draw failed");++renderer->status.rejected;return -1;}

@@ -21,6 +21,9 @@ int wii_mm9_indexed_prepare(const WiiMm9IndexedTile*,const WiiMm9Screen* canvas,
 /* Uses Render1 retained meshes and the explicit indexed material entry. */
 WiiMm9ScreenNative* wii_mm9_indexed_create(WiiMm9Memory,const GcWiiNativeRenderApi*,
     const GcWiiNativeIndexedApi*);
+/* Resolve retained geometry without drawing. A stock and an offscreen view
+ * may share this handle while changing only their draw/view state. */
+int wii_mm9_indexed_retain(WiiMm9ScreenNative*,uint32_t key,const WiiMm9Screen*,GcWiiNativeDraw*);
 #ifdef __cplusplus
 }
 #endif
