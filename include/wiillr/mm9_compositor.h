@@ -46,6 +46,22 @@ typedef struct WiiMm9ViewLayout {
     const WiiMm9SpriteAnchor* anchors;
     uint32_t anchor_count,color_level;
 } WiiMm9ViewLayout;
+/* Original-canvas source rectangles for native GPU composition. These carry
+ * the game's CI4 assets and raw RGB5551 palette addresses, never a rasterized
+ * frame. Preparation is atomic and leaves the prior scene intact on failure. */
+typedef struct WiiMm9SceneTile {
+    uint32_t source,palette,source_width,source_height;
+    uint32_t source_x,source_y,source_columns,source_rows,flips;
+    float x,y,width,height;
+} WiiMm9SceneTile;
+typedef struct WiiMm9Scene WiiMm9Scene;
+WiiMm9Scene* wii_mm9_scene_create(void);
+void wii_mm9_scene_destroy(WiiMm9Scene*);
+int wii_mm9_scene_prepare(WiiMm9Memory,WiiMm9Scene*,char*,uint32_t);
+uint32_t wii_mm9_scene_count(const WiiMm9Scene*);
+const WiiMm9SceneTile* wii_mm9_scene_tile(const WiiMm9Scene*,uint32_t);
+uint32_t wii_mm9_scene_backdrop(const WiiMm9Scene*);
+uint32_t wii_mm9_scene_sprite_count(const WiiMm9Scene*);
 /* Prepare the original WR9E animation emitter's CPU-visible queue writes and
  * uncropped components in one pass. No guest memory is written. */
 int wii_mm9_sprites_prepare(WiiMm9Memory,uint32_t object,uint32_t camera,

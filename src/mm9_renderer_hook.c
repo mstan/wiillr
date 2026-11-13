@@ -12,6 +12,22 @@
 #include <string.h>
 #include <math.h>
 #include <errno.h>
+#if WIILLR_MM9_INDEXED
+#include <wiillr/mm9_indexed.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
+#else
+#include <dlfcn.h>
+#endif
+#endif
 
 #define COMPOSITOR 0x800e7308u
 #define SCREEN 0x800d5e50u
@@ -49,6 +65,14 @@ static u64 hud_calls,hud_records;
 static bool spawn_attested;
 static u64 spawn_scans,spawn_bounds;
 static u32 spawn_radius=144;
+#if WIILLR_MM9_INDEXED
+static WiiMm9Scene* indexed_scene;
+static WiiMm9ScreenNative* indexed_renderer;
+static const GcWiiNativeCaptureApi* indexed_capture;
+static WiiMm9Screen* indexed_draws;
+static u32 indexed_capacity,indexed_count;
+static u64 indexed_frames,indexed_packets;
+#endif
 bool wii_mm9_renderer_view_supported(void) {
     return WIILLR_MM9_RENDERER_MODE>=2 && WIILLR_MM9_FRAME_MODE;
 }
@@ -74,8 +98,93 @@ static bool current_view_width(u32* width) {
         desired<=256?256:2u*(u32)(desired/2.0+0.5);
     return true;
 }
+#if WIILLR_MM9_INDEXED
+static WiiMm9Screen indexed_canvas(void) {
+    WiiMm9Screen canvas={0};GcWiiNativeDraw* draw=&canvas.draw;
+    draw->model_view[0]=draw->model_view[5]=draw->model_view[10]=1;
+    draw->projection[0]=2.f/256;draw->projection[3]=-1;
+    draw->projection[5]=-2.f/240;draw->projection[7]=1;
+    draw->projection[10]=-1;draw->projection[15]=1;
+    draw->width=draw->clip_width=256;draw->height=draw->clip_height=240;draw->far_depth=1;
+    draw->material.texture=(GcWiiNativeTexture){.address=FINAL_TEXTURE&0x1fffffff,
+        .size=WII_MM9_TEXTURE_BYTES,.format=4,.width=256,.height=240};
+    const float x[4]={0,0,256,256},y[4]={240,0,0,240};
+    for(u32 n=0;n<4;n++) {
+        canvas.vertices[n].position[0]=x[n];canvas.vertices[n].position[1]=y[n];
+        for(u32 c=0;c<4;c++)canvas.vertices[n].color[c]=1;
+        canvas.vertices[n].uv[0]=n>=2;canvas.vertices[n].uv[1]=n==0 || n==3;
+    }
+    return canvas;
+}
+static void indexed_stop(void) {
+    wii_mm9_screen_destroy(indexed_renderer);indexed_renderer=NULL;
+    wii_mm9_scene_destroy(indexed_scene);indexed_scene=NULL;
+    free(indexed_draws);indexed_draws=NULL;indexed_capacity=indexed_count=0;indexed_capture=NULL;
+}
+static bool indexed_start(WiiGx* gx,WiiMm9Memory memory,const GcWiiNativeRenderApi* render) {
+    if(WIILLR_MM9_RENDERER_MODE<2 || !WIILLR_MM9_FRAME_MODE)return false;
+#ifdef _WIN32
+    GcWiiNativeIndexedGetApi get=(GcWiiNativeIndexedGetApi)GetProcAddress((HMODULE)gx->library,"gc_wii_native_indexed_get_api");
+    GcWiiNativeCaptureGetApi capture=(GcWiiNativeCaptureGetApi)GetProcAddress((HMODULE)gx->library,"gc_wii_native_capture_get_api");
+#else
+    GcWiiNativeIndexedGetApi get=(GcWiiNativeIndexedGetApi)dlsym(gx->library,"gc_wii_native_indexed_get_api");
+    GcWiiNativeCaptureGetApi capture=(GcWiiNativeCaptureGetApi)dlsym(gx->library,"gc_wii_native_capture_get_api");
+#endif
+    const GcWiiNativeIndexedApi* api=get?get(GC_WII_NATIVE_INDEXED_ABI):NULL;
+    indexed_capture=capture?capture(GC_WII_NATIVE_CAPTURE_ABI):NULL;
+    if(!api || !indexed_capture || !indexed_capture->texture_copy)return false;
+    indexed_scene=wii_mm9_scene_create();indexed_renderer=wii_mm9_indexed_create(memory,render,api);
+    indexed_frames=indexed_packets=0;return indexed_scene && indexed_renderer;
+}
+static bool indexed_prepare(CPUState* cpu) {
+    u32 width;char error[192];
+    /* This first separately selected slice owns the original canvas. Native
+     * wide composition must qualify before replacing the existing Fit build. */
+    if(!current_view_width(&width) || width!=256) {
+        fprintf(stderr,"Native MM9 indexed slice requires the original canvas\n");return false;
+    }
+    if(!wii_mm9_scene_prepare((WiiMm9Memory){cpu,read_memory},indexed_scene,error,sizeof error)) {
+        fprintf(stderr,"Native MM9 indexed scene: %s\n",error);return false;
+    }
+    const u32 count=wii_mm9_scene_count(indexed_scene);
+    if(count>indexed_capacity) {
+        void* next=realloc(indexed_draws,(size_t)count*sizeof *indexed_draws);
+        if(!next)return false;indexed_draws=next;indexed_capacity=count;
+    }
+    const WiiMm9Screen canvas=indexed_canvas();
+    for(u32 n=0;n<count;n++) {
+        const WiiMm9SceneTile* s=wii_mm9_scene_tile(indexed_scene,n);
+        const WiiMm9IndexedTile tile={s->source,s->palette,s->source_width,s->source_height,
+            s->source_x,s->source_y,s->source_columns,s->source_rows,s->flips,s->x,s->y,s->width,s->height};
+        if(!wii_mm9_indexed_prepare(&tile,&canvas,&indexed_draws[n],error,sizeof error)) {
+            fprintf(stderr,"Native MM9 indexed rectangle: %s\n",error);return false;
+        }
+    }
+    indexed_count=count;prepared->final_sprite_count=wii_mm9_scene_sprite_count(indexed_scene);
+    return true;
+}
+static bool indexed_submit(void) {
+    const GcWiiNativeClear black={.width=256,.height=240,.alpha=255,.depth=0xffffff,.flags=7};
+    WiiMm9Screen backdrop=indexed_canvas();backdrop.draw.material.texture=(GcWiiNativeTexture){0};
+    const u32 color=wii_mm9_scene_backdrop(indexed_scene),r=color>>11,g=(color>>5)&63,b=color&31;
+    const float rgba[4]={((r<<3)|(r>>2))/255.f,((g<<2)|(g>>4))/255.f,((b<<3)|(b>>2))/255.f,1};
+    for(u32 n=0;n<4;n++) {
+        backdrop.vertices[n].position[1]=n==0 || n==3?232:8;
+        memcpy(backdrop.vertices[n].color,rgba,sizeof rgba);
+    }
+    if(!frame_api->clear(&black) || wii_mm9_screen_draw_prepared(indexed_renderer,0,&backdrop)!=1)return false;
+    for(u32 n=0;n<indexed_count;n++)
+        if(wii_mm9_screen_draw_prepared(indexed_renderer,n+1,&indexed_draws[n])!=1)return false;
+    const GcWiiNativeTextureCopy copy={.destination=FINAL_TEXTURE,.width=256,.height=240,.format=4};
+    if(!indexed_capture->texture_copy(&copy))return false;
+    ++indexed_frames;indexed_packets+=indexed_count;return true;
+}
+#endif
 static bool prepare_view(CPUState* cpu) {
     view_ready=false;
+#if WIILLR_MM9_INDEXED
+    return indexed_prepare(cpu);
+#endif
     char error[192];const WiiMm9Memory memory={cpu,read_memory};
     if(!view_enabled) {
         if(wii_mm9_composite_prepare(memory,prepared,error,sizeof error))return true;
@@ -341,7 +450,16 @@ bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,co
     if(owner || !gx || !render || !frame || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
     const WiiMm9Memory memory={gx->cpu,read_memory};screen_renderer=wii_mm9_screen_create(memory,render);prepared=calloc(1,sizeof *prepared);
     overlay_renderer=wii_mm9_overlay_create(memory,overlay_write_byte,render);
-    if(!screen_renderer || !overlay_renderer || !prepared){wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;return false;}
+    if(!screen_renderer || !overlay_renderer || !prepared
+#if WIILLR_MM9_INDEXED
+       || !indexed_start(gx,memory,render)
+#endif
+    ) {
+#if WIILLR_MM9_INDEXED
+        indexed_stop();
+#endif
+        wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;return false;
+    }
     owner=gx;frame_api=frame;output_api=NULL;verified=oracle_pending=false;frames=uncovered=failed=oracle_checked=oracle_different=0;oracle_max_delta=0;
     margin_sprite_count=0;sprite_attested=sprite_pending=false;
     sprite_calls=sprite_records=sprite_margins=sprite_oracle_checked=0;
@@ -396,7 +514,12 @@ int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
     if(WIILLR_MM9_RENDERER_MODE==1){if(oracle_entry)memcpy(oracle_entry,cpu->ram,cpu->ram_size);oracle_pending=true;return 0;}
     GcWiiNativeClear clear;GcWiiNativeDisplayCopy copy;if(!frame_effects(cpu,&clear,&copy))return unsupported(cpu,"frame copy settings");
     if(!ordered_boundary())return failure(cpu,"frame prior completion");
-    if(!publish(cpu,FINAL_TEXTURE,prepared->texture,WII_MM9_TEXTURE_BYTES) || !clear_retired_atlases(cpu,&clear) || !frame_api->clear(&clear))return failure(cpu,"frame publication/clear");
+#if WIILLR_MM9_INDEXED
+    if(!indexed_submit())return failure(cpu,"indexed scene composition/capture");
+#else
+    if(!publish(cpu,FINAL_TEXTURE,prepared->texture,WII_MM9_TEXTURE_BYTES))return failure(cpu,"frame texture publication");
+#endif
+    if(!clear_retired_atlases(cpu,&clear) || !frame_api->clear(&clear))return failure(cpu,"frame publication/clear");
 #if WIILLR_MM9_FRAME_MODE
     if(owned_active()) {
         const int retire=owned_finish_compositor(cpu,&copy);
@@ -427,6 +550,11 @@ int wii_mm9_renderer_hook_dispatch(CPUState* cpu,u32 address) {
 }
 void wii_mm9_renderer_hook_stop(void) {
     if(!owner)return;WiiMm9ScreenStatus status={0};wii_mm9_screen_status(screen_renderer,&status);
+#if WIILLR_MM9_INDEXED
+    printf("{\"native_mm9_indexed\":1,\"frames\":%llu,\"source_rectangles\":%llu,\"cpu_raster_frames\":0}\n",
+        (unsigned long long)indexed_frames,(unsigned long long)indexed_packets);
+    indexed_stop();
+#endif
     printf("{\"native_mm9_activation\":1,\"wide_scans\":%llu,\"wide_bounds\":%llu,\"radius\":%u}\n",
         (unsigned long long)spawn_scans,(unsigned long long)spawn_bounds,spawn_radius);
     printf("{\"native_mm9_sprites\":1,\"calls\":%llu,\"guest_records\":%llu,\"margin_records\":%llu,\"oracle_checked\":%llu}\n",
