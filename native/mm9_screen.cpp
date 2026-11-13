@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <wiillr/mm9_screen.h>
+#include <wiillr/mm9_indexed.h>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -60,12 +61,18 @@ extern "C" int wii_mm9_screen_prepare(WiiMm9Memory memory,uint32_t object,uint32
 }
 struct WiiMm9ScreenNative {
     WiiMm9Memory memory{};const GcWiiNativeRenderApi* backend{};
+    const GcWiiNativeIndexedApi* indexed{};
     struct Mesh {uint64_t handle{};std::array<GcWiiNativeVertex,4> vertices{};};
     std::unordered_map<uint32_t,Mesh> meshes;WiiMm9ScreenStatus status{};
 };
 extern "C" WiiMm9ScreenNative* wii_mm9_screen_create(WiiMm9Memory memory,const GcWiiNativeRenderApi* api) {
     if(!memory.read || !api || api->abi!=GC_WII_NATIVE_RENDER_ABI || !api->create_mesh || !api->destroy_mesh || !api->draw)return nullptr;
     auto out=std::make_unique<WiiMm9ScreenNative>();out->memory=memory;out->backend=api;return out.release();
+}
+extern "C" WiiMm9ScreenNative* wii_mm9_indexed_create(WiiMm9Memory memory,const GcWiiNativeRenderApi* api,
+        const GcWiiNativeIndexedApi* indexed) {
+    if(!indexed || indexed->abi!=GC_WII_NATIVE_INDEXED_ABI || !indexed->draw)return nullptr;
+    auto* out=wii_mm9_screen_create(memory,api);if(out)out->indexed=indexed;return out;
 }
 extern "C" void wii_mm9_screen_destroy(WiiMm9ScreenNative* renderer){if(!renderer)return;for(const auto& [object,mesh]:renderer->meshes)if(mesh.handle)renderer->backend->destroy_mesh(mesh.handle);delete renderer;}
 extern "C" int wii_mm9_screen_draw(WiiMm9ScreenNative* renderer,uint32_t object,uint32_t level,const GcWiiNativeDraw* camera) {
@@ -81,7 +88,10 @@ extern "C" int wii_mm9_screen_draw_prepared(WiiMm9ScreenNative* renderer,uint32_
         if(!mesh){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen mesh creation failed");++renderer->status.rejected;return -1;}
         if(retained.handle)renderer->backend->destroy_mesh(retained.handle);retained.handle=mesh;std::copy_n(screen.vertices,4,retained.vertices.begin());++renderer->status.mesh_uploads;
     }
-    auto draw=screen.draw;draw.mesh=retained.handle;if(!renderer->backend->draw(&draw)){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen draw failed");++renderer->status.rejected;return -1;}
+    auto draw=screen.draw;draw.mesh=retained.handle;
+    const bool indexed=draw.material.texture.palette_format==GC_WII_NATIVE_PALETTE_RGB5551_ZERO;
+    const int submitted=indexed && renderer->indexed?renderer->indexed->draw(&draw):renderer->backend->draw(&draw);
+    if(!submitted){message(renderer->status.error,sizeof(renderer->status.error),"Native MM9 screen draw failed");++renderer->status.rejected;return -1;}
     ++renderer->status.draws;return 1;
 }
 extern "C" void wii_mm9_screen_status(const WiiMm9ScreenNative* renderer,WiiMm9ScreenStatus* output){if(renderer && output)*output=renderer->status;}
