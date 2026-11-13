@@ -52,11 +52,17 @@ int main(void) {
     /* An IPC register mutation replaces the cached IO event immediately. */
     mem_write32_cia(&cpu,0xcd000004,0x31,0);
     CHECK(wii_machine_deadline(&m,cpu.cycles)>cpu.cycles);
+#if WIILLR_IOS_NATIVE
+    CHECK(wii_ios_native_request_deadline(&m.ios,cpu.cycles)==6000);
+    mem_write32_cia(&cpu,0xcd000004,0x30,0); /* another callback clears X1 */
+    CHECK(!(m.ipc.x&1) && wii_ios_native_request_deadline(&m.ios,cpu.cycles)==6000);
+#endif
 #else
     CHECK(wii_machine_deadline(&m,0)==64);
     cpu.cycles=11;wii_machine_tick(&m,&cpu);CHECK(cpu.timebase==0);
     cpu.cycles=12;wii_machine_tick(&m,&cpu);CHECK(cpu.timebase==1);
 #endif
     ppc_timing_set_observer(NULL,NULL,NULL);
+    wii_ios_native_destroy(&m.ios);
     cpu_free(&cpu);return 0;
 }

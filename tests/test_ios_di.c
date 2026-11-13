@@ -3,13 +3,17 @@
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do {if(!(x)) {fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
+static void consume_mailbox(WiiIpc* ipc,u32 control,u64 cycles) {
+    wii_ipc_write(ipc,4,control,cycles);
+    wii_ipc_write(ipc,0x30,0x40000000u,cycles);
+}
 static bool exchange(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu,u32 message) {
-    wii_ipc_write(ipc,4,0x36,cpu->cycles);
+    consume_mailbox(ipc,0x36,cpu->cycles);
     wii_ipc_write(ipc,0,message,cpu->cycles);wii_ipc_write(ipc,4,0x31,cpu->cycles);
     if(!wii_ios_native_tick(ios,ipc,cpu))return false;
     cpu->cycles+=6000;
     if(!wii_ios_native_tick(ios,ipc,cpu))return false;
-    wii_ipc_write(ipc,4,0x32,cpu->cycles);cpu->cycles+=6000;
+    consume_mailbox(ipc,0x32,cpu->cycles);cpu->cycles+=6000;
     return wii_ios_native_tick(ios,ipc,cpu);
 }
 int main(void) {

@@ -49,5 +49,10 @@ typedef struct {
 void wii_ios_native_init(WiiIosNative*);
 void wii_ios_native_destroy(WiiIosNative*);
 bool wii_ios_native_tick(WiiIosNative*,WiiIpc*,CPUState*);
+/* Latch each PPC submission at the actual mailbox write, independently of
+ * subsequent control-register writes and asynchronous completions. */
+bool wii_ios_native_request(WiiIosNative*,u32 message,u64 cycles);
+/* Broadway cycles until the next captured request, or UINT64_MAX if empty. */
+u64 wii_ios_native_request_deadline(const WiiIosNative*,u64 cycles);
 bool wii_ios_native_stm_event(WiiIosNative*,CPUState*,u32 event);
 #endif

@@ -5,6 +5,55 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdatomic.h>
+
+typedef struct {u32 message;u64 ready_at;} IpcRequest;
+typedef struct IpcRequests {
+    WiiIosNative* owner;struct IpcRequests* next;
+    unsigned head,count;IpcRequest values[64];
+} IpcRequests;
+/* Private provider state keeps caller-owned machine storage independent of
+ * the queued transport. Each IOS instance retains its own request order. */
+static IpcRequests* request_queues;
+static atomic_flag request_lock=ATOMIC_FLAG_INIT;
+static void lock_requests(void){while(atomic_flag_test_and_set_explicit(&request_lock,memory_order_acquire)){} }
+static void unlock_requests(void){atomic_flag_clear_explicit(&request_lock,memory_order_release);}
+static IpcRequests* find_requests(const WiiIosNative* owner) {
+    IpcRequests* q=request_queues;while(q && q->owner!=owner)q=q->next;return q;
+}
+static void forget_requests(WiiIosNative* owner) {
+    lock_requests();IpcRequests** at=&request_queues;
+    while(*at && (*at)->owner!=owner)at=&(*at)->next;
+    if(*at){IpcRequests* q=*at;*at=q->next;free(q);}unlock_requests();
+}
+bool wii_ios_native_request(WiiIosNative* owner,u32 message,u64 cycles) {
+    if(!owner || cycles>UINT64_MAX-6000)return false;
+    lock_requests();IpcRequests* q=find_requests(owner);
+    if(!q) {
+        q=calloc(1,sizeof *q);
+        if(!q){unlock_requests();return false;}
+        q->owner=owner;q->next=request_queues;request_queues=q;
+    }
+    if(q->count==64){unlock_requests();return false;}
+    q->values[(q->head+q->count)%64]=(IpcRequest){message,cycles+6000};++q->count;
+    unlock_requests();return true;
+}
+u64 wii_ios_native_request_deadline(const WiiIosNative* owner,u64 cycles) {
+    lock_requests();const IpcRequests* q=find_requests(owner);u64 delay=UINT64_MAX;
+    if(q && q->count)delay=q->values[q->head].ready_at>cycles?q->values[q->head].ready_at-cycles:1;
+    unlock_requests();return delay;
+}
+/* 0: empty; 1: captured but not due; 2: due request transferred to owner. */
+static unsigned take_request(WiiIosNative* owner,u64 cycles,IpcRequest* request) {
+    lock_requests();IpcRequests* q=find_requests(owner);unsigned state=0;
+    if(q && q->count) {
+        state=1;
+        if(q->values[q->head].ready_at<=cycles) {
+            *request=q->values[q->head];q->head=(q->head+1)%64;--q->count;state=2;
+        }
+    }
+    unlock_requests();return state;
+}
 
 enum {
     ES_GET_STORED_CONTENT_COUNT=0x10,ES_GET_STORED_CONTENTS=0x11,
@@ -21,6 +70,7 @@ static u8* ios_memory(CPUState* cpu,u32 address,u32* available) {
 }
 
 void wii_ios_native_init(WiiIosNative* ios) {
+    forget_requests(ios);
     memset(ios,0,sizeof *ios);
     // Sample the host clock once. Subsequent native KD time advances only
     // with retired Broadway cycles; a host pause also pauses this clock.
@@ -30,7 +80,7 @@ void wii_ios_native_init(WiiIosNative* ios) {
         if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"native IOS UTC seed=%llu epoch=unix clock=729000000\n",(unsigned long long)ios->kd_utc);
     }
 }
-void wii_ios_native_destroy(WiiIosNative* ios){wii_es_release_launch(&ios->launch);wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
+void wii_ios_native_destroy(WiiIosNative* ios){forget_requests(ios);wii_es_release_launch(&ios->launch);wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
 static void di_registers(WiiIosNative* ios,CPUState* cpu) {
     gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,
         GCN_DI_SR_TCINT|GCN_DI_SR_DEINT|GCN_DI_SR_TCINTMASK|GCN_DI_SR_DEINTMASK,4);
@@ -783,6 +833,23 @@ bool wii_ios_native_stm_event(WiiIosNative* ios,CPUState* cpu,u32 event) {
 bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
     if(ios->launch_pending)return true;
     if(ios->kd_utc_set && ios->kd_utc_cycles==UINT64_MAX)ios->kd_utc_cycles=cpu->cycles;
+    /* Clearing a Y bit can precede the handler's IRQFLAG acknowledgment.
+     * Reusing the mailbox during that interval can lose the next ACK. */
+    if(!wii_ipc_ready(ipc))return true;
+    if(!ios->phase) {
+        IpcRequest request;const unsigned queued=take_request(ios,cpu->cycles,&request);
+        if(queued==2){ios->message=request.message;ios->ready_at=request.ready_at;ios->phase=1;}
+        else if(!queued && (ipc->x&1)) {
+            /* Direct service fixtures may supply the raw register interface.
+             * Machine submissions use the captured queue above. */
+            ios->message=ipc->ppc_message;ios->ready_at=cpu->cycles+6000;ios->phase=1;
+        }
+    }
+    if(ios->phase==1 && cpu->cycles>=ios->ready_at) {
+        const int status=execute(ios,cpu);if(!status)return false;
+        wii_ipc_write(ipc,12,12,cpu->cycles);
+        ios->ready_at=cpu->cycles+6000;ios->phase=status>=2?0:2;return true;
+    }
     if(ios->bluetooth && !ipc->y) {
         u32 message;s32 result;bool ready;
         if(!wii_bluetooth_poll(ios->bluetooth,&message,&result,&ready))return false;
@@ -810,24 +877,7 @@ bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
         ios->sd_event_message=0;ios->sd_event_cancelled=false;
         return true;
     }
-    if(!ios->phase) {
-        if(!(ipc->x&1))return true;
-        ios->message=ipc->ppc_message;ios->ready_at=cpu->cycles+6000;ios->phase=1;
-    }
-    if(cpu->cycles<ios->ready_at)return true;
-    if(ios->phase==1) {
-        /* PPC request/return layout follows IOS IPC. Hardware ACK latency is
-         * modeled at500 TB ticks. Service latency remains development-only.
-         * No ARM instructions execute in this explicitly native provider. */
-        if(ipc->y)return true;
-        const int status=execute(ios,cpu);
-        if(!status)return false;
-        wii_ipc_write(ipc,8,ios->message,cpu->cycles);
-        wii_ipc_write(ipc,12,12,cpu->cycles); /* clear X1, raise Y2 ACK */
-        ios->ready_at=cpu->cycles+6000;ios->phase=status>=2 ? 0:2;
-        return true;
-    }
-    if(ipc->y)return true; /* receiver must consume the previous mailbox */
+    if(ios->phase!=2 || cpu->cycles<ios->ready_at || ipc->y)return true;
     reply(ios,ipc,cpu,ios->message,ios->command,ios->result);ios->phase=0;
     return true;
 }

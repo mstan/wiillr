@@ -68,9 +68,13 @@ static u64 domain_deadline(void* user,u32 domain,u64 cursor) {
         if(m->di.cmd_pending)next=earlier(next,m->di.pending_cycles?m->di.pending_cycles:1);
         if(m->ipc.interrupt_scheduled)next=earlier(next,distance(m->ipc.interrupt_at,cursor));
         if(WIILLR_IOS_NATIVE) {
-            if(m->ios.phase && !m->ipc.y)next=earlier(next,distance(m->ios.ready_at,cursor));
-            if(!m->ios.phase && (m->ipc.x&1))next=1;
-            if(m->ios.bluetooth && !m->ipc.y)
+            if(m->ios.phase && wii_ipc_ready(&m->ipc))next=earlier(next,distance(m->ios.ready_at,cursor));
+            if(!m->ios.phase && wii_ipc_ready(&m->ipc)) {
+                const u64 request=wii_ios_native_request_deadline(&m->ios,cursor);
+                if(request!=UINT64_MAX)next=earlier(next,request);
+                else if(m->ipc.x&1)next=1;
+            }
+            if(m->ios.bluetooth && wii_ipc_ready(&m->ipc))
                 next=earlier(next,wii_bluetooth_deadline(m->ios.bluetooth,cursor));
         }
         return next;

@@ -213,6 +213,11 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     WII_MMIO_CASE(IPC)
     if (physical >= 0x0d000000u && physical < 0x0d000040u && width == 4 && !(address & 3) &&
         wii_ipc_write(&m->ipc, physical - 0x0d000000u, (u32)value, cpu->cycles)) {
+        if(WIILLR_IOS_NATIVE && physical==0x0d000004u && (value&1) &&
+           !wii_ios_native_request(&m->ios,m->ipc.ppc_message,cpu->cycles)) {
+            fprintf(stderr,"native IOS request queue unavailable\n");cpu->halted=true;
+        }
+        wii_machine_observe_register(m,cpu,physical);
         if (!WIILLR_IOS_NATIVE && (m->ipc.x & 1)) {
             /* Discovery stops at the real service boundary until an IOS
              * implementation is attached. Never acknowledge or invent success. */

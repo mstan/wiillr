@@ -54,6 +54,10 @@ bool wii_ipc_write(WiiIpc* ipc, uint32_t offset, uint32_t v, uint64_t cycles) {
         ipc->x = (v & 1) | ((v >> 2) & 2);
         ipc->y &= ~(((v >> 2) & 1) | (v & 2));
         ipc->iy = (v >> 4) & 3;
+        /* A PPC write to a Y bit signals the IPC interrupt even when the
+         * write clears that bit. The separate IRQFLAG write retires it. */
+        if((((v>>2)&1) && (ipc->iy&1)) || (((v>>1)&1) && (ipc->iy&2)))
+            ipc->ppc_flags |= PPC_IPC;
         break;
     case 0x08: ipc->arm_message = v; break;
     case 0x0c:
@@ -73,3 +77,4 @@ bool wii_ipc_write(WiiIpc* ipc, uint32_t offset, uint32_t v, uint64_t cycles) {
 
 bool wii_ipc_ppc_interrupt(const WiiIpc* ipc) { return (ipc->ppc_flags & ipc->ppc_mask) != 0; }
 bool wii_ipc_arm_interrupt(const WiiIpc* ipc) { return (ipc->arm_flags & ipc->arm_mask) != 0; }
+bool wii_ipc_ready(const WiiIpc* ipc) { return !ipc->y && !(ipc->ppc_flags & PPC_IPC); }

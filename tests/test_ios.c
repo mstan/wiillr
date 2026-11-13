@@ -3,6 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do {if(!(x)) {fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
+static void consume_mailbox(WiiIpc* ipc,u32 control,u64 cycles) {
+    wii_ipc_write(ipc,4,control,cycles);
+    wii_ipc_write(ipc,0x30,0x40000000u,cycles); /* receiver completes its ISR */
+}
 typedef struct {bool enabled,reject;u32 calls;} VideoTest;
 static bool set_idle_dimming(void* user,bool enabled) {
     VideoTest* video=user;++video->calls;if(video->reject)return false;
@@ -24,13 +28,17 @@ int main(void) {
     cpu.cycles=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ipc.x && ipc.y==2);
     CHECK(mem_read32_cia(&cpu,message,0)==1 && ios.descriptors[0]==1);
+    CHECK(ipc.arm_message==0); /* an ACK has no reply pointer */
     cpu.cycles=12000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && mem_read32_cia(&cpu,message,0)==1);
-    wii_ipc_write(&ipc,4,0x32,cpu.cycles); /* consume ACK */
+    wii_ipc_write(&ipc,4,0x32,cpu.cycles); /* consume ACK, ISR still active */
+    CHECK(!wii_ipc_ready(&ipc) && wii_ios_native_tick(&ios,&ipc,&cpu));
+    CHECK(!ipc.y && mem_read32_cia(&cpu,message,0)==1);
+    wii_ipc_write(&ipc,0x30,0x40000000u,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && ios.operations==1);
     CHECK(mem_read32_cia(&cpu,message,0)==8 && mem_read32_cia(&cpu,message+4,0)==0);
     CHECK(mem_read32_cia(&cpu,message+8,0)==1 && ipc.arm_message==message);
-    wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    consume_mailbox(&ipc,0x34,cpu.cycles);
     /* Unsupported service behavior neither acknowledges nor overwrites its
      * request, including the caller's result sentinel. */
     mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+4,0x11223344,0);
@@ -46,8 +54,8 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.descriptors[0] && ios.result==0);
-    cpu.cycles+=6000;wii_ipc_write(&ipc,4,0x32,cpu.cycles);
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    cpu.cycles+=6000;consume_mailbox(&ipc,0x32,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));consume_mailbox(&ipc,0x34,cpu.cycles);
     mem_write32_cia(&cpu,message,2,0);mem_write32_cia(&cpu,message+8,0,0);
     wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
     cpu.cycles+=6000;
@@ -59,15 +67,15 @@ int main(void) {
     mem_write32_cia(&cpu,message+16,0,0);
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));consume_mailbox(&ipc,0x32,cpu.cycles);
     cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
-    wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    consume_mailbox(&ipc,0x34,cpu.cycles);
     mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+4,0x12345678,0);
     mem_write32_cia(&cpu,message+8,0,0);mem_write32_cia(&cpu,message+12,0x1000,0);
     mem_write32_cia(&cpu,message+24,0x10000400,0);mem_write32_cia(&cpu,message+28,4,0);
     wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
     cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
-    wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=60000;
+    consume_mailbox(&ipc,0x32,cpu.cycles);cpu.cycles+=60000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ipc.y && ios.event_waiting);
     CHECK(mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x12345678);
     CHECK(!wii_ios_native_stm_event(&ios,&cpu,1));
@@ -77,11 +85,11 @@ int main(void) {
     CHECK(mem_read32_cia(&cpu,message+8,0)==6 && ios.operations==2);
     /* Release completes the pending hook before the release request. The
      * same operation without an installed hook returns IPC_ENOENT. */
-    wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    consume_mailbox(&ipc,0x34,cpu.cycles);
     mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+8,0,0);
     wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
     cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2 && ios.event_waiting);
-    wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    consume_mailbox(&ipc,0x32,cpu.cycles);
     const u32 release=message+64;
     ios.descriptors[1]=1;
     for(unsigned n=0;n<2;n++) {
@@ -90,17 +98,17 @@ int main(void) {
         wii_ipc_write(&ipc,0,release,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
         CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
         CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2);
-        wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=6000;
+        consume_mailbox(&ipc,0x32,cpu.cycles);cpu.cycles+=6000;
         CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
         if(!n) {
             CHECK(ipc.y==1 && ipc.arm_message==message && !ios.event_waiting);
             CHECK(!mem_read32_cia(&cpu,0x10000400,0) && !mem_read32_cia(&cpu,message+4,0));
             CHECK(mem_read32_cia(&cpu,release,0)==6);
-            wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+            consume_mailbox(&ipc,0x34,cpu.cycles);
             CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
         }
         CHECK(ipc.y==1 && ipc.arm_message==release && (s32)mem_read32_cia(&cpu,release+4,0)==(n ? -6:0));
-        wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+        consume_mailbox(&ipc,0x34,cpu.cycles);
     }
     /* Slot illumination changes real service state. Disabling it clears the
      * existing GPIO light while preserving other pins and output sentinels. */
@@ -320,14 +328,14 @@ int main(void) {
     mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);mem_write32_cia(&cpu,message+16,0,0);
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));consume_mailbox(&ipc,0x32,cpu.cycles);
     cpu.cycles+=6000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.descriptors[0]==11);
-    wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+    consume_mailbox(&ipc,0x34,cpu.cycles);
     mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+4,0x12345678,0);mem_write32_cia(&cpu,message+8,0,0);
     mem_write32_cia(&cpu,message+24,0x10000400,0);mem_write32_cia(&cpu,message+28,16,0);
     mem_write32_cia(&cpu,0x10000400,0xabcdef01,0);
     wii_ipc_write(&ipc,4,0x31,cpu.cycles);CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));consume_mailbox(&ipc,0x32,cpu.cycles);
     cpu.cycles+=60000;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ipc.y && ios.keyboard_messages[0]==message);
     CHECK(mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x12345678);
     CHECK(mem_read32_cia(&cpu,0x10000400,0)==0xabcdef01);
@@ -379,7 +387,7 @@ int main(void) {
         wii_ipc_write(&ipc,0,request,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
         CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
         CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2);
-        wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=60000;
+        consume_mailbox(&ipc,0x32,cpu.cycles);cpu.cycles+=60000;
         CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
         if(!n) {
             CHECK(!ipc.y && mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x11223344);
@@ -387,11 +395,45 @@ int main(void) {
         }
         if(n==1) {
             CHECK(ipc.y==1 && ipc.arm_message==message && mem_read32_cia(&cpu,message+4,0)==0x0c210000);
-            wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+            consume_mailbox(&ipc,0x34,cpu.cycles);
             CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
         }
         CHECK(ipc.y==1 && ipc.arm_message==request && mem_read32_cia(&cpu,request+4,0)==(n==1 ? 0:2));
-        wii_ipc_write(&ipc,4,0x34,cpu.cycles);
+        consume_mailbox(&ipc,0x34,cpu.cycles);
     }
+    /* Submission is an event, not a later sample of X1 or PPCMSG. Retain
+     * both pointers even after the caller clears X1 or changes the register. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);
+    memcpy(cpu.ram+path,"/dev/stm/immediate",sizeof "/dev/stm/immediate");
+    const u32 second=message+64;
+    for(unsigned n=0;n<2;n++) {
+        const u32 request=message+n*64;
+        mem_write32_cia(&cpu,request,1,0);mem_write32_cia(&cpu,request+12,path,0);
+        mem_write32_cia(&cpu,request+16,0,0);
+        CHECK(wii_ios_native_request(&ios,request,cpu.cycles));
+    }
+    CHECK(wii_ios_native_request_deadline(&ios,cpu.cycles)==6000);
+    wii_ipc_write(&ipc,0,message+128,cpu.cycles);wii_ipc_write(&ipc,4,0x30,cpu.cycles);
+    cpu.cycles+=5999;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ipc.y);
+    ++cpu.cycles;CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2 && ios.message==message);
+    CHECK(!ipc.arm_message && ios.descriptors[0]==1);
+    consume_mailbox(&ipc,0x32,cpu.cycles);cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && ipc.arm_message==message);
+    consume_mailbox(&ipc,0x34,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2 && ios.message==second);
+    CHECK(ipc.arm_message==message && ios.descriptors[1]==1);
+    consume_mailbox(&ipc,0x32,cpu.cycles);cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && ipc.arm_message==second);
+    consume_mailbox(&ipc,0x34,cpu.cycles);
+    CHECK(wii_ios_native_request_deadline(&ios,cpu.cycles)==UINT64_MAX);
+    wii_ios_native_init(&ios);
+    for(unsigned n=0;n<64;n++)CHECK(wii_ios_native_request(&ios,message+n*64,cpu.cycles));
+    CHECK(!wii_ios_native_request(&ios,message,cpu.cycles));
+    WiiIosNative other;wii_ios_native_init(&other);
+    CHECK(wii_ios_native_request(&other,message,cpu.cycles+100));
+    CHECK(wii_ios_native_request_deadline(&other,cpu.cycles)==6100);
+    CHECK(wii_ios_native_request_deadline(&ios,cpu.cycles)==6000);
+    wii_ios_native_destroy(&other);wii_ios_native_destroy(&ios);
+    CHECK(wii_ios_native_request_deadline(&ios,cpu.cycles)==UINT64_MAX);
     cpu_free(&cpu);return 0;
 }

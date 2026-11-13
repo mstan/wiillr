@@ -72,8 +72,12 @@ int main(void) {
     wii_ipc_tick(&ipc, 2400);
     CHECK(!wii_ipc_arm_interrupt(&ipc) && wii_ipc_ppc_interrupt(&ipc));
     wii_ipc_write(&ipc, 0x04, 0x32, 2400); /* PPC clears Y2 */
+    CHECK(!wii_ipc_ready(&ipc)); /* Y clear alone does not retire the ISR */
     wii_ipc_write(&ipc, 0x30, 0x40000000, 2400);
-    CHECK(!wii_ipc_ppc_interrupt(&ipc) && ipc.y == 0);
+    CHECK(!wii_ipc_ppc_interrupt(&ipc) && ipc.y == 0 && wii_ipc_ready(&ipc));
+    wii_ipc_write(&ipc, 0x04, 0x34, 2400); /* W1C also signals when Y1 was clear */
+    CHECK(wii_ipc_ppc_interrupt(&ipc) && !wii_ipc_ready(&ipc));
+    wii_ipc_write(&ipc, 0x30, 0x40000000, 2400);
     wii_ipc_write(&ipc, 0x08, 0x1000, 2400);
     wii_ipc_write(&ipc, 0x0c, 0x31, 2400); /* ARM publishes actual reply */
     wii_ipc_tick(&ipc, 3600);

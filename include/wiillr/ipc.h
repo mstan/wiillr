@@ -16,4 +16,7 @@ bool wii_ipc_write(WiiIpc* ipc, uint32_t offset, uint32_t value, uint64_t ppc_cy
 void wii_ipc_tick(WiiIpc* ipc, uint64_t ppc_cycles);
 bool wii_ipc_ppc_interrupt(const WiiIpc* ipc);
 bool wii_ipc_arm_interrupt(const WiiIpc* ipc);
+/* The receiver must acknowledge both mailbox bits and the latched interrupt
+ * before the producer may publish another ACK or reply. */
+bool wii_ipc_ready(const WiiIpc* ipc);
 #endif
