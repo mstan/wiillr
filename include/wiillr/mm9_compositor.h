@@ -54,12 +54,24 @@ typedef struct WiiMm9SceneTile {
     uint32_t source_x,source_y,source_columns,source_rows,flips;
     float x,y,width,height;
 } WiiMm9SceneTile;
+typedef struct WiiMm9SceneSolid {
+    float x,y,width,height;
+    uint32_t rgb565;
+} WiiMm9SceneSolid;
 typedef struct WiiMm9Scene WiiMm9Scene;
 WiiMm9Scene* wii_mm9_scene_create(void);
 void wii_mm9_scene_destroy(WiiMm9Scene*);
 int wii_mm9_scene_prepare(WiiMm9Memory,WiiMm9Scene*,char*,uint32_t);
+/* Enhanced scene coordinates retain the original center at x=0..255. The
+ * complete view spans -(width-256)/2..256+(width-256)/2. Solids describe opaque
+ * coverage; the GPU view target must start transparent outside these regions. */
+int wii_mm9_scene_layout_prepare(WiiMm9Memory,uint32_t,const WiiMm9ViewLayout*,
+    WiiMm9Scene*,char*,uint32_t);
+uint32_t wii_mm9_scene_width(const WiiMm9Scene*);
 uint32_t wii_mm9_scene_count(const WiiMm9Scene*);
 const WiiMm9SceneTile* wii_mm9_scene_tile(const WiiMm9Scene*,uint32_t);
+uint32_t wii_mm9_scene_solid_count(const WiiMm9Scene*);
+const WiiMm9SceneSolid* wii_mm9_scene_solid(const WiiMm9Scene*,uint32_t);
 uint32_t wii_mm9_scene_backdrop(const WiiMm9Scene*);
 uint32_t wii_mm9_scene_sprite_count(const WiiMm9Scene*);
 /* Prepare the original WR9E animation emitter's CPU-visible queue writes and

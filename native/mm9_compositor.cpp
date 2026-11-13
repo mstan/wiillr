@@ -315,6 +315,8 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
 }
 struct WiiMm9Scene {
     std::vector<WiiMm9SceneTile> tiles;
+    std::vector<WiiMm9SceneSolid> solids;
+    uint32_t width{256};
     uint32_t backdrop{},sprite_count{};
 };
 namespace {
@@ -360,47 +362,72 @@ size_t append_row(WiiMm9Scene& scene,const WiiMm9SceneTile& row,size_t previous)
     need(scene.tiles.size()<262144,"MM9 native scene exceeds its bounded packet size");
     scene.tiles.push_back(row);return scene.tiles.size()-1;
 }
-WiiMm9Scene native_scene(const Reader& r) {
-    /* Parse the same maps, queues and row budgets as the reference. Asset
-     * spans are validated, but no CI4 texel or output pixel is decoded here. */
-    const auto input=read_scene(r,256,nullptr,0,nullptr,0,false);
-    WiiMm9Scene scene;scene.backdrop=input.backdrop;
+WiiMm9Scene native_scene(const Reader& r,unsigned width,const WiiMm9ViewLayout& layout) {
+    /* Share the reference's scene interpretation. Only source geometry is
+     * emitted; no output image or RGB texel conversion is constructed here. */
+    const auto input=read_scene(r,width,layout.margins,layout.margin_count,
+        layout.anchors,layout.anchor_count,false);
+    WiiMm9Scene scene;scene.width=width;scene.backdrop=input.backdrop;
     RawPalette background_palette{r,0},sprite_palette{r,1};
-    std::array<unsigned,224> budget{};
+    const int left=input.left;
+    const auto covered=[&](unsigned x){return input.world_visible[x] &&
+        (!input.centered_panel || (x>=unsigned(left) && x<unsigned(left+256)));};
+    for(unsigned x=0;x<width;) {
+        if(!covered(x)){++x;continue;}
+        const unsigned begin=x;while(x<width && covered(x))++x;
+        const float at=float(int(begin)-left),columns=float(x-begin);
+        scene.solids.push_back({at,0,columns,8,0});
+        scene.solids.push_back({at,8,columns,224,input.backdrop});
+        scene.solids.push_back({at,232,columns,8,0});
+    }
+    std::array<unsigned,224> budget{},margin_budget{};
     for(int priority=3;priority>=0;--priority) {
         for(int order=3;order>=0;--order) {
             const auto& layer=input.layers[unsigned(order)];
             if(!layer.width || layer.priority!=unsigned(priority))continue;
             r.bytes(layer.tiles,256*256/2);
-            std::array<size_t,256> previous;previous.fill(no_tile);
+            std::array<size_t,WII_MM9_VIEW_MAX_WIDTH> previous;previous.fill(no_tile);
             for(unsigned y=0;y<224;++y) {
                 auto u=layer.u,v=layer.v;
                 if(layer.mode==1)u=r.u16(layer.scroll+y*2);
                 else if(layer.mode==2)v=r.u16(layer.scroll+y*2);
                 else if(layer.mode==3){const auto scroll=r.u32(layer.scroll+y*4);u=scroll&65535;v=scroll>>16;}
                 v=(v+y)&(layer.height-1);
-                for(unsigned x=0;x<256;) {
-                    const unsigned source_x=(u+x)&(layer.width-1);
+                const unsigned stop=input.centered_panel?unsigned(left+256):width;
+                for(unsigned x=input.centered_panel?unsigned(left):0;x<stop;) {
+                    if(!input.world_visible[x]){++x;continue;}
+                    const int column=input.stage_selection?std::clamp(int(x)-left,0,255):int(x)-left;
+                    unsigned source_x=(u+unsigned(column))&(layer.width-1),source_y=v;
                     const unsigned tile=(v/256*(layer.width/256)+source_x/256)*1024+
                         ((v%256)/8)*32+(source_x%256)/8;
-                    const auto item=half(layer.map_data,tile*2);
-                    const unsigned span=std::min(256-x,8u-(source_x&7));
+                    uint16_t item;
+                    if(layer.world_grid && (x<unsigned(left) || x>=unsigned(left+256))) {
+                        const int wx=layer.world_x+int(x)-left,wy=layer.world_y+int(y);
+                        if(wx<0 || wy<0 || unsigned(wx)>=layer.world_width || unsigned(wy)>=layer.world_height){++x;continue;}
+                        const auto cell=half(layer.world_grid_data,((unsigned(wy)/16)*layer.world_stride+unsigned(wx)/16)*2);
+                        need(cell<layer.world_count,"Invalid MM9 world metatile");
+                        item=half(layer.world_definition_data,cell*8+((unsigned(wy)/8)&1)*4+((unsigned(wx)/8)&1)*2);
+                        source_x=unsigned(wx);source_y=unsigned(wy);
+                    }else item=half(layer.map_data,tile*2);
+                    const bool edge=input.stage_selection && (x<unsigned(left) || x>=unsigned(left+256));
+                    const unsigned boundary=x<unsigned(left)?unsigned(left):x<unsigned(left+256)?unsigned(left+256):stop;
+                    unsigned span=std::min(std::min(stop,boundary)-x,edge?stop-x:8u-(source_x&7));
+                    unsigned visible=1;while(visible<span && input.world_visible[x+visible])++visible;
+                    span=visible;
                     const bool flip_x=item&32,flip_y=item&16;
-                    const unsigned px=flip_x?8-(source_x&7)-span:source_x&7;
-                    const unsigned py=flip_y?7-(v&7):v&7;
+                    const unsigned columns=edge?1:span;
+                    const unsigned px=flip_x?8-(source_x&7)-columns:source_x&7;
+                    const unsigned py=flip_y?7-(source_y&7):source_y&7;
                     uint32_t palette;
                     try{palette=background_palette.get(item&15);}
                     catch(const std::exception&) {
-                        /* The original resolves a palette only at a nonzero
-                         * index. Validate transparency of this exceptional
-                         * asset crop; never construct a CPU output image. */
                         if(transparent_rectangle(r,layer.tiles,256,256,
-                            ((item>>6)&31)*8+px,(item>>11)*8+py,span,1)){x+=span;continue;}
+                            ((item>>6)&31)*8+px,(item>>11)*8+py,columns,1)){x+=span;continue;}
                         throw;
                     }
                     WiiMm9SceneTile row{layer.tiles,palette,256,256,
-                        ((item>>6)&31)*8+px,(item>>11)*8+py,span,1,
-                        unsigned(flip_x)|(unsigned(flip_y)<<1),float(x),float(y+8),float(span),1};
+                        ((item>>6)&31)*8+px,(item>>11)*8+py,columns,1,
+                        unsigned(flip_x)|(unsigned(flip_y)<<1),float(int(x)-left),float(y+8),float(span),1};
                     previous[x]=append_row(scene,row,previous[x]);x+=span;
                 }
             }
@@ -408,29 +435,43 @@ WiiMm9Scene native_scene(const Reader& r) {
         for(const auto& sprite:input.sprites) {
             if(sprite.priority!=unsigned(priority))continue;
             const int start=std::max(0,sprite.y),end=std::min(224,sprite.y+int(sprite.height));
-            const int x=std::max(0,sprite.x),right=std::min(256,sprite.x+int(sprite.width));
-            size_t previous=no_tile;uint32_t palette=0;bool validated=false;
+            const int origin=sprite.x+left;
+            int first=std::max(0,origin),last=std::min(int(width),origin+int(sprite.width));
+            if(input.centered_panel || input.stage_selection){first=std::max(first,left);last=std::min(last,left+256);}
+            struct Span {int first,last;size_t previous=no_tile;};
+            std::vector<Span> spans;
+            const auto admitted=[&](int x){return (sprite.anchored || input.world_visible[unsigned(x)]) &&
+                !(sprite.margin && x>=left && x<left+256);};
+            if(!sprite.kind)for(int x=first;x<last;) {
+                if(!admitted(x)){++x;continue;}
+                const int begin=x;while(x<last && admitted(x))++x;
+                spans.push_back({begin,x});
+            }
+            uint32_t palette=0;bool validated=false;
             for(int y=start;y<end;++y) {
                 if(input.limit && sprite.limited) {
-                    if(budget[unsigned(y)]>=input.limit)continue;
-                    ++budget[unsigned(y)];
+                    auto& row_budget=sprite.margin?margin_budget[unsigned(y)]:budget[unsigned(y)];
+                    if(row_budget>=input.limit)continue;
+                    ++row_budget;
                 }
-                if(sprite.kind || x>=right)continue;
-                const unsigned source_x=sprite.flip_x?sprite.width-unsigned(right-sprite.x):unsigned(x-sprite.x);
+                if(sprite.kind || spans.empty())continue;
                 const unsigned source_y=sprite.flip_y?sprite.height-1-unsigned(y-sprite.y):unsigned(y-sprite.y);
-                if(!validated) {
-                    r.bytes(sprite.tiles,sprite.width*sprite.height/2);
-                    try{palette=sprite_palette.get(sprite.palette);validated=true;}
-                    catch(const std::exception&) {
-                        if(transparent_rectangle(r,sprite.tiles,sprite.width,sprite.height,
-                            source_x,source_y,unsigned(right-x),1))continue;
-                        throw;
+                for(auto& span:spans) {
+                    const unsigned source_x=sprite.flip_x?sprite.width-unsigned(span.last-origin):unsigned(span.first-origin);
+                    if(!validated) {
+                        r.bytes(sprite.tiles,sprite.width*sprite.height/2);
+                        try{palette=sprite_palette.get(sprite.palette);validated=true;}
+                        catch(const std::exception&) {
+                            if(transparent_rectangle(r,sprite.tiles,sprite.width,sprite.height,
+                                source_x,source_y,unsigned(span.last-span.first),1))continue;
+                            throw;
+                        }
                     }
+                    WiiMm9SceneTile row{sprite.tiles,palette,sprite.width,sprite.height,
+                        source_x,source_y,unsigned(span.last-span.first),1,unsigned(sprite.flip_x)|(unsigned(sprite.flip_y)<<1),
+                        float(span.first-left),float(y+8),float(span.last-span.first),1};
+                    span.previous=append_row(scene,row,span.previous);
                 }
-                WiiMm9SceneTile row{sprite.tiles,palette,sprite.width,sprite.height,
-                    source_x,source_y,unsigned(right-x),1,unsigned(sprite.flip_x)|(unsigned(sprite.flip_y)<<1),
-                    float(x),float(y+8),float(right-x),1};
-                previous=append_row(scene,row,previous);
             }
         }
     }
@@ -441,11 +482,21 @@ extern "C" WiiMm9Scene* wii_mm9_scene_create(void) {
     try{return new WiiMm9Scene;}catch(...){return nullptr;}
 }
 extern "C" void wii_mm9_scene_destroy(WiiMm9Scene* scene){delete scene;}
-extern "C" int wii_mm9_scene_prepare(WiiMm9Memory memory,WiiMm9Scene* scene,char* error,uint32_t size) {
-    if(!memory.read || !scene){if(error && size)std::snprintf(error,size,"Missing MM9 native scene input");return 0;}
-    try{auto next=native_scene({memory});*scene=std::move(next);if(error && size)*error=0;return 1;}
+extern "C" int wii_mm9_scene_layout_prepare(WiiMm9Memory memory,uint32_t width,const WiiMm9ViewLayout* layout,
+        WiiMm9Scene* scene,char* error,uint32_t size) {
+    if(!memory.read || !scene || !layout || width<256 || width>WII_MM9_VIEW_MAX_WIDTH || (width&1)) {
+        if(error && size)std::snprintf(error,size,"Invalid MM9 native scene input");return 0;
+    }
+    try{auto next=native_scene({memory},width,*layout);*scene=std::move(next);if(error && size)*error=0;return 1;}
     catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
 }
+extern "C" int wii_mm9_scene_prepare(WiiMm9Memory memory,WiiMm9Scene* scene,char* error,uint32_t size) {
+    const WiiMm9ViewLayout layout{nullptr,0,nullptr,0,32};
+    return wii_mm9_scene_layout_prepare(memory,256,&layout,scene,error,size);
+}
+extern "C" uint32_t wii_mm9_scene_width(const WiiMm9Scene* scene){return scene?scene->width:0;}
+extern "C" uint32_t wii_mm9_scene_solid_count(const WiiMm9Scene* scene){return scene?uint32_t(scene->solids.size()):0;}
+extern "C" const WiiMm9SceneSolid* wii_mm9_scene_solid(const WiiMm9Scene* scene,uint32_t index){return scene && index<scene->solids.size()?&scene->solids[index]:nullptr;}
 extern "C" uint32_t wii_mm9_scene_count(const WiiMm9Scene* scene){return scene?uint32_t(scene->tiles.size()):0;}
 extern "C" const WiiMm9SceneTile* wii_mm9_scene_tile(const WiiMm9Scene* scene,uint32_t index){return scene && index<scene->tiles.size()?&scene->tiles[index]:nullptr;}
 extern "C" uint32_t wii_mm9_scene_backdrop(const WiiMm9Scene* scene){return scene?scene->backdrop:0;}
