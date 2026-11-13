@@ -8,7 +8,33 @@ The first supported title is Mega Man 9 (USA). Its boot image must match the
 installed ticket/TMD in the copied NAND profile. `--launcher-check` verifies
 that identity without opening a window or booting the game.
 
-A packaged launcher build also starts without command-line arguments. Place
+A WAD-import package starts without command-line arguments and creates fresh
+local game storage. The player selects the supported Mega Man 9 (USA) game WAD,
+clicks Import game WAD, then adds the optional DLC WAD on the main screen.
+Imports preserve original tickets and metadata and verify decrypted content hashes;
+unsupported boot revisions are rejected. No game, NAND or DSP firmware is
+included in this package. A package-supplied common-key input is used by the
+native importer; it is not a source-repository input. The HLE audio build runs
+without DSP ROM/coefficient files using its coefficient-free resampling path.
+
+```ini
+[Game]
+Import=wad
+Boot=title/00010001/57523945/content/0000000a.app
+Graphics=gcnllr-native-gx.dll
+DspRom=hle
+DspCoef=hle
+Uid=4096
+Gid=12344
+Ios=37
+```
+
+Fresh profiles reserve the game UID before DLC installation. Existing profiles
+reuse their installed UID and retain native progress, licenses and settings.
+HOME's Wii Menu action returns to the launcher when the original Menu is not
+installed; an installed original Menu retains its normal launch route.
+
+The legacy prepared-data package is also supported. Place
 `game.ini`, the graphics service and its runtime DLLs, the CMake-staged `assets`
 directory, DSP ROM/coefficient files and a prepared NAND template beside the
 executable. All manifest paths are relative to that directory, so the package

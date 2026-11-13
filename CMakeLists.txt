@@ -66,6 +66,8 @@ add_test(NAME wii_native_page_bindings COMMAND test_wii_native_bindings)
 include(external/gc-wii-core/dsp_lle/native/CMakeLists.txt)
 set(WIILLR_DSP "interpreter-development" CACHE STRING "Build-selected DSP engine")
 set(WIILLR_DSP_CATALOG "" CACHE PATH "Private static DSP catalog")
+set_property(SOURCE src/discover.c native/package.cpp tests/test_package.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+  WIILLR_PACKAGE_DSP_HLE=$<STREQUAL:${WIILLR_DSP},hle>)
 if(WIILLR_DSP STREQUAL "hle")
   include(cmake/DspHle.cmake)
 endif()

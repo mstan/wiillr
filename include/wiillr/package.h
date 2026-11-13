@@ -15,6 +15,7 @@ WiiPackage* wii_package_open(const char* base,const char* user,WiiPackageValidat
 void wii_package_close(WiiPackage*);
 void wii_package_arguments(WiiPackage*,const char* executable,const char* action,int* argc,char*** argv);
 const char* wii_package_log(WiiPackage*);
+bool wii_package_standalone(WiiPackage*);
 #ifdef __cplusplus
 }
 #endif

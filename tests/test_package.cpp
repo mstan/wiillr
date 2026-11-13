@@ -77,6 +77,29 @@ int main(int argc,char** argv) {
         for(const auto& e:fs::directory_iterator(root.path/"failed validation"))require(!e.path().filename().string().starts_with("nand-initializing-"),"failed import removes only its owned staging files");
         require(!open(base/"seed"),"packaged template cannot be used as its own writable profile");
         require(read(base/"seed/nand"/save)=="updated template progress" && read(user/"nand"/save)=="owner progress","source assets and existing native progress stay intact on failures");
+        const auto standalone=root.path/"WAD-only package",fresh=root.path/"fresh WAD user";
+        const std::string wad_config="[Game]\nImport=wad\nBoot=title/00010001/57523945/content/0000000a.app\nGraphics=gpu.bin\nDspRom=hle\nDspCoef=hle\nUid=4096\nGid=12344\nIos=37\n";
+        write(standalone/"game.ini",wad_config);write(standalone/"gpu.bin","library");
+        p=wii_package_open(standalone.string().c_str(),fresh.string().c_str(),validate,error,sizeof error);
+#if WIILLR_PACKAGE_DSP_HLE
+        require(p,error);require(wii_package_standalone(p),"WAD-only profile can return to the host launcher");
+        wii_package_arguments(p,"Mega Man 9.exe","--launcher",&count,&values);
+        require(std::string(values[6])=="@hle" && std::string(values[7])=="@hle" && std::string(values[9])=="4096","resource-free HLE starts explicitly and reserves the game UID before optional DLC");
+        require(!fs::exists(fresh/"nand/title/00010001/57523945/content"),"fresh package contains no original game content");
+        const auto generated=read(fresh/"nand/shared2/sys/SYSCONF");
+        require(generated.size()==16384 && generated.substr(0,4)=="SCv0" && generated.substr(16380)=="SCed","fresh local settings have a complete SYSCONF container");
+        wii_package_close(p);
+        const auto fresh_save=fresh/"nand/title/00010001/57523945/data/rm9_sav0.dat";
+        write(fresh_save,"native progress");write(fresh/"config.ini","explicit player settings");
+        auto local_uid=read(fresh/"nand/sys/uid.sys");require(local_uid.size()==12,"reserved identity has one complete record");
+        local_uid[11]=11;write(fresh/"nand/sys/uid.sys",local_uid);
+        p=wii_package_open(standalone.string().c_str(),fresh.string().c_str(),validate,error,sizeof error);require(p,error);
+        wii_package_arguments(p,"Mega Man 9.exe","--launcher",&count,&values);
+        require(std::string(values[9])=="4107" && read(fresh_save)=="native progress" && read(fresh/"config.ini")=="explicit player settings" && read(fresh/"nand/shared2/sys/SYSCONF")==generated,"package updates reuse installed UID and preserve settings/progress without a seed");
+        wii_package_close(p);
+#else
+        require(!p && !fs::exists(fresh/"nand"),"LLE package cannot silently select resource-free HLE");
+#endif
         std::cout<<"Package import, relocation, validation, persistence and no-dump contracts passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

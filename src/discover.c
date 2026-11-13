@@ -8,10 +8,12 @@
 #include "wiillr/gx.h"
 #include "wiillr/gx_output.h"
 #include "wiillr/control.h"
+#include "wiillr/host_menu.h"
 #ifdef RECOMP_LAUNCHER
 #include "wiillr/launcher.h"
 #include "wiillr/package.h"
 #include <SDL3/SDL.h>
+static WiiPackage* package;
 #ifdef _WIN32
 /* Reuse SDL's supported Windows entry shim for the GUI subsystem. Explicit
  * command-line QA still receives its inherited stdout/stderr pipes. */
@@ -107,6 +109,9 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     bool ok=wii_native_ios_boot_memory(cpu,(u32)launch.ios) &&
         wii_dol_load(cpu,launch.image,launch.size,&entry);
     wii_machine_init(m,cpu);
+#ifdef RECOMP_LAUNCHER
+    wii_host_menu_bind(wii_package_standalone(package)?&m->ios:NULL);
+#endif
     m->fields=fields;m->mmio_reads=reads;m->mmio_writes=writes;
     m->gx_cpu_gather_writes=gather_writes;m->gx_cpu_gather_bytes=gather_bytes;
     m->gx_cpu_gather_rejected=gather_rejected;
@@ -130,12 +135,12 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     wii_es_release_launch(&launch);return ok;
 }
 #ifdef RECOMP_LAUNCHER
-static WiiPackage* package;
 static char package_error[512];
 static void close_package(void){wii_package_close(package);package=NULL;}
 static bool package_validate(const char* image,const char* nand,unsigned uid,unsigned gid) {
     char selected[32768];return wii_launcher_start(image,nand,uid,gid,false,true,selected,sizeof selected)==0;
 }
+static bool restart_launcher;
 static bool package_request(int argc,char** argv) {
     return argc==1 || (argc==2 && (!strcmp(argv[1],"--launcher") ||
         !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check")));
@@ -259,6 +264,9 @@ static int run(int argc, char** argv) {
     cpu.spr[287] = PPC_BROADWAY_PVR;
     WiiMachine machine;
     wii_machine_init(&machine, &cpu);
+#ifdef RECOMP_LAUNCHER
+    wii_host_menu_bind(wii_package_standalone(package)?&machine.ios:NULL);
+#endif
     if(argc==8 || argc==10) {
         errno=0;unsigned long uid=strtoul(argv[argc-2],&end,10);
         if(errno || *end || uid>0xfffffffful) {cpu_free(&cpu);return 2;}
@@ -286,8 +294,16 @@ static int run(int argc, char** argv) {
         fprintf(stderr,"GX needs a build-selected provider\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
 #endif
     }
-    u8 irom[8192], coef[4096];
+    u8 irom[8192], coef[4096];const u8* selected_irom=NULL;const u8* selected_coef=NULL;
     if (argc == 7 || argc==10) {
+        const bool hle=!strcmp(argv[5],"@hle") && !strcmp(argv[6],"@hle");
+        if(hle) {
+#if WIILLR_PACKAGE_DSP_HLE
+            if(!wii_dsp_start(&machine.dsp,&cpu,NULL,NULL)) {wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
+#else
+            fprintf(stderr,"This build requires original DSP resources\n");wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+#endif
+        } else {
         FILE* rom=fopen(argv[5], "rb");
         FILE* co=fopen(argv[6], "rb");
         bool loaded=rom && co && fread(irom,1,sizeof irom,rom)==sizeof irom &&
@@ -295,6 +311,8 @@ static int run(int argc, char** argv) {
         if (rom) fclose(rom);
         if (co) fclose(co);
         if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
+        selected_irom=irom;selected_coef=coef;
+        }
     }
     gcn_interpreter_set_cache_loop_batch_enabled(false);
     if(machine.dsp.engine && gcn_host_audio_start(32000u)) {
@@ -389,8 +407,13 @@ static int run(int argc, char** argv) {
 #endif
         gcn_cost_enter(GCN_COST_TIME);
         wii_machine_tick(&machine, &cpu);
+#ifdef RECOMP_LAUNCHER
+        if(wii_host_menu_requested(&machine.ios)) {
+            restart_launcher=true;printf("{\"host_menu_return\":\"launcher\"}\n");break;
+        }
+#endif
         if(machine.ios.launch_pending && !cpu.halted) {
-            if(!bootstrap_launch(&cpu,&machine,&gx,argv[argc-3],gx_library,gx_data,gx_cache,irom,coef)) {
+            if(!bootstrap_launch(&cpu,&machine,&gx,argv[argc-3],gx_library,gx_data,gx_cache,selected_irom,selected_coef)) {
                 fprintf(stderr,"native title bootstrap failed\n");cpu.halted=true;
             }
             input_pending=true;
@@ -514,7 +537,18 @@ int main(int argc,char** argv) {
     fprintf(stderr,"Original IOS requires a firmware context; the native NAND-title handoff is unavailable in this build.\n");
     return 2;
 #endif
-    const int result=run(argc,argv);
+    int result;
+#ifdef RECOMP_LAUNCHER
+    char* return_argv[]={argv[0],"--launcher-settings",NULL};bool returning=false;
+    do {
+        restart_launcher=false;
+        result=run(returning?2:argc,returning?return_argv:argv);
+        returning=restart_launcher && result==0;
+        if(returning)close_package();
+    } while(returning);
+#else
+    result=run(argc,argv);
+#endif
 #ifdef RECOMP_LAUNCHER
     const char* hidden=getenv("GCNLLR_RENDER_HIDDEN");const char* test=getenv("LNG_TEST_HIDDEN");
     const bool check=argc==2 && !strcmp(argv[1],"--launcher-check");

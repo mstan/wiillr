@@ -20,7 +20,9 @@
 
 static RecompLauncherCSettings settings;
 static RecompLauncherCSettings default_settings;
-static unsigned char expected[1][32];
+static const unsigned char expected[1][32]={{
+    0x67,0x8c,0x9e,0x1f,0x67,0xa9,0xb3,0x4c,0xd9,0x90,0x49,0xe2,0x99,0x75,0x1e,0x8d,
+    0xc3,0x89,0x0b,0x1c,0xe8,0xfd,0x0e,0x09,0x17,0x9b,0x7e,0x1d,0x3c,0x71,0xfc,0x05}};
 static bool active;
 static RecompLauncherCGameInfo game_info;
 static char config_path[32768],rom_cache_path[32768],boot_image[32768];
@@ -109,8 +111,7 @@ static bool verify_file(const char* path) {
     fclose(file);return ok;
 }
 
-int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned gid,
-    bool force,bool check_only,char* selected,size_t capacity) {
+static bool installed_valid(const char* image,const char* nand,unsigned uid,unsigned gid) {
     WiiFs* fs=wii_fs_mount(nand,uid,(uint16_t)gid);
     uint64_t title=0;uint32_t count=0;unsigned char view[0xd8];
     WiiTitleLaunch launch={0};int32_t result=0;
@@ -120,15 +121,31 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
         wii_es_ticket_views(fs,title,view,1,&count)==0 && count==1 &&
         wii_es_prepare_launch(fs,title,view,&launch,&result);
     if(valid) {
-        recompui_sha256_compute(launch.image,launch.size,expected[0]);
         /* This first launcher consumer is Mega Man 9 (USA), IOS37. */
-        valid=title==0x0001000157523945ull && launch.ios==0x100000025ull;
+        valid=title==0x0001000157523945ull && launch.ios==0x100000025ull &&
+            wii_launcher_verify(launch.image,launch.size);
     }
     wii_es_release_launch(&launch);
     if(fs)wii_fs_unmount(fs);
-    if(!valid || !verify_file(image)) {
-        fprintf(stderr,"launcher: installed Mega Man 9 boot content could not be verified\n");
-        return 2;
+    return valid && verify_file(image);
+}
+static int import_base(const char* path,char* out,size_t capacity,char* error,size_t error_capacity) {
+    WiiWadBaseInstallResult result={0};
+    if(!wii_wad_install_base(path,dlc.key,dlc.nand,0x0001000157523945ull,&result,error,error_capacity))return 0;
+    const int count=snprintf(out,capacity,"%s/%s",dlc.nand,result.boot_path);
+    if(count<0 || (size_t)count>=capacity ||
+       !installed_valid(out,dlc.nand,result.installed.uid,result.group_id)) {
+        snprintf(error,error_capacity,"The installed Mega Man 9 game could not be verified.");return 0;
+    }
+    SDL_SaveFile(rom_cache_path,out,strlen(out));
+    return 1;
+}
+
+int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned gid,
+    bool force,bool check_only,char* selected,size_t capacity) {
+    const bool valid=installed_valid(image,nand,uid,gid);
+    if(check_only && !valid) {
+        fprintf(stderr,"launcher: import the supported Mega Man 9 (USA) WAD first\n");return 2;
     }
     if(strlen(image)>=capacity)return 2;
     strcpy(selected,image);
@@ -150,6 +167,14 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     game.name="Mega Man 9";game.region="USA";
     game.known_sha256=(const uint8_t(*)[32])expected;game.num_known_sha256=1;
     game.num_players=1;game.config_path=config_path;game.rom_cache_path=rom_cache_path;
+    static const char* const wad_patterns[]={"*.wad"};
+    game.rom_patterns=wad_patterns;game.num_rom_patterns=1;game.rom_filter_desc="Mega Man 9 (USA) game WAD (*.wad)";
+    game.setup_wizard_supported=1;game.needs_setup=!valid;
+    game.prepare_disc=import_base;game.prepare_use_selected_rom=1;
+    game.prepare_required_before_continue=1;game.host_persists_paths=1;
+    game.prepare_section_title="Import game";game.prepare_disc_label="Import game WAD";
+    game.prepare_disc_note="Select your Mega Man 9 (USA) game WAD and import it. Add the DLC WAD from the main menu afterward.";
+    game.prepare_busy_status="Importing Mega Man 9...";game.prepare_success_status="Mega Man 9 is ready.";
     if(!prepare_dlc(&game,nand,directory)){SDL_free(pref);return 2;}
     if(!wii_launcher_mods_prepare(&game,directory,nand)){SDL_free(pref);return 2;}
     game.settings_bindings=1;
@@ -178,12 +203,12 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
     /* Keep the launcher's selected SDL instance valid for the game. */
     recomp_launcher_set_preserve_sdl(1);
-    if(force || !settings.skip_launcher)
+    if(!valid || force || !settings.skip_launcher)
         action=recomp_launcher_run_window("Mega Man 9",&settings,&game,NULL,
-            image,selected,capacity);
+            valid?image:NULL,selected,capacity);
     SDL_free(pref);
     if(action==RECOMP_LAUNCHER_RESULT_QUIT)return 1;
-    if(action!=RECOMP_LAUNCHER_RESULT_LAUNCH || !verify_file(selected)) {
+    if(action!=RECOMP_LAUNCHER_RESULT_LAUNCH || !installed_valid(selected,nand,uid,gid)) {
         fprintf(stderr,"launcher: launch unavailable or selected content is unsupported\n");
         return 2;
     }
