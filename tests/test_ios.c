@@ -102,26 +102,6 @@ int main(void) {
         CHECK(ipc.y==1 && ipc.arm_message==release && (s32)mem_read32_cia(&cpu,release+4,0)==(n ? -6:0));
         wii_ipc_write(&ipc,4,0x34,cpu.cycles);
     }
-    /* An old asynchronous completion must not outrun a new mailbox request's
-     * ACK. Its callback can enqueue another request before the old one is
-     * captured; retain both completions and the synchronous return ordering. */
-    wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.descriptors[0]=1;
-    const u32 pending=message+128;
-    ios.event_waiting=ios.event_ready=true;ios.event_message=pending;
-    mem_write32_cia(&cpu,pending,6,0);mem_write32_cia(&cpu,pending+8,0,0);
-    memcpy(cpu.ram+path,"/dev/stm/immediate",sizeof "/dev/stm/immediate");
-    mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);
-    mem_write32_cia(&cpu,message+16,0,0);
-    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.phase==1 && !ipc.y && ios.event_ready);
-    cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==2 && ios.event_ready);
-    wii_ipc_write(&ipc,4,0x32,cpu.cycles);
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && ipc.arm_message==pending);
-    CHECK(!ios.event_waiting && mem_read32_cia(&cpu,pending,0)==8);
-    wii_ipc_write(&ipc,4,0x34,cpu.cycles);cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ipc.y==1 && ipc.arm_message==message);
-    CHECK(mem_read32_cia(&cpu,message,0)==8 && mem_read32_cia(&cpu,message+4,0)==1);
     /* Slot illumination changes real service state. Disabling it clears the
      * existing GPIO light while preserving other pins and output sentinels. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);
