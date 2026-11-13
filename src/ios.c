@@ -783,6 +783,21 @@ bool wii_ios_native_stm_event(WiiIosNative* ios,CPUState* cpu,u32 event) {
 bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
     if(ios->launch_pending)return true;
     if(ios->kd_utc_set && ios->kd_utc_cycles==UINT64_MAX)ios->kd_utc_cycles=cpu->cycles;
+    /* Capture and acknowledge the asserted request before publishing an
+     * unrelated completion. Completion callbacks may enqueue/reuse requests;
+     * they must not outrun the mailbox's outstanding request handshake. */
+    if(!ios->phase && (ipc->x&1)) {
+        ios->message=ipc->ppc_message;ios->ready_at=cpu->cycles+6000;ios->phase=1;
+    }
+    if(ios->phase==1) {
+        if(cpu->cycles<ios->ready_at || ipc->y)return true;
+        const int status=execute(ios,cpu);
+        if(!status)return false;
+        wii_ipc_write(ipc,8,ios->message,cpu->cycles);
+        wii_ipc_write(ipc,12,12,cpu->cycles); /* clear X1, raise Y2 ACK */
+        ios->ready_at=cpu->cycles+6000;ios->phase=status>=2 ? 0:2;
+        return true;
+    }
     if(ios->bluetooth && !ipc->y) {
         u32 message;s32 result;bool ready;
         if(!wii_bluetooth_poll(ios->bluetooth,&message,&result,&ready))return false;
@@ -810,24 +825,7 @@ bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
         ios->sd_event_message=0;ios->sd_event_cancelled=false;
         return true;
     }
-    if(!ios->phase) {
-        if(!(ipc->x&1))return true;
-        ios->message=ipc->ppc_message;ios->ready_at=cpu->cycles+6000;ios->phase=1;
-    }
-    if(cpu->cycles<ios->ready_at)return true;
-    if(ios->phase==1) {
-        /* PPC request/return layout follows IOS IPC. Hardware ACK latency is
-         * modeled at500 TB ticks. Service latency remains development-only.
-         * No ARM instructions execute in this explicitly native provider. */
-        if(ipc->y)return true;
-        const int status=execute(ios,cpu);
-        if(!status)return false;
-        wii_ipc_write(ipc,8,ios->message,cpu->cycles);
-        wii_ipc_write(ipc,12,12,cpu->cycles); /* clear X1, raise Y2 ACK */
-        ios->ready_at=cpu->cycles+6000;ios->phase=status>=2 ? 0:2;
-        return true;
-    }
-    if(ipc->y)return true; /* receiver must consume the previous mailbox */
+    if(!ios->phase || cpu->cycles<ios->ready_at || ipc->y)return true;
     reply(ios,ipc,cpu,ios->message,ios->command,ios->result);ios->phase=0;
     return true;
 }
