@@ -77,8 +77,8 @@ bool wii_dsp_start(WiiDsp* d, CPUState* cpu, const u8* irom, const u8* coef) {
     GcnDspEngineConfig config = {0};
     config.mem1=cpu->ram; config.mem1_size=cpu->ram_size;
     config.aram=d->aram; config.aram_size=0x1000000;
-    config.irom=irom; config.irom_size=8192;
-    config.coef=coef; config.coef_size=4096;
+    config.irom=irom; config.irom_size=irom?8192:0;
+    config.coef=coef; config.coef_size=coef?4096:0;
     config.user=d; config.prepare=prepare; config.written=written;
     config.timebase=timebase; config.interrupt=interrupt;
     config.wii=true; config.mem2=cpu->mem2; config.mem2_size=cpu->mem2_size;
