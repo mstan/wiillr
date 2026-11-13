@@ -37,6 +37,15 @@ class MetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Boot index'):
             inputs.title_metadata(data)
 
+    def test_dlc_data_title_has_no_boot_executable(self):
+        data = tmd()
+        struct.pack_into('>Q', data, 0x18C, 0x0001000577523945)
+        struct.pack_into('>H', data, 0x1E0, 0x1FF)
+        result = inputs.title_metadata(data)
+        self.assertEqual(result['title_id'], '0001000577523945')
+        self.assertEqual(result['boot_index'], 0x1FF)
+        self.assertEqual(len(result['contents']), 1)
+
     def test_wad_offsets_and_truncation(self):
         data = bytearray(0x280)
         struct.pack_into('>8I', data, 0, 32, 0x49730000, 0, 0, 0, len(tmd()), 0, 0)

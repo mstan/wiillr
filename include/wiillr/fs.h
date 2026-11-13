@@ -51,6 +51,8 @@ int32_t wii_es_title_content_open(WiiFs*,uint64_t title,const uint8_t view[0xd8]
 int32_t wii_es_content_read(WiiFs*,uint32_t handle,uint8_t*,uint32_t size);
 int32_t wii_es_content_seek(WiiFs*,uint32_t handle,uint32_t offset,uint32_t mode);
 int32_t wii_es_content_close(WiiFs*,uint32_t handle);
+/* Check one installed content against its TMD SHA-1, without changing it. */
+bool wii_es_verify_content(WiiFs*,uint64_t title,uint32_t index);
 int32_t wii_fs_open(WiiFs*,const char* path,uint32_t mode);
 int32_t wii_fs_close(WiiFs*,uint32_t fd);
 int32_t wii_fs_read(WiiFs*,uint32_t fd,uint8_t*,uint32_t size);

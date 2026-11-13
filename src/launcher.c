@@ -2,6 +2,7 @@
 #include "wiillr/launcher.h"
 #include "wiillr/launcher_input.h"
 #include "wiillr/fs.h"
+#include "wiillr/wad.h"
 #include "recomp_launcher.h"
 #include "launcher_profile.h"
 #include "launcher_settings.h"
@@ -21,10 +22,47 @@ static unsigned char expected[1][32];
 static bool active;
 static RecompLauncherCGameInfo game_info;
 static char config_path[32768],rom_cache_path[32768],boot_image[32768];
+static struct {char nand[32768],key[32768],cache[32768];} dlc;
+static char dlc_path[32768],dlc_status[128];
+static const char* const dlc_patterns[]={"*.wad"};
 static bool settings_key_held,input_release;
 static const char* const view_labels[]={"Original 4:3","16:9","21:9","Fit to screen"};
 static const char* const resolution_labels[]={"Original (1x)","2x","3x","4x","8x","16x"};
 static const int resolution_values[]={1,960,1440,1920,3840,7680};
+static int import_dlc(void* context,const char* path,char* error,size_t capacity) {
+    (void)context;WiiWadInstallResult result={0};
+    if(!wii_wad_install(path,dlc.key,dlc.nand,0x0001000577523945ull,&result,error,capacity))return 0;
+    char temporary[32864];
+    snprintf(temporary,sizeof temporary,"%s.%llu.tmp",dlc.cache,(unsigned long long)SDL_GetTicksNS());
+    if(!SDL_SaveFile(temporary,path,strlen(path)) || !SDL_RenamePath(temporary,dlc.cache)) {
+        SDL_RemovePath(temporary);fprintf(stderr,"DLC installed, but its source path could not be saved\n");
+    }
+    snprintf(dlc_status,sizeof dlc_status,"Installed");return 1;
+}
+static bool prepare_dlc(RecompLauncherCGameInfo* game,const char* nand,const char* directory) {
+    const char* key=getenv("WIILLR_COMMON_KEY");const char* base=SDL_GetBasePath();
+    if(!base || strlen(nand)>=sizeof dlc.nand ||
+       snprintf(dlc.cache,sizeof dlc.cache,"%s/dlc.cfg",directory)>=(int)sizeof dlc.cache)return false;
+    strcpy(dlc.nand,nand);
+    const int length=key && *key?snprintf(dlc.key,sizeof dlc.key,"%s",key):
+        snprintf(dlc.key,sizeof dlc.key,"%ssystem/wii-common-key.bin",base);
+    if(length<0 || length>=(int)sizeof dlc.key)return false;
+    dlc_path[0]=0;size_t size=0;void* saved=SDL_LoadFile(dlc.cache,&size);
+    if(saved && size<sizeof dlc_path && !memchr(saved,0,size)){memcpy(dlc_path,saved,size);dlc_path[size]=0;}
+    SDL_free(saved);snprintf(dlc_status,sizeof dlc_status,"Optional");
+    WiiFs* fs=wii_fs_mount(nand,0,0);
+    if(fs) {
+        unsigned count=0;
+        if(!wii_es_ticket_views(fs,0x0001000577523945ull,NULL,0,&count) && count) {
+            unsigned valid=0;for(unsigned n=1;n<=5;n++)if(wii_es_verify_content(fs,0x0001000577523945ull,n))valid++;
+            if(valid)snprintf(dlc_status,sizeof dlc_status,"Installed (%u packs)",valid);
+        }
+        wii_fs_unmount(fs);
+    }
+    game->import_dlc=import_dlc;game->dlc_path=dlc_path;game->dlc_status=dlc_status;
+    game->dlc_patterns=dlc_patterns;game->num_dlc_patterns=1;game->dlc_filter_desc="Wii downloadable content (*.wad)";
+    return true;
+}
 static bool view_supported(void) {
 #if WIILLR_MM9_RENDERER
     return wii_mm9_renderer_view_supported();
@@ -109,6 +147,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     game.name="Mega Man 9";game.region="USA";
     game.known_sha256=(const uint8_t(*)[32])expected;game.num_known_sha256=1;
     game.num_players=1;game.config_path=config_path;game.rom_cache_path=rom_cache_path;
+    if(!prepare_dlc(&game,nand,directory)){SDL_free(pref);return 2;}
     game.settings_bindings=1;
     if(view_supported()) {
         game.has_supersampling=1;

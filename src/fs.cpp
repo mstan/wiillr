@@ -604,6 +604,25 @@ static std::array<uint8_t,20> content_sha1(const std::vector<uint8_t>& bytes) {
   }
   std::array<uint8_t,20> hash{};for(unsigned n=0;n<5;n++)put32(hash.data()+4*n,h[n]);return hash;
 }
+extern "C" bool wii_es_verify_content(WiiFs* s,uint64_t title,uint32_t index) {
+  try {
+    InstalledTmd tmd;if(read_installed_tmd(s,title,tmd))return false;
+    const uint8_t* record=nullptr;
+    for(uint32_t n=0;n<tmd.count;n++) {
+      const auto* candidate=tmd.bytes.data()+tmd.base+0xa4+n*36;
+      if((uint32_t(candidate[4])<<8|candidate[5])==index)record=candidate;
+    }
+    if(!record)return false;
+    const uint64_t size=uint64_t(be32(record+8))<<32|be32(record+12);
+    if(size>64*1024*1024)return false;
+    std::vector<uint8_t> bytes(size);
+    const int32_t handle=open_installed_content(s,title,index);if(handle<0)return false;
+    const auto actual=wii_es_content_read(s,uint32_t(handle),bytes.data(),uint32_t(size));
+    wii_es_content_close(s,uint32_t(handle));
+    const auto hash=content_sha1(bytes);
+    return actual==int64_t(size) && !std::memcmp(hash.data(),record+16,hash.size());
+  }catch(...){return false;}
+}
 extern "C" void wii_es_release_launch(WiiTitleLaunch* launch) {
   if(!launch)return;std::free(launch->image);*launch={};
 }

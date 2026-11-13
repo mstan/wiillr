@@ -3,6 +3,7 @@
 #include "wiillr/native.h"
 #include "cpu/overlay_module.h"
 #include "cpu/native_code.h"
+#include "wiillr/mm9_dlc.h"
 #include <stdio.h>
 #if WIILLR_MENU_PICTURES
 #include "wiillr/menu_picture_hook.h"
@@ -17,6 +18,7 @@ static GcnOverlayModule module={s_overlay_pages,s_overlay_variants,resident,
     GCN_OVERLAY_PAGE_COUNT,GCN_OVERLAY_VARIANT_COUNT};
 const GcnOverlayModule* wii_native_module(void){return &module;}
 bool gcn_overlay_call(CPUState* cpu,u32 address){
+    if((address&0xffffe000u)==0x8024c000u && wii_mm9_dlc_dispatch(cpu,address))return true;
 #if WIILLR_MM9_RENDERER
     if(wii_mm9_renderer_hook_dispatch(cpu,address))return true;
 #endif
@@ -26,6 +28,8 @@ bool gcn_overlay_call(CPUState* cpu,u32 address){
     return gcn_overlay_module_call(&module,cpu,address);
 }
 void gcn_overlay_icbi(u32 address,u32 size){
+    const u32 physical=address&0x1fffffffu;
+    if(physical<0x24e000u && (u64)physical+size>0x24c000u)wii_mm9_dlc_invalidate(address,size);
 #if WIILLR_MM9_RENDERER
     wii_mm9_renderer_hook_invalidate(address,size);
 #endif

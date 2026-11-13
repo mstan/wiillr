@@ -46,6 +46,12 @@ int main(int argc,char** argv) {
   std::ofstream(launch_tmd_path,std::ios::binary).write(reinterpret_cast<const char*>(launch_tmd.data()),launch_tmd.size());
   std::array<uint8_t,0xd8> launch_view{};uint32_t launch_views=0;int32_t launch_result=99;
   CHECK(!wii_es_ticket_views(nand,0x0001000141424344ull,launch_view.data(),1,&launch_views) && launch_views==1);
+  CHECK(wii_es_verify_content(nand,0x0001000141424344ull,3));
+  CHECK(!wii_es_verify_content(nand,0x0001000141424344ull,2));
+  std::ofstream(launch_content_path,std::ios::binary)<<"wrong";
+  CHECK(!wii_es_verify_content(nand,0x0001000141424344ull,3));
+  std::ofstream(launch_content_path,std::ios::binary)<<"title";
+  CHECK(wii_es_verify_content(nand,0x0001000141424344ull,3));
   WiiTitleLaunch launch{};
   CHECK(wii_es_prepare_launch(nand,0x0001000141424344ull,launch_view.data(),&launch,&launch_result) && !launch_result);
   CHECK(launch.title==0x0001000141424344ull && launch.ios==0x100000025ull && !launch.uid && !launch.gid);

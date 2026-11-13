@@ -30,7 +30,9 @@ def title_metadata(data: bytes) -> dict:
                              size=size, sha1=digest.hex()))
     if len({item['id'] for item in contents}) != count or len({item['index'] for item in contents}) != count:
         raise ValueError("Duplicate content ID or index")
-    if count and boot not in {item['index'] for item in contents}:
+    # DLC titles contain data rather than a boot executable. Their unused
+    # boot index need not refer to an installed content record.
+    if count and title >> 32 != 0x00010005 and boot not in {item['index'] for item in contents}:
         raise ValueError("Boot index is absent from content table")
     return dict(title_id=f"{title:016x}", ios=f"{ios:016x}", version=version,
                 group_id=struct.unpack_from(">H", data, base + 0x58)[0],
