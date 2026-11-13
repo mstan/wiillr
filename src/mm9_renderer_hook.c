@@ -49,6 +49,8 @@ static u64 hud_calls,hud_records;
 static bool spawn_attested;
 static u64 spawn_scans,spawn_bounds;
 static u32 spawn_radius=144;
+static struct {bool ready;s32 x,y;WiiMm9ActivationBounds bounds;} spawn_room;
+static u64 spawn_room_clamps,spawn_room_fallbacks;
 bool wii_mm9_renderer_view_supported(void) {
     return WIILLR_MM9_RENDERER_MODE>=2 && WIILLR_MM9_FRAME_MODE;
 }
@@ -59,6 +61,7 @@ bool wii_mm9_renderer_set_view(WiiGx* gx,WiiMm9View mode) {
     view_enabled=mode!=WII_MM9_VIEW_ORIGINAL;
     if(!view_enabled){margin_sprite_count=0;hud_anchor_count=0;}
     view_fixed_width=mode==WII_MM9_VIEW_16_9?342:mode==WII_MM9_VIEW_21_9?448:0;
+    spawn_radius=144;spawn_room.ready=false;
     view_ready=false;
     return true;
 }
@@ -174,15 +177,42 @@ u32 wii_mm9_renderer_spawn_radius(void) {
     if(spawn_radius>144)++spawn_bounds;
     return spawn_radius;
 }
+static void spawn_room_bounds(CPUState* cpu,s32 x,s32 y) {
+    if(!owner || owner->cpu!=cpu || owner->title!=0x0001000157523945ull ||
+       !view_enabled || spawn_radius<=144) {
+        spawn_room.ready=false;spawn_room.bounds=(WiiMm9ActivationBounds){x-144,x+144};return;
+    }
+    if(spawn_room.ready && spawn_room.x==x && spawn_room.y==y)return;
+    spawn_room.ready=true;spawn_room.x=x;spawn_room.y=y;
+    spawn_room.bounds=(WiiMm9ActivationBounds){x-144,x+144};
+    char error[192];const WiiMm9Memory memory={cpu,read_memory};
+    if(!wii_mm9_activation_bounds(memory,x,y,(spawn_radius-16)*2,
+                                 &spawn_room.bounds,error,sizeof error)) {
+        if(++spawn_room_fallbacks<=8)
+            fprintf(stderr,"Native MM9 activation retains original bounds: %s\n",error);
+        return;
+    }
+    if(spawn_room.bounds.minimum>x-(s32)spawn_radius ||
+       spawn_room.bounds.maximum<x+(s32)spawn_radius)++spawn_room_clamps;
+}
+s32 wii_mm9_renderer_spawn_lower(CPUState* cpu,s32 x,s32 y) {
+    spawn_room_bounds(cpu,x,y);return spawn_room.bounds.minimum;
+}
+s32 wii_mm9_renderer_spawn_upper(CPUState* cpu,s32 x,s32 y) {
+    spawn_room_bounds(cpu,x,y);return spawn_room.bounds.maximum;
+}
 static int spawn_view(CPUState* cpu,u32 physical) {
     if(physical!=0xea2e4)return 0;
     spawn_radius=144;
+    spawn_room.ready=false;
     if(!WIILLR_MM9_FRAME_MODE || WIILLR_MM9_RENDERER_MODE<2 ||
        owner->title!=0x0001000157523945ull || !view_enabled)return 0;
     u32 width;if(!current_view_width(&width))return failure(cpu,"stage activation view");
     if(width<=256)return 0;
     if(!spawn_attested)spawn_attested=identity(cpu,0x800ea2e4,0x58c,UINT64_C(0xdd263cb2aa60d5bc));
     if(!spawn_attested)return failure(cpu,"stage activation function identity");
+    if(!camera_attested)camera_attested=identity(cpu,0x8009e974,0x478,UINT64_C(0xc2af22da07730859));
+    if(!camera_attested)return failure(cpu,"stage activation camera identity");
     // Retain the original sixteen-pixel admission padding, vertical bounds,
     // once-only flags, pool allocation and actor-specific activation/AI.
     spawn_radius=width/2+16;++spawn_scans;return 0;
@@ -347,6 +377,7 @@ bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,co
     sprite_calls=sprite_records=sprite_margins=sprite_oracle_checked=0;
     hud_anchor_count=0;hud_attested=false;sprite_anchor=0;hud_calls=hud_records=0;
     spawn_attested=false;spawn_radius=144;spawn_scans=spawn_bounds=0;
+    memset(&spawn_room,0,sizeof spawn_room);spawn_room_clamps=spawn_room_fallbacks=0;
     const char* sprite_check=getenv("WIILLR_MM9_SPRITES_ORACLE");
     sprite_oracle=sprite_check && !strcmp(sprite_check,"1");
 #if WIILLR_MM9_FRAME_MODE
@@ -427,8 +458,10 @@ int wii_mm9_renderer_hook_dispatch(CPUState* cpu,u32 address) {
 }
 void wii_mm9_renderer_hook_stop(void) {
     if(!owner)return;WiiMm9ScreenStatus status={0};wii_mm9_screen_status(screen_renderer,&status);
-    printf("{\"native_mm9_activation\":1,\"wide_scans\":%llu,\"wide_bounds\":%llu,\"radius\":%u}\n",
-        (unsigned long long)spawn_scans,(unsigned long long)spawn_bounds,spawn_radius);
+    printf("{\"native_mm9_activation\":1,\"wide_scans\":%llu,\"wide_bounds\":%llu,\"radius\":%u,"
+        "\"room_clamps\":%llu,\"room_fallbacks\":%llu}\n",
+        (unsigned long long)spawn_scans,(unsigned long long)spawn_bounds,spawn_radius,
+        (unsigned long long)spawn_room_clamps,(unsigned long long)spawn_room_fallbacks);
     printf("{\"native_mm9_sprites\":1,\"calls\":%llu,\"guest_records\":%llu,\"margin_records\":%llu,\"oracle_checked\":%llu}\n",
         (unsigned long long)sprite_calls,(unsigned long long)sprite_records,(unsigned long long)sprite_margins,(unsigned long long)sprite_oracle_checked);
     printf("{\"native_mm9_hud\":1,\"calls\":%llu,\"records\":%llu}\n",(unsigned long long)hud_calls,(unsigned long long)hud_records);

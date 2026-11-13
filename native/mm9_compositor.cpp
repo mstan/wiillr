@@ -102,28 +102,27 @@ struct RoomView {
         return world_x>=minimum && world_x<maximum;
     }
 };
-RoomView room_view(const Reader& r,const std::array<Layer,4>& layers) {
-    for(const auto& layer:layers) {
-        if(!layer.world_grid)continue;
+RoomView camera_room(const Reader& r,uint32_t layout,unsigned world_width,
+                     unsigned world_height,int64_t origin_x,int64_t origin_y) {
         // WR9E 8009e974 checks horizontal camera limits using the low nibble
         // of this padded screen map. F is unavailable; neighboring classes
         // within one are connected. Off-camera art screens can contain filler
         // even when the mutable world grid itself is completely up to date.
         const auto parent=r.u32(0x8031c1f8);need(parent,"Missing MM9 camera owner");
-        need(r.u32(parent+0x10)==layer.world_layout,"MM9 camera and world owners differ");
+        need(r.u32(parent+0x10)==layout,"MM9 camera and world owners differ");
         const auto mask=r.u32(parent+0xf4);need(mask,"Missing MM9 camera regions");
         const unsigned shift=r.u8(mask),columns=r.u8(mask+2),rows=r.u8(mask+3);
         need(shift<=7 && columns && rows && columns<=127 && rows<=127 &&
              (1u<<shift)>=columns,
              "Invalid MM9 camera regions");
         const auto* cells=r.bytes(mask+4,(1u<<shift)*rows);
-        RoomView result{true,layer.world_x,layer.world_x,int64_t(layer.world_x)+256};
-        const int64_t center_x=int64_t(layer.world_x)+128,center_y=int64_t(layer.world_y)+112;
+        RoomView result{true,origin_x,origin_x,origin_x+256};
+        const int64_t center_x=origin_x+128,center_y=origin_y+112;
         // Camera maps may omit unused art rows (Hornet does). Their domain
         // and the mutable art grid are independent, but share this owner.
-        if(center_x<0 || center_y<0 || center_x>=layer.world_width || center_y>=layer.world_height ||
+        if(center_x<0 || center_y<0 || center_x>=world_width || center_y>=world_height ||
            center_x>=columns*256 || center_y>=rows*224)return result;
-        const unsigned screen_columns=std::min(columns,layer.world_width/256);
+        const unsigned screen_columns=std::min(columns,world_width/256);
         unsigned first=unsigned(center_x)/256,last=first;
         const auto* row=cells+((unsigned(center_y)/224)<<shift);
         const unsigned region=row[first]&15;
@@ -134,6 +133,12 @@ RoomView room_view(const Reader& r,const std::array<Layer,4>& layers) {
         while(last+1<screen_columns && connected(last+1))++last;
         result.minimum=int64_t(first)*256;result.maximum=int64_t(last+1)*256;
         return result;
+}
+RoomView room_view(const Reader& r,const std::array<Layer,4>& layers) {
+    for(const auto& layer:layers) {
+        if(!layer.world_grid)continue;
+        return camera_room(r,layer.world_layout,layer.world_width,
+                           layer.world_height,layer.world_x,layer.world_y);
     }
     return {};
 }
@@ -294,6 +299,34 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     }
     return out;
 }
+}
+extern "C" int wii_mm9_activation_bounds(WiiMm9Memory memory,int32_t camera_x,
+    int32_t camera_y,uint32_t width,WiiMm9ActivationBounds* output,char* error,uint32_t size) {
+    if(!output || width<256 || width>WII_MM9_VIEW_MAX_WIDTH || (width&1) ||
+       (width>256 && !memory.read)) {
+        if(error && size)std::snprintf(error,size,"Invalid MM9 activation view");return 0;
+    }
+    try {
+        int64_t minimum=int64_t(camera_x)-144,maximum=int64_t(camera_x)+144;
+        if(width>256) {
+            const Reader r{memory};const auto parent=r.u32(0x8031c1f8);
+            need(parent,"Missing MM9 activation camera owner");
+            const auto layout=r.u32(parent+0x10);need(layout,"Missing MM9 activation world layout");
+            const unsigned columns=r.u8(layout+2),rows=r.u8(layout+3);
+            need(columns && columns<=127 && rows && rows<=127,"Invalid MM9 activation world dimensions");
+            const auto room=camera_room(r,layout,columns*256,rows*224,
+                                        int64_t(camera_x)-128,int64_t(camera_y)-112);
+            // Graphics already excludes disconnected room margins. An enemy
+            // there must not be newly admitted against the current room's
+            // resource bank. Preserve every original admission, including its
+            // padding when the original camera straddles a room boundary.
+            minimum=std::min(minimum,std::max(int64_t(camera_x)-width/2-16,room.minimum-16));
+            maximum=std::max(maximum,std::min(int64_t(camera_x)+width/2+16,room.maximum+16));
+        }
+        need(minimum>=INT32_MIN && maximum<=INT32_MAX,"MM9 activation coordinate overflow");
+        *output={int32_t(minimum),int32_t(maximum)};
+        if(error && size)*error=0;return 1;
+    }catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
 }
 extern "C" int wii_mm9_composite_prepare(WiiMm9Memory memory,WiiMm9Frame* output,char* error,uint32_t size) {
     if(!memory.read || !output){if(error && size)std::snprintf(error,size,"Missing MM9 compositor input");return 0;}

@@ -74,8 +74,9 @@ def main():
             original=f'ctx->gpr[{register}] = ctx->gpr[4] + (u32)(s32)({immediate});'
             section=text[begin:end]
             if section.count(original)!=1:raise ValueError('Original stage spawn bound differs')
+            bound='lower' if operator=='-' else 'upper'
             section=section.replace(original,
-                f'ctx->gpr[{register}] = ctx->gpr[4] {operator} wii_mm9_renderer_spawn_radius();')
+                f'ctx->gpr[{register}] = (u32)wii_mm9_renderer_spawn_{bound}(ctx,(s32)ctx->gpr[4],(s32)ctx->gpr[17]);')
             text=text[:begin]+section+text[end:]
         for address,original,replacement in (
             (0x800ea66c,'ctx->gpr[8] = ctx->gpr[10] + (u32)(s32)(384);',

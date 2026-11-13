@@ -24,4 +24,6 @@ int wii_mm9_renderer_hook_call(CPUState*,u32);
 int wii_mm9_renderer_hook_dispatch(CPUState*,u32);
 void wii_mm9_renderer_frame_marker(CPUState*,u32);
 u32 wii_mm9_renderer_spawn_radius(void);
+s32 wii_mm9_renderer_spawn_lower(CPUState*,s32 camera_x,s32 camera_y);
+s32 wii_mm9_renderer_spawn_upper(CPUState*,s32 camera_x,s32 camera_y);
 #endif

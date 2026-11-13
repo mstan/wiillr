@@ -131,6 +131,40 @@ void camera_room_contract() {
     require(!prepare() && view==valid && !std::memcmp(&stock,&before,sizeof stock),"A parked camera cannot bind another world's layout");
     require(wii_mm9_composite_prepare(memory,&stock,error,sizeof error),"Original layout does not require enhancement camera metadata");
 }
+void activation_room_contract() {
+    fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
+    constexpr uint32_t parent=0x80508000,layout=0x80505000,mask=0x80509000;
+    p32(0x8031c1f8,parent);p32(parent+0x10,layout);p32(parent+0xf4,mask);
+    p32(layout,0x0000120a);p32(mask,0x0500120a);fill(mask+4,32*10,15);
+    // Special Stage's actual failure geometry: city Cactus3032, camera3200,
+    // region2 at screen12, disconnected region0 at screen11 and screen13.
+    const uint32_t row=mask+4+3*32;
+    ram[(row+11)&0x1fffffff]=0;ram[(row+12)&0x1fffffff]=2;ram[(row+13)&0x1fffffff]=0;
+    WiiMm9ActivationBounds bounds{};
+    auto prepare=[&](int32_t x,int32_t y,unsigned width){
+        return wii_mm9_activation_bounds(memory,x,y,width,&bounds,error,sizeof error);};
+    for(unsigned width:{256u,342u,448u,864u}) {
+        require(prepare(3200,784,width),error);
+        require(bounds.minimum==3056 && bounds.maximum==3344,
+                "Disconnected boss-room margins cannot admit the prior city's Cactus");
+    }
+    ram[(row+11)&0x1fffffff]=1;ram[(row+13)&0x1fffffff]=3;
+    require(prepare(3200,784,342) && bounds.minimum==3013 && bounds.maximum==3387,
+            "Connected room margins retain full enhanced actor activation");
+    ram[(row+11)&0x1fffffff]=0;
+    require(prepare(3200,784,342) && bounds.minimum==3056 && bounds.maximum==3387,
+            "Finite room clipping is independent on the two camera sides");
+    require(prepare(3072,784,342) && bounds.minimum==2928 && bounds.maximum==3259,
+            "Room-aware enhancement never removes an original admission");
+    p32(0x8031c1f8,0);memory_reads=0;
+    require(prepare(3200,784,256) && bounds.minimum==3056 && bounds.maximum==3344 && !memory_reads,
+            "Original activation does not read enhancement room metadata");
+    const auto before=bounds;
+    require(!prepare(3200,784,342) && !std::memcmp(&bounds,&before,sizeof bounds),
+            "Missing room metadata cannot publish partial enhanced bounds");
+    require(!prepare(3200,784,343),"Odd activation widths are rejected");
+    require(!prepare(INT32_MAX,784,256),"Activation coordinate overflow is rejected");
+}
 void stage_selection_contract() {
     fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
     p16(0x803140c0,0x0202);fill(graphics+0x10000+32,32,0x33);
@@ -323,6 +357,7 @@ int main() {
         require(!wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)) && std::memcmp(&frame,&original,sizeof(frame))==0,"Unsupported sprite family must publish no partial texture");
         sprite_emitter_contract();
         camera_room_contract();
+        activation_room_contract();
         stage_selection_contract();
         hud_layout_contract();
         background_span_contract();

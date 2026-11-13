@@ -12,6 +12,15 @@ typedef struct WiiMm9Memory {
     /* Returned spans must remain valid and immutable until preparation returns. */
     const uint8_t* (*read)(void*,uint32_t,uint32_t);
 } WiiMm9Memory;
+
+typedef struct WiiMm9ActivationBounds {
+    int32_t minimum,maximum;
+} WiiMm9ActivationBounds;
+/* Extend original horizontal activation only inside the connected camera room.
+ * Retain the original sixteen-pixel padding and never narrow its 144-pixel
+ * bounds. Failure leaves output unchanged; width256 needs no room metadata. */
+int wii_mm9_activation_bounds(WiiMm9Memory,int32_t camera_x,int32_t camera_y,
+    uint32_t width,WiiMm9ActivationBounds*,char*,uint32_t);
 typedef struct WiiMm9Frame {
     /* Actual final-screen texture layout: GX RGB565, 4x4 tiled, big endian.
      * The machine publishes this to the real 0x8039b2c0 target atomically. */
