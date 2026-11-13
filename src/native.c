@@ -111,13 +111,15 @@ void wii_native_install(void){
     memset(bound,0,sizeof bound);memset(bound_known,0,sizeof bound_known);
     install_hook_pages();
     for(u32 i=0;i<GCN_OVERLAY_PAGE_COUNT;i++)resident[i]=GCN_OVERLAY_UNKNOWN;
-    gcn_overlay_module_index(&module,page_index,GCN_OVERLAY_INDEX_SLOTS);
+    const bool full_pages=gcn_overlay_module_index(&module,page_index,GCN_OVERLAY_INDEX_SLOTS);
     /* Reuse the shared store/DMA invalidation observer. Direct calls retain
      * the live physical/cached/uncached PC when selecting the compiled body. */
     /* AOT and HLE identity checks watch their code ranges. Ordinary data keeps
      * the existing first-write/CRC fence without repeated code invalidation. */
     gcn_native_code_set_candidate_scoped(0,GC_MAIN_RAM_SIZE,candidate,gcn_overlay_icbi);
-    bindings_ready=true;
+    /* Partial, unaligned or duplicate ranges retain the original search path;
+     * one page-wide execution decision cannot represent those catalogs. */
+    bindings_ready=full_pages;
 }
 void wii_native_summary(void){
     u32 observed=0;

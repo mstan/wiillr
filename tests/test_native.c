@@ -15,7 +15,7 @@ static void save_body(CPUState* cpu){CHECK(cpu->gpr[4]==save_calls);body(cpu);}
 #define GCN_OVERLAY_VARIANT_COUNT 2u
 #define WIILLR_PPC_CATALOG_SHA "synthetic"
 #define WIILLR_NATIVE_EXTERNAL_TABLES 1
-static const GcnOverlayPage s_overlay_pages[]={
+static GcnOverlayPage s_overlay_pages[]={
     {0x00001000,0x00002000,0,1},{0x80001000,0x80002000,0,1},
     {0x8000d000,0x8000e000,1,1},{0x80089000,0x8008a000,0,1},
     {0xc0001000,0xc0002000,0,1}
@@ -89,6 +89,15 @@ int main(void){
         const u32 pc=(menu_entries[n]&0x1fffffffu)|(bank==0?0:bank==1?0x80000000u:0xc0000000u);
         clear_spies();CHECK(call(&cpu,pc));CHECK(menu_calls==1 && !mods_calls && !renderer_calls);
     }
+    /* A partial catalog must keep search routing even after an inside call
+     * has selected its body. Neither neighboring address shares that range. */
+    handle_menu=false;
+    s_overlay_pages[1].start=0x80001020;s_overlay_pages[1].end=0x80001040;
+    s_overlay_variants[0].hash=gcn_aot_fnv1a64(cpu.ram+0x1020,32);
+    wii_native_install();CHECK(!bindings_ready && !module.index);
+    CHECK(call(&cpu,0x80001028));CHECK(cpu.pc==0x8000102c);
+    CHECK(!call(&cpu,0x80001008) && cpu.pc==0x80001008);
+    CHECK(!call(&cpu,0x80001040) && cpu.pc==0x80001040);
     gcn_native_code_set_candidate(0,0,NULL,NULL);cpu_free(&cpu);
     if(!failures)puts("Native page binding/alias/invalidation/HLE routing contracts passed");
     return failures?1:0;
