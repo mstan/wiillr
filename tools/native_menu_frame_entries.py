@@ -18,6 +18,7 @@ PAGES = {
     'overlay_813AD000_hB3D1F1BBBDE430F5.c': [0x813adfdc],
     'overlay_81355000_h9493E3CE6DADA3CB.c': [0x81355b88],
     'overlay_81363000_hFB1BC4FADE1427AD.c': [0x8136339c],
+    'overlay_8151F000_h8FB635CCD040C90D.c': [0x8151f22c],
 }
 
 

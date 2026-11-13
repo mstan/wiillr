@@ -7,6 +7,9 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#if WIILLR_MENU_TRANSFORM
+#include <wiillr/menu_transform.h>
+#endif
 
 #ifndef WIILLR_MENU_FRAME_MODE
 #define WIILLR_MENU_FRAME_MODE 0
@@ -17,6 +20,7 @@ static struct {
     WiiGx* owner;const GcWiiNativeRenderApi* render;const GcWiiNativeFrameApi* frame;const GcWiiNativeCaptureApi* capture;
     WiiMenuView view;float model[12];bool active,bad,projection_ready;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
+    bool transform_verified;u64 transforms,transform_declines;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -30,6 +34,36 @@ static void store_real(CPUState* cpu,u32 address,float f){u32 n;memcpy(&n,&f,4);
 static bool identity(CPUState* cpu,u32 address,u32 size,u64 hash) {
     const u8* p=bytes(cpu,address,size);if(!p)return false;u64 h=UINT64_C(14695981039346656037);
     for(u32 i=0;i<size;i++){h^=p[i];h*=UINT64_C(1099511628211);}return h==hash;
+}
+#if WIILLR_MENU_TRANSFORM
+/* These are the exact original native pages exercised by the certified
+ * zero-angle CalculateMtx stage, including its SDK matrix/rotation callees.
+ * Existing store observers retire the cached attestation on any page write. */
+static const struct {u32 address;u64 hash;} transform_pages[]={
+    {0x8151f000,UINT64_C(0x8fb635ccd040c90d)},
+    {0x81540000,UINT64_C(0x0b7477b24bec0c02)},
+    {0x81541000,UINT64_C(0x94f5194d8a2493ba)},
+    {0x8160a000,UINT64_C(0x2ad13305d6cc05b9)},
+    {0x8160c000,UINT64_C(0x978fde336b354471)}};
+static bool transform_identity(CPUState* cpu) {
+    if(state.transform_verified)return true;
+    for(u32 i=0;i<sizeof transform_pages/sizeof *transform_pages;i++) {
+        if(!identity(cpu,transform_pages[i].address,4096,transform_pages[i].hash))return false;
+        gcn_native_code_watch(transform_pages[i].address,4096);
+    }
+    state.transform_verified=true;return true;
+}
+#endif
+void wii_menu_frame_invalidate(u32 address,u32 size) {
+#if WIILLR_MENU_TRANSFORM
+    const u64 begin=address&0x1fffffffu,end=begin+size;
+    for(u32 i=0;i<sizeof transform_pages/sizeof *transform_pages;i++) {
+        const u32 page=transform_pages[i].address&0x1fffffffu;
+        if(begin<page+4096 && end>page){state.transform_verified=false;break;}
+    }
+#else
+    (void)address;(void)size;
+#endif
 }
 static int stop(CPUState* cpu,const char* why,bool backend) {
     if(backend)++state.failed;else ++state.uncovered;
@@ -192,6 +226,12 @@ void wii_menu_frame_capture(const GcWiiNativeCaptureApi* api) {
 int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;state.bad=false;
+#if WIILLR_MENU_TRANSFORM
+    if(address==0x8151f22c) {
+        if(transform_identity(cpu) && wii_menu_transform_apply(cpu)){++state.transforms;return 1;}
+        ++state.transform_declines;return 0;
+    }
+#endif
     if(address==0x8133e2d4) {
         /* The two original XFB allocations otherwise share protected pages
          * with live heap headers and neighboring objects. Their unrelated
@@ -287,5 +327,8 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
 void wii_menu_frame_stop(void) {
     if(!state.owner)return;if(state.mesh)state.render->destroy_mesh(state.mesh);
     printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"isolated_buffers\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.isolated_buffers,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
+#if WIILLR_MENU_TRANSFORM
+    printf("{\"native_menu_transforms\":1,\"admitted\":%llu,\"declined\":%llu}\n",(unsigned long long)state.transforms,(unsigned long long)state.transform_declines);
+#endif
     memset(&state,0,sizeof state);
 }

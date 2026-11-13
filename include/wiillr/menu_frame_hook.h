@@ -16,6 +16,7 @@ bool wii_menu_frame_start(WiiGx*,const GcWiiNativeRenderApi*,const GcWiiNativeFr
 void wii_menu_frame_capture(const GcWiiNativeCaptureApi*);
 void wii_menu_frame_stop(void);
 int wii_menu_frame_entry(CPUState*,uint32_t);
+void wii_menu_frame_invalidate(uint32_t,uint32_t);
 #ifdef __cplusplus
 }
 #endif

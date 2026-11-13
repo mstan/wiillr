@@ -83,6 +83,7 @@ bool wii_menu_picture_hook_effects(const GcWiiNativeGuiEffectsApi* api) {
     effects_ready=renderer && wii_menu_native_gui_effects(renderer,api);return effects_ready;
 }
 void wii_menu_picture_hook_invalidate(u32 address,u32 size) {
+    wii_menu_frame_invalidate(address,size);
 #if WIILLR_MENU_TEXT
     wii_menu_text_hook_invalidate(address,size);
 #endif
