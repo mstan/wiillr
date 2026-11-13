@@ -20,7 +20,7 @@ static RecompLauncherCSettings default_settings;
 static unsigned char expected[1][32];
 static bool active;
 static RecompLauncherCGameInfo game_info;
-static char config_path[32768],boot_image[32768];
+static char config_path[32768],rom_cache_path[32768],boot_image[32768];
 static bool settings_key_held,input_release;
 static const char* const view_labels[]={"Original 4:3","16:9","21:9","Fit to screen"};
 static const char* const resolution_labels[]={"Original (1x)","2x","3x","4x","8x","16x"};
@@ -100,14 +100,15 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     if(!directory || !*directory) {
         pref=SDL_GetPrefPath("RetroPortingToolKit","Mega Man 9");directory=pref;
     }
-    if(!directory || snprintf(config_path,sizeof config_path,"%s/config.ini",directory)>=(int)sizeof config_path) {
+    if(!directory || snprintf(config_path,sizeof config_path,"%s/config.ini",directory)>=(int)sizeof config_path ||
+       snprintf(rom_cache_path,sizeof rom_cache_path,"%s/boot.cfg",directory)>=(int)sizeof rom_cache_path) {
         SDL_free(pref);return 2;
     }
     RecompLauncherCGameInfo game={0};
     launcher_profile_apply("wii",&game);
     game.name="Mega Man 9";game.region="USA";
     game.known_sha256=(const uint8_t(*)[32])expected;game.num_known_sha256=1;
-    game.num_players=1;game.config_path=config_path;
+    game.num_players=1;game.config_path=config_path;game.rom_cache_path=rom_cache_path;
     game.settings_bindings=1;
     if(view_supported()) {
         game.has_supersampling=1;

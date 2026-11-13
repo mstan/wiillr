@@ -8,6 +8,36 @@ The first supported title is Mega Man 9 (USA). Its boot image must match the
 installed ticket/TMD in the copied NAND profile. `--launcher-check` verifies
 that identity without opening a window or booting the game.
 
+A packaged launcher build also starts without command-line arguments. Place
+`game.ini`, the graphics service and its runtime DLLs, the CMake-staged `assets`
+directory, DSP ROM/coefficient files and a prepared NAND template beside the
+executable. All manifest paths are relative to that directory, so the package
+can move and does not depend on the current working directory:
+
+```ini
+[Game]
+Nand=seed/nand
+Boot=title/00010001/57523945/content/0000000a.app
+Graphics=gcnllr-native-gx.dll
+DspRom=system/dsp_rom.bin
+DspCoef=system/dsp_coef.bin
+Uid=4107
+Gid=12344
+Ios=37
+```
+
+Use the installed title's actual UID and TMD group ID. The template must have
+the copied-profile marker and valid installed boot content, ticket and TMD.
+First launch validates a staged copy before publishing `nand` in the per-user
+Mega Man 9 preferences directory. Later launches reuse it without merging the
+template over saves or imported licenses. Package updates preserve the same
+preferences directory; `WIILLR_USER_DIR` can select an explicit one. Use a fresh
+template for distribution, keeping QA progress and local path sidecars out of
+the package. Packaged runs write `game.log` there and omit developer RAM and
+scanout dumps. Bare `--launcher-settings` forces the launcher open, while bare
+`--launcher-check` validates the package without opening a window. Original
+positional command-line QA remains supported.
+
 Window scale, fullscreen and audio settings use the shared launcher INI store
 under the platform's per-user Mega Man 9 preferences directory. An existing
 `WIILLR_USER_DIR` overrides that directory. `GCN_AUDIO=0` and

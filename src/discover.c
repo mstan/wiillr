@@ -10,6 +10,14 @@
 #include "wiillr/control.h"
 #ifdef RECOMP_LAUNCHER
 #include "wiillr/launcher.h"
+#include "wiillr/package.h"
+#include <SDL3/SDL.h>
+#ifdef _WIN32
+/* Reuse SDL's supported Windows entry shim for the GUI subsystem. Explicit
+ * command-line QA still receives its inherited stdout/stderr pipes. */
+#undef SDL_MAIN_HANDLED
+#include <SDL3/SDL_main.h>
+#endif
 #endif
 #include "debug/cost_ring.h"
 #include "host/host_audio.h"
@@ -121,9 +129,38 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     fflush(stdout);
     wii_es_release_launch(&launch);return ok;
 }
-int main(int argc, char** argv) {
+#ifdef RECOMP_LAUNCHER
+static WiiPackage* package;
+static char package_error[512];
+static void close_package(void){wii_package_close(package);package=NULL;}
+static bool package_validate(const char* image,const char* nand,unsigned uid,unsigned gid) {
+    char selected[32768];return wii_launcher_start(image,nand,uid,gid,false,true,selected,sizeof selected)==0;
+}
+static bool package_request(int argc,char** argv) {
+    return argc==1 || (argc==2 && (!strcmp(argv[1],"--launcher") ||
+        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check")));
+}
+#endif
+static int run(int argc, char** argv) {
     bool launcher=false,launcher_force=false,launcher_check=false;
 #ifdef RECOMP_LAUNCHER
+    if(package_request(argc,argv)) {
+        const char* action=argc==1?"--launcher":argv[1];
+        const bool check=!strcmp(action,"--launcher-check");
+        const char* user=getenv("WIILLR_USER_DIR");char* allocated=NULL;
+        if(!user || !*user){allocated=SDL_GetPrefPath("RetroPortingToolKit","Mega Man 9");user=allocated;}
+        package=wii_package_open(SDL_GetBasePath(),user,package_validate,package_error,sizeof package_error);
+        SDL_free(allocated);
+        if(!package){fprintf(stderr,"launcher: %s\n",package_error);return 2;}
+        atexit(close_package);
+        if(!check) {
+            FILE* log=fopen(wii_package_log(package),"wb");
+            if(!log){snprintf(package_error,sizeof package_error,"Cannot create the game log in the preferences folder");return 2;}
+            fclose(log);
+            if(!freopen(wii_package_log(package),"ab",stdout) || !freopen(wii_package_log(package),"ab",stderr))return 2;
+        }
+        wii_package_arguments(package,argv[0],action,&argc,&argv);
+    }
     if(argc>1 && (!strcmp(argv[1],"--launcher") ||
         !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check"))) {
         launcher=true;launcher_force=!strcmp(argv[1],"--launcher-settings");
@@ -382,7 +419,8 @@ int main(int argc, char** argv) {
     }
     /* Kernel file I/O cannot fault guarded resident pages back into RAM.
      * A complete snapshot is an explicit CPU observer of every MEM1 byte. */
-    int saved = wii_gx_output_prepare(&gx,0,cpu.ram_size) && dump(argv[3], cpu.ram, cpu.ram_size);
+    const bool dump_requested=argv[3] && *argv[3];
+    int saved = !dump_requested || (wii_gx_output_prepare(&gx,0,cpu.ram_size) && dump(argv[3], cpu.ram, cpu.ram_size));
     wii_control_stop(control);
     printf("{\"ios_provider\":\"%s\",\"native_operations\":%llu,\"ARM_interpreter_instructions\":0,\"stm_event_waiting\":%s}\n",
            WIILLR_IOS_NATIVE ? "native-development":"none",(unsigned long long)machine.ios.operations,
@@ -437,7 +475,7 @@ int main(int argc, char** argv) {
             (unsigned long long)status.display_copies,(unsigned long long)status.presents,status.failed,
             (unsigned long long)machine.gx_cpu_gather_writes,(unsigned long long)machine.gx_cpu_gather_bytes,
             (unsigned long long)machine.gx_cpu_gather_rejected,machine.gx_native_owner?machine.gx_native_owner:"");
-        if(gx.scanout_width && gx.scanout_height) {
+        if(dump_requested && gx.scanout_width && gx.scanout_height) {
             const u32 size=gx.scanout_stride*(gx.scanout_height-1)+gx.scanout_width*2;
             u32 available;const u8* pixels=gcn_mem_resolve(&cpu,gx.scanout_address,&available);
             char capture[4096];const int n=snprintf(capture,sizeof capture,"%s/scanout.yuy2",gx_data);
@@ -464,9 +502,21 @@ int main(int argc, char** argv) {
            (unsigned long long)gcn_interpreter_instruction_count(),
            (unsigned long long)gcn_interpreter_unique_miss_count(),
            (unsigned long long)cpu.cycles, cpu.halted ? "true":"false",
-           stop && cpu.pc == stop ? "true":"false", saved ? "true":"false");
+           stop && cpu.pc == stop ? "true":"false", dump_requested && saved ? "true":"false");
     gcn_exi_free(&machine.exi);
     gcn_di_free(&machine.di);
     cpu_free(&cpu);
     return !saved ? 2 : cpu.halted ? 1 : 0;
+}
+int main(int argc,char** argv) {
+    const int result=run(argc,argv);
+#ifdef RECOMP_LAUNCHER
+    const char* hidden=getenv("GCNLLR_RENDER_HIDDEN");const char* test=getenv("LNG_TEST_HIDDEN");
+    const bool check=argc==2 && !strcmp(argv[1],"--launcher-check");
+    if(result && package_request(argc,argv) && !check &&
+       !(hidden && !strcmp(hidden,"1")) && !(test && !strcmp(test,"1")))
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Mega Man 9",
+            *package_error?package_error:"Mega Man 9 could not start. See game.log in the game preferences folder for details.",NULL);
+#endif
+    return result;
 }
