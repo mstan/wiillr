@@ -31,7 +31,7 @@ static bool verified,oracle_pending,input_invalid;
 static u64 frames,uncovered,failed,oracle_checked,oracle_different;
 static u32 oracle_max_delta;
 static const char* oracle_directory;
-static bool view_enabled,view_ready;
+static bool view_enabled,view_ready,camera_attested;
 static u32 view_fixed_width,view_width;
 static u8* view_rgba;
 static u32 view_capacity;
@@ -63,6 +63,7 @@ bool wii_mm9_renderer_set_view(WiiGx* gx,WiiMm9View mode) {
 }
 static const u8* read_memory(void*,u32,u32);
 static u32 r32(CPUState*,u32);
+static bool identity(CPUState*,u32,u32,u64);
 static bool current_view_width(u32* width) {
     *width=view_enabled?view_fixed_width:256;
     if(*width)return true;
@@ -84,6 +85,10 @@ static bool prepare_view(CPUState* cpu) {
         if(wii_mm9_composite_prepare(memory,prepared,error,sizeof error))return true;
         fprintf(stderr,"Native MM9 compositor: %s\n",error);return false;
     }
+    // Original mode may have verified the compositor before Fit is enabled.
+    // Verify the camera contract on the first enhanced frame, independently.
+    if(!camera_attested)camera_attested=identity(cpu,0x8009e974,0x478,UINT64_C(0xc2af22da07730859));
+    if(!camera_attested){fprintf(stderr,"Native MM9 view: camera function identity\n");return false;}
     const u32 bytes=width*240*4;
     if(bytes>view_capacity) {
         void* next=realloc(view_rgba,bytes);if(!next)return false;
@@ -315,7 +320,7 @@ static int compare_oracle(CPUState* cpu) {
 }
 bool wii_mm9_renderer_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcWiiNativeFrameApi* frame) {
     const char* fit=getenv("WIILLR_MM9_FIT"),*fixed=getenv("WIILLR_MM9_VIEW_WIDTH");
-    view_enabled=(fit && !strcmp(fit,"1")) || fixed;view_fixed_width=0;view_ready=false;
+    view_enabled=(fit && !strcmp(fit,"1")) || fixed;view_fixed_width=0;view_ready=camera_attested=false;
     if(fit && strcmp(fit,"0") && strcmp(fit,"1"))return false;
     if(fixed) {
         char* end;errno=0;unsigned long value=strtoul(fixed,&end,10);
@@ -350,6 +355,7 @@ void wii_mm9_renderer_hook_invalidate(u32 address,u32 size) {
     if(a<0xe88e4 && (u64)a+size>0xe8700)sprite_attested=false;
     if(a<0x24748 && (u64)a+size>0x24620)hud_attested=false;
     if(a<0xea870 && (u64)a+size>0xea2e4)spawn_attested=false;
+    if(a<0x9edec && (u64)a+size>0x9e974)camera_attested=false;
 }
 int wii_mm9_renderer_hook_call(CPUState* cpu,u32 address) {
     if(WIILLR_MM9_RENDERER_MODE==0)return 0;
@@ -429,7 +435,7 @@ void wii_mm9_renderer_hook_stop(void) {
 #endif
     printf("{\"native_mm9_renderer\":%u,\"compositor_frames\":%llu,\"screen_draws\":%llu,\"screen_mesh_uploads\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"oracle_frames\":%llu,\"oracle_different_pixels\":%llu,\"oracle_max_channel_delta\":%u}\n",WIILLR_MM9_RENDERER_MODE,(unsigned long long)frames,(unsigned long long)status.draws,(unsigned long long)status.mesh_uploads,(unsigned long long)uncovered,(unsigned long long)failed,(unsigned long long)oracle_checked,(unsigned long long)oracle_different,oracle_max_delta);
     wii_mm9_screen_destroy(screen_renderer);screen_renderer=NULL;wii_mm9_overlay_destroy(overlay_renderer);overlay_renderer=NULL;free(prepared);prepared=NULL;free(oracle_entry);oracle_entry=NULL;
-    free(view_rgba);view_rgba=NULL;view_capacity=view_width=0;view_enabled=view_ready=false;
+    free(view_rgba);view_rgba=NULL;view_capacity=view_width=0;view_enabled=view_ready=camera_attested=false;
     owner=NULL;frame_api=NULL;output_api=NULL;
 }
 

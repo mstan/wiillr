@@ -72,6 +72,62 @@ void sprite_emitter_contract() {
     extra.before=pool+16;render();require(pixel_at()==0xf800,"Margin sprite retains order after preceding guest sprites");
 }
 }
+void camera_room_contract() {
+    fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
+    constexpr uint32_t object=0x8031bf90,grid=0x8031c814,definitions=0x80504000,
+        layout=0x80505000,parent=0x80508000,mask=0x80509000;
+    p16(0x803140c0,0x000a);p16(config+8,0x4001);p16(config+0x12,224);
+    p32(object+4,0x8009f1a8);p32(object+0x5c,1);p32(object+0x18,224);
+    p32(object+0x20,definitions);p32(object+0x28,layout);
+    p32(0x8031c1e4,definitions);p32(0x8031c1e0,definitions+16);
+    p32(layout,0x04000202);p16(grid,32);
+    for(unsigned n=0;n<32*28;++n)p16(grid+4+n*2,1);
+    p32(0x8031c1f8,parent);p32(parent+0x10,layout);p32(parent+0xf4,mask);p32(mask,0x02030202);
+    fill(sprite_graphics,32,0x22);sprite(0,0,16,10,0);sprite(1,0,260,10,0);
+    const WiiMm9SpriteAnchor anchor{pool,pool+8,-1};
+    const WiiMm9ViewLayout view_layout{nullptr,0,&anchor,1,32};
+    unsigned width=344;std::vector<uint8_t> view(width*240*4);WiiMm9Frame stock{},before{};
+    auto prepare=[&](){return wii_mm9_composite_layout_prepare(memory,width,&view_layout,&stock,view.data(),unsigned(view.size()),error,sizeof error);};
+    auto color=[&](unsigned x,unsigned y){const auto* p=view.data()+(y*width+x)*4;return uint32_t(p[0])<<16|uint32_t(p[1])<<8|p[2];};
+    require(prepare(),error);before=stock;
+    require(color(308,18)==0x00ff00 && color(330,8)==0xff0000,"Connected camera region exposes real neighboring tiles and actors");
+    // Rows are 224 pixels high and physically padded to four screen entries.
+    // The first row remains valid, so either wrong row/stride leaks filler.
+    ram[(mask+4+4+1)&0x1fffffff]=15;
+    require(prepare(),error);
+    require(!std::memcmp(&stock,&before,sizeof stock),"Room clipping preserves the complete original center and counters");
+    require(color(308,18)==0 && color(330,8)==0,"Unavailable camera screens expose neither filler tiles nor world sprites");
+    require(color(16,18)==0x00ff00,"Anchored HUD remains visible over a finite room's margins");
+    ram[(mask+4+4+1)&0x1fffffff]=1;require(prepare(),error);
+    require(color(308,18)==0x00ff00,"Original adjacent camera classes remain connected");
+    ram[(mask+4+4+1)&0x1fffffff]=2;require(prepare(),error);
+    require(color(308,18)==0,"Nonadjacent camera classes retain the original room boundary");
+    for(unsigned offset=0;offset<=44;++offset) {
+        p32(object+0x14,offset);p16(config+0x10,offset);require(prepare(),error);
+        for(unsigned x=0;x<44;++x)
+            require(color(x,8)==(x+offset>=44?0xff0000u:0u),
+                    "Finite room edges follow each published camera pixel without repeating filler");
+    }
+    p32(object+0x14,0);p16(config+0x10,0);
+    p32(object+0x18,0);p16(config+0x12,0);require(prepare(),error);
+    require(color(330,8)==0xff0000,"Entering a connected camera row restores its real margin content");
+    p32(object+0x18,224);p16(config+0x12,224);require(prepare(),error);
+    require(color(330,8)==0,"Entering a finite camera row restores black margins immediately");
+    width=864;view.resize(width*240*4);p32(layout,0x04000402);p16(grid,64);
+    for(unsigned n=0;n<64*28;++n)p16(grid+4+n*2,1);
+    p32(mask,0x02030402);ram[(mask+4+4+1)&0x1fffffff]=15;
+    require(prepare(),error);
+    require(color(824,8)==0,"A wide view cannot reveal a disconnected region beyond an unavailable screen");
+    ram[(mask+2)&0x1fffffff]=3;ram[(mask+4+4+1)&0x1fffffff]=0;
+    require(prepare() && color(824,8)==0xff0000,"Camera and art maps may have different valid dimensions");
+    ram[(mask+3)&0x1fffffff]=1;
+    require(prepare() && color(824,8)==0,"An unused art row cannot read beyond the camera map");
+    const auto valid=view;before=stock;ram[mask&0x1fffffff]=0;
+    require(!prepare() && view==valid && !std::memcmp(&stock,&before,sizeof stock),"Invalid camera metadata publishes no partial frame");
+    ram[mask&0x1fffffff]=2;p32(parent+0x10,layout+4);
+    require(!prepare() && view==valid && !std::memcmp(&stock,&before,sizeof stock),"A parked camera cannot bind another world's layout");
+    require(wii_mm9_composite_prepare(memory,&stock,error,sizeof error),"Original layout does not require enhancement camera metadata");
+}
 void hud_layout_contract() {
     fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
     fill(sprite_graphics,32,0x22);
@@ -163,6 +219,7 @@ int main() {
         p32(scene+0x14,16); // Published scroll can differ from the target at +34.
         p32(0x8031c1e4,definitions);p32(0x8031c1e0,definitions+16);
         p32(layout,0x02000201);p16(grid,32);
+        p32(0x8031c1f8,0x80508000);p32(0x80508010,layout);p32(0x805080f4,0x80509000);p32(0x80509000,0x02030201);
         for(unsigned n=0;n<32*14;++n)p16(grid+4+n*2,1);
         p16(definitions+8,0);p16(definitions+10,0x0040);
         p16(definitions+12,0x0080);p16(definitions+14,0x00c0);
@@ -204,6 +261,7 @@ int main() {
         frame=original;p32(pool+0x808,pool+8);sprite(0,0,4,3,0,false,2);
         require(!wii_mm9_composite_prepare(memory,&frame,error,sizeof(error)) && std::memcmp(&frame,&original,sizeof(frame))==0,"Unsupported sprite family must publish no partial texture");
         sprite_emitter_contract();
+        camera_room_contract();
         hud_layout_contract();
         std::cout<<"MM9 logical tile/sprite compositor contracts passed; live copy/queue qualification pending\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

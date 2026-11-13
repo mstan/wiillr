@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <wiillr/mm9_compositor.h>
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -49,7 +50,7 @@ void pixel(WiiMm9Frame& out,unsigned x,unsigned y,uint16_t value) {
 struct Layer {
     unsigned width{},height{},priority{},slot{},mode{};
     uint32_t map{},tiles{},scroll{};unsigned u{},v{};
-    uint32_t world_grid{},world_definitions{};
+    uint32_t world_grid{},world_definitions{},world_layout{};
     unsigned world_stride{},world_width{},world_height{},world_count{};
     int world_x{},world_y{};
     const uint8_t* map_data{};const uint8_t* tile_data{};
@@ -82,7 +83,7 @@ void world_source(const Reader& r,unsigned id,Layer& layer) {
         // These are the loader's published coordinates, including incremental
         // scroll updates. Its target at +34/+38 can still name the prior cell.
         layer.world_x=world_x;layer.world_y=world_y;
-        layer.world_grid=grid+4;layer.world_definitions=definitions;
+        layer.world_grid=grid+4;layer.world_definitions=definitions;layer.world_layout=layout;
         layer.world_stride=stride;layer.world_width=columns*256;layer.world_height=rows*224;
         layer.world_count=(attributes-definitions)/8;
         layer.world_grid_data=r.bytes(layer.world_grid,stride*rows*14*2);
@@ -90,7 +91,50 @@ void world_source(const Reader& r,unsigned id,Layer& layer) {
         return;
     }
 }
-struct Sprite {uint32_t tiles{},position{};unsigned width{},height{},palette{},priority{},kind{};int x{},y{};bool flip_x{},flip_y{},limited{},margin{};const uint8_t* tile_data{};};
+struct RoomView {
+    bool active{};int64_t origin{},minimum{},maximum{};
+    bool visible(unsigned x,int left)const {
+        if(!active || (x>=unsigned(left) && x<unsigned(left+256)))return true;
+        const auto world_x=origin+int64_t(x)-left;
+        return world_x>=minimum && world_x<maximum;
+    }
+};
+RoomView room_view(const Reader& r,const std::array<Layer,4>& layers) {
+    for(const auto& layer:layers) {
+        if(!layer.world_grid)continue;
+        // WR9E 8009e974 checks horizontal camera limits using the low nibble
+        // of this padded screen map. F is unavailable; neighboring classes
+        // within one are connected. Off-camera art screens can contain filler
+        // even when the mutable world grid itself is completely up to date.
+        const auto parent=r.u32(0x8031c1f8);need(parent,"Missing MM9 camera owner");
+        need(r.u32(parent+0x10)==layer.world_layout,"MM9 camera and world owners differ");
+        const auto mask=r.u32(parent+0xf4);need(mask,"Missing MM9 camera regions");
+        const unsigned shift=r.u8(mask),columns=r.u8(mask+2),rows=r.u8(mask+3);
+        need(shift<=7 && columns && rows && columns<=127 && rows<=127 &&
+             (1u<<shift)>=columns,
+             "Invalid MM9 camera regions");
+        const auto* cells=r.bytes(mask+4,(1u<<shift)*rows);
+        RoomView result{true,layer.world_x,layer.world_x,int64_t(layer.world_x)+256};
+        const int64_t center_x=int64_t(layer.world_x)+128,center_y=int64_t(layer.world_y)+112;
+        // Camera maps may omit unused art rows (Hornet does). Their domain
+        // and the mutable art grid are independent, but share this owner.
+        if(center_x<0 || center_y<0 || center_x>=layer.world_width || center_y>=layer.world_height ||
+           center_x>=columns*256 || center_y>=rows*224)return result;
+        const unsigned screen_columns=std::min(columns,layer.world_width/256);
+        unsigned first=unsigned(center_x)/256,last=first;
+        const auto* row=cells+((unsigned(center_y)/224)<<shift);
+        const unsigned region=row[first]&15;
+        if(region==15)return result;
+        const auto connected=[&](unsigned x){const unsigned value=row[x]&15;
+            return value!=15 && ((region+1-value)&255)<=2;};
+        while(first && connected(first-1))--first;
+        while(last+1<screen_columns && connected(last+1))++last;
+        result.minimum=int64_t(first)*256;result.maximum=int64_t(last+1)*256;
+        return result;
+    }
+    return {};
+}
+struct Sprite {uint32_t tiles{},position{};unsigned width{},height{},palette{},priority{},kind{};int x{},y{};bool flip_x{},flip_y{},limited{},margin{},anchored{};const uint8_t* tile_data{};};
 template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     const WiiMm9MarginSprite* margins=nullptr,unsigned margin_count=0,
     const WiiMm9SpriteAnchor* anchors=nullptr,unsigned anchor_count=0) {
@@ -116,6 +160,9 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         layer.tile_data=r.bytes(layer.tiles,256*256/2);
         if(width>256 && !centered_panel)world_source(r,id,layer);
     }
+    const auto room=room_view(r,layers);
+    std::array<bool,WII_MM9_VIEW_MAX_WIDTH> world_visible{};
+    for(unsigned x=0;x<width;++x)world_visible[x]=room.visible(x,left);
     const auto begin=r.u32(sprite_pool+0x80c),end=r.u32(sprite_pool+0x808);
     need(begin>=sprite_pool && end>=begin && end<=sprite_pool+0x800 && (end-begin)%8==0,"Invalid MM9 sprite pool span");
     need(anchor_count<=128 && (!anchor_count || anchors),"Invalid MM9 sprite anchor list");
@@ -154,8 +201,9 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         sprite.kind=(position>>6)&7;need(sprite.kind<=1,"Unbound MM9 sprite draw function");
         sprite.x=signed10(position>>12);sprite.y=signed10(position>>22);sprite.flip_x=(position>>10)&1;sprite.flip_y=(position>>11)&1;sprite.limited=(position>>9)&1;
         while(anchor<anchor_count && anchors[anchor].end<=address)++anchor;
-        if(!centered_panel && anchor<anchor_count && anchors[anchor].begin<=address && address<anchors[anchor].end)
-            sprite.x+=anchors[anchor].edge*left;
+        if(!centered_panel && anchor<anchor_count && anchors[anchor].begin<=address && address<anchors[anchor].end) {
+            sprite.x+=anchors[anchor].edge*left;sprite.anchored=true;
+        }
         if(!sprite.kind)sprite.tile_data=r.bytes(sprite.tiles,sprite.width*sprite.height/2);
         sprites.push_back(sprite);
     }
@@ -164,7 +212,8 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     // Border/clear and exact copy sampling still require the live gate.
     const auto clear=r.u16(0x8038b2f8+0x26bc);const auto backdrop=rgb565(clear&0x7fff);const auto limit=r.u32(0x803b930c);
     for(unsigned y=0;y<224;++y) {
-        for(unsigned x=0;x<width;++x)put(out,x,y+8,centered_panel && (x<unsigned(left) || x>=unsigned(left+256))?0:backdrop);
+        for(unsigned x=0;x<width;++x)put(out,x,y+8,!world_visible[x] ||
+            (centered_panel && (x<unsigned(left) || x>=unsigned(left+256)))?0:backdrop);
         unsigned count=0,margin_budget=0;
         for(int priority=3;priority>=0;--priority) {
             // The original layer order is 3,2,1,0 within each priority.
@@ -175,6 +224,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 else if(layer.mode==3){const auto scroll=r.u32(layer.scroll+y*4);u=scroll&65535;v=scroll>>16;}
                 v=(v+y)&(layer.height-1);
                 for(unsigned x=centered_panel?unsigned(left):0;x<(centered_panel?unsigned(left+256):width);++x) {
+                    if(!world_visible[x])continue;
                     unsigned source_x=(u+x-unsigned(left))&(layer.width-1),source_y=v;
                     const unsigned page_x=source_x/256,page_y=v/256;
                     const unsigned tile=(page_y*(layer.width/256)+page_x)*1024+((v%256)/8)*32+(source_x%256)/8;
@@ -204,6 +254,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 for(unsigned sx=0;sx<sprite.width;++sx) {
                     const int x=sprite.x+int(sx)+left;if(x<0 || x>=int(width))continue;
                     if(centered_panel && (x<left || x>=left+256))continue;
+                    if(!sprite.anchored && !world_visible[unsigned(x)])continue;
                     if(sprite.margin && x>=left && x<left+256)continue;
                     const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(sprite.tile_data,sprite.width,px,py);if(!index)continue;
                     put(out,unsigned(x),y+8,sprite_palette.get(sprite.palette,index));if(x>=left && x<left+256)++out.sprite_pixels;
