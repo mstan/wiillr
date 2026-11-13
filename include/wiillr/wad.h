@@ -25,6 +25,23 @@ typedef struct WiiWadInstallResult {
 bool wii_wad_install(const char* wad_path,const char* common_key_path,
     const char* copied_nand,uint64_t expected_title,WiiWadInstallResult* result,
     char* error,size_t error_capacity);
+typedef struct WiiWadBaseInstallResult {
+    WiiWadInstallResult installed;
+    uint64_t ios_title;
+    uint32_t boot_content_id;
+    uint16_t group_id,title_version,boot_index;
+    /* Relative to copied_nand; ASCII and never an absolute or parent path. */
+    char boot_path[64];
+} WiiWadBaseInstallResult;
+/* Same safe import/publication contract, for supported USA MM9 base title
+ * 0001000157523945 only. Requires IOS37 and the supported boot SHA-1 in both
+ * the TMD and decrypted boot content before any profile mutation. UID is
+ * reused when present, otherwise allocated after existing users (4096 for
+ * an empty uid.sys). Ticket/TMD, imported DLC and native saves are preserved.
+ * Result is cleared on failure. No signing/authenticity claim is made. */
+bool wii_wad_install_base(const char* wad_path,const char* common_key_path,
+    const char* copied_nand,uint64_t expected_title,WiiWadBaseInstallResult* result,
+    char* error,size_t error_capacity);
 #ifdef __cplusplus
 }
 #endif

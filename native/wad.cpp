@@ -114,8 +114,9 @@ void publish(const fs::path& temporary,const fs::path& target,bool replace) {
 }
 struct Content {uint32_t id;uint16_t index,flags;std::array<uint8_t,20> sha;Bytes plain;};
 struct Output {Bytes value,previous;bool existed{},mutable_metadata{};};
-WiiWadInstallResult install(const fs::path& wad_path,const fs::path& key_path,const fs::path& profile_path,uint64_t expected) {
-    need(expected>>32==0x00010005,"The importer requires the expected DLC title");
+WiiWadBaseInstallResult install(const fs::path& wad_path,const fs::path& key_path,const fs::path& profile_path,uint64_t expected,bool base) {
+    need(base?expected==UINT64_C(0x0001000157523945):expected>>32==0x00010005,
+        base?"The base importer requires the supported USA Mega Man 9 title":"The importer requires the expected DLC title");
     chain(profile_path);const auto root=fs::canonical(profile_path);need(fs::is_directory(root),"A copied NAND profile is required");
     const auto marker=read(root/".wiillr-nand-profile",64);
     const std::string magic(marker.begin(),marker.end());need(magic=="wiillr-copied-nand-v1\n" || magic=="wiillr-copied-nand-v1\r\n","Install DLC only into a marked copied NAND profile");
@@ -131,6 +132,9 @@ WiiWadInstallResult install(const fs::path& wad_path,const fs::path& key_path,co
     sub(ticket,tb,0xb2);sub(tmd,mb,0xa4);
     need(tb==0x140 && ticket.size()==0x2a4 && ticket[tb+0x7c]==0,"Unsupported DLC ticket format; expected one RSA2048 version-0 ticket");
     const auto title=u64(tmd,mb+0x4c);need(title==expected && u64(ticket,tb+0x9c)==title,"DLC belongs to a different game or has inconsistent title identities");
+    WiiWadBaseInstallResult result{};result.ios_title=u64(tmd,mb+0x44);
+    result.group_id=u16(tmd,mb+0x58);result.title_version=u16(tmd,mb+0x9c);result.boot_index=u16(tmd,mb+0xa0);
+    if(base)need(result.ios_title==UINT64_C(0x0000000100000025),"Supported Mega Man 9 base requires IOS37");
     const auto count=u16(tmd,mb+0x9e);need(count && count<=1024,"Unsupported WAD content count");sub(tmd,mb+0xa4,size_t(count)*36);
     Secret common,title_key;chain(key_path);need(fs::is_regular_file(key_path) && fs::file_size(key_path)==16,"DLC import requires the supplied 16-byte Wii common key");
     {std::ifstream file(key_path,std::ios::binary);need(bool(file.read(reinterpret_cast<char*>(common.data.data()),16)) && file.peek()==std::char_traits<char>::eof(),"Cannot read the supplied Wii common key");}
@@ -145,6 +149,17 @@ WiiWadInstallResult install(const fs::path& wad_path,const fs::path& key_path,co
         const auto amount=aligned(size_t(length),16);item.plain=decrypt(sub(section[3],offset,amount),title_key,iv);item.plain.resize(size_t(length));
         need(digest(item.plain)==item.sha,"DLC content hash verification failed; no files were installed");
         offset+=aligned(amount,64);contents.push_back(std::move(item));
+    }
+    if(base) {
+        const auto boot=std::find_if(contents.begin(),contents.end(),[&](const Content& c){return c.index==result.boot_index;});
+        need(boot!=contents.end() && !boot->plain.empty(),"Base WAD boot index is absent or empty");
+        // This is an identity allowlist, not signature authentication. Do not
+        // publish internally consistent content from another executable/revision.
+        constexpr std::array<uint8_t,20> supported_boot{
+            0x58,0x85,0x8c,0x85,0x66,0xa5,0x5e,0xde,0xec,0xc6,
+            0xef,0x91,0x82,0xd7,0x6b,0x61,0xc3,0x89,0x71,0x42};
+        need(boot->sha==supported_boot && digest(boot->plain)==supported_boot,"Unsupported Mega Man 9 base boot content");
+        result.boot_content_id=boot->id;
     }
     // No profile writes occur before every content and title identity passes.
     ProfileLock lock(root);
@@ -165,6 +180,7 @@ WiiWadInstallResult install(const fs::path& wad_path,const fs::path& key_path,co
     }
     bool mapping_changed=false;
     for(auto& item:contents) {
+        std::string content_path;
         if(item.flags&0x8000) {
             auto found=shared.find(item.sha);
             if(found==shared.end()) {
@@ -174,9 +190,14 @@ WiiWadInstallResult install(const fs::path& wad_path,const fs::path& key_path,co
                 found=shared.emplace(item.sha,name).first;mapping_changed=true;
             }
             const auto name="shared1/"+found->second+".app";
+            content_path=name;
             if(auto previous=outputs.find(name);previous!=outputs.end())need(previous->second.value==item.plain,"Conflicting shared WAD content");
             else add(name,std::move(item.plain));
-        } else add(prefix+"/content/"+hex(item.id,8)+".app",std::move(item.plain));
+        } else {content_path=prefix+"/content/"+hex(item.id,8)+".app";add(content_path,std::move(item.plain));}
+        if(base && item.index==result.boot_index) {
+            need(content_path.size()<sizeof result.boot_path,"Base boot content path is too long");
+            std::snprintf(result.boot_path,sizeof result.boot_path,"%s",content_path.c_str());
+        }
     }
     if(mapping_changed)add("shared1/content.map",std::move(mapping),true);
     Bytes uids=read(root/"sys/uid.sys",max_metadata);need(uids.size()%12==0,"Truncated NAND UID table");
@@ -205,7 +226,7 @@ WiiWadInstallResult install(const fs::path& wad_path,const fs::path& key_path,co
         publish(temporary,target,output.existed);need(read(target,max_wad)==output.value,"Published DLC content did not verify");
     }
     chain(root/prefix/"data");fs::create_directories(root/prefix/"data");
-    return {title,uid,count,ticket[tb+0xb1]};
+    result.installed={title,uid,count,ticket[tb+0xb1]};return result;
 }
 }
 extern "C" bool wii_wad_install(const char* wad_path,const char* common_key_path,const char* copied_nand,
@@ -213,7 +234,16 @@ extern "C" bool wii_wad_install(const char* wad_path,const char* common_key_path
     if(result)*result={};if(error && capacity)*error=0;
     try {
         need(wad_path && *wad_path && common_key_path && *common_key_path && copied_nand && *copied_nand,"Missing WAD, common-key or copied-profile path");
-        const auto installed=install(utf8_path(wad_path),utf8_path(common_key_path),utf8_path(copied_nand),expected_title);
+        const auto installed=install(utf8_path(wad_path),utf8_path(common_key_path),utf8_path(copied_nand),expected_title,false);
+        if(result)*result=installed.installed;return true;
+    }catch(const std::exception& e){if(error && capacity)std::snprintf(error,capacity,"%s",e.what());return false;}
+}
+extern "C" bool wii_wad_install_base(const char* wad_path,const char* common_key_path,const char* copied_nand,
+    uint64_t expected_title,WiiWadBaseInstallResult* result,char* error,size_t capacity) {
+    if(result)*result={};if(error && capacity)*error=0;
+    try {
+        need(wad_path && *wad_path && common_key_path && *common_key_path && copied_nand && *copied_nand,"Missing WAD, common-key or copied-profile path");
+        const auto installed=install(utf8_path(wad_path),utf8_path(common_key_path),utf8_path(copied_nand),expected_title,true);
         if(result)*result=installed;return true;
     }catch(const std::exception& e){if(error && capacity)std::snprintf(error,capacity,"%s",e.what());return false;}
 }
