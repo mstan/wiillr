@@ -49,6 +49,13 @@ set(GC_WII_POWERPC_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/powerpc-recomp
 option(GCN_VULKAN "Build reference Vulkan renderer" OFF)
 option(GCN_USE_CCACHE "Use ccache for reference core" OFF)
 add_subdirectory(external/gc-wii-core machine-reference)
+add_executable(test_wii_native_bindings tests/test_native.c)
+target_include_directories(test_wii_native_bindings PRIVATE include
+  external/gc-wii-core/dsp_lle/include external/powerpc-recomp-core/runtime/include)
+target_compile_definitions(test_wii_native_bindings PRIVATE
+  WIILLR_MENU_PICTURES=1 WIILLR_MM9_RENDERER=1)
+target_link_libraries(test_wii_native_bindings PRIVATE gcn_runtime_core)
+add_test(NAME wii_native_page_bindings COMMAND test_wii_native_bindings)
 include(external/gc-wii-core/dsp_lle/native/CMakeLists.txt)
 set(WIILLR_DSP "interpreter-development" CACHE STRING "Build-selected DSP engine")
 set(WIILLR_DSP_CATALOG "" CACHE PATH "Private static DSP catalog")
