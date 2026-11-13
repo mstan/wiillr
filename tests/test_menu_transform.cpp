@@ -48,7 +48,10 @@ int main() {
     *bytes(c,I+0x50)=0xa0; // Aspect requested, pane excludes it: two extra branch cycles.
     c.cycle_deadline=c.cycles+628;CHECK(unchanged_rejection(c));
     c.cycle_deadline=c.cycles+629;CHECK(wii_menu_transform_apply(&c));CHECK(c.cycles==729);
-    for(unsigned test=0;test<14;test++) {
+    c=initial;std::memcpy(c.ram,initial_ram.data(),initial_ram.size());
+    c.fpscr=0x82024004; // Original Menu context: nearest, NI, sticky status.
+    CHECK(wii_menu_transform_apply(&c));CHECK((c.fpscr&0xff)==4 && c.cycles==727);
+    for(unsigned test=0;test<15;test++) {
         c=initial;std::memcpy(c.ram,initial_ram.data(),initial_ram.size());
         switch(test) {
         case 0:word(c,P+0x38,0x80000000);break; // Negative-zero rotation is not certified.
@@ -66,6 +69,8 @@ int main() {
             real(c,P+0x44,std::numeric_limits<float>::max());real(c,I+0x44,2);break;
         case 12:real(c,P+0x44,1.e-40f);break; // Original GQR0 denormal flushing retained.
         case 13:word(c,c.gpr[2]-26056,0x40000000);break;
+        case 14:c.fpscr=4;*bytes(c,P+0xcf)=5;*bytes(c,I+0x50)=0x20;
+            real(c,P+0x44,std::numeric_limits<float>::min());real(c,I+0x44,.5f);break;
         }
         std::feraiseexcept(FE_DIVBYZERO);CHECK(unchanged_rejection(c));std::feclearexcept(FE_ALL_EXCEPT);
     }

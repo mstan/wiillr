@@ -60,7 +60,10 @@ bool separate(uint32_t a,uint32_t size,uint32_t b,uint32_t other) {
 }
 }
 extern "C" bool wii_menu_transform_plan(CPUState* cpu,WiiMenuTransformPlan* output) {
-    if(!cpu || !output || !(cpu->msr&0x2000u) || (cpu->hid2&(PPC_HID2_PSE|PPC_HID2_LSQE))!=(PPC_HID2_PSE|PPC_HID2_LSQE) || (cpu->fpscr&0xffu) || cpu->gqr[0] ||
+    /* RN remains nearest and exception enables remain clear. Both IEEE and
+     * the Menu's normal NI mode are certified; denormal inputs/results still
+     * select the original body, including aspect underflow. */
+    if(!cpu || !output || !(cpu->msr&0x2000u) || (cpu->hid2&(PPC_HID2_PSE|PPC_HID2_LSQE))!=(PPC_HID2_PSE|PPC_HID2_LSQE) || (cpu->fpscr&0xfbu) || cpu->gqr[0] ||
        std::fegetround()!=FE_TONEAREST)return false;
     FloatingEnvironment environment;if(!environment.valid)return false;
     Reader r{cpu};WiiMenuTransformPlan plan{};
