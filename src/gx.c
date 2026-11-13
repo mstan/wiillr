@@ -5,6 +5,7 @@
 #include "wiillr/fs.h"
 #include "wiillr/gx_output.h"
 #include "wiillr/mm9_dlc.h"
+#include "wiillr/mm9_mods.h"
 #include "memory/memory.h"
 #include "cpu/native_code.h"
 #include <stdio.h>
@@ -87,6 +88,7 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
         else if(g->title==0x0000000100000002ull)title="Wii Menu";
     }
     wii_mm9_dlc_bind(g);
+    wii_mm9_mods_bind(g);
     g->visible=window && !strcmp(window,"1");
 #if WIILLR_GX_SOFTWARE
     /* Reference scanout is available through the machine's TCP interface. */
@@ -248,6 +250,7 @@ bool wii_gx_tick(WiiGx* g) {
 }
 void wii_gx_stop(WiiGx* g) {
     wii_mm9_dlc_bind(NULL);
+    wii_mm9_mods_bind(NULL);
     if(g->host_input_stop)g->host_input_stop(g->host_input_user);
     g->host_input=NULL;g->host_input_stop=NULL;g->host_settings=NULL;g->host_input_user=NULL;
     if(g->machine && g->machine->hollywood.video_user==g) {

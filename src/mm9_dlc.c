@@ -57,6 +57,7 @@ static bool installed(void) {
     fprintf(stderr,"{\"native_mm9_dlc\":1,\"verified_contents\":%u,\"records\":%u,\"signature_authentication\":false}\n",present,records);
     return available;
 }
+bool wii_mm9_dlc_available(void){return owner && owner->title==0x0001000157523945ull && installed() && flags[1]==3;}
 bool wii_mm9_dlc_dispatch(CPUState* cpu,u32 address) {
 #if WIILLR_MM9_DLC
     unsigned n=0;while(n<3 && entries[n]!=address)n++;

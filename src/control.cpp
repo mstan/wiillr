@@ -13,6 +13,7 @@ constexpr int INVALID_SOCKET=-1,SOCKET_ERROR=-1;
 #endif
 extern "C" {
 #include "wiillr/control.h"
+#include "wiillr/mm9_mods.h"
 #include "memory/memory.h"
 #include "cpu/interpreter.h"
 #include "cpu/aot_module.h"
@@ -164,7 +165,7 @@ struct WiiControl {
     while(stream>>word)args.push_back(word);if(args.empty())throw std::runtime_error("command required");
     if(args[0]=="status" && args.size()==1) {
       const auto dsp=machine->dsp.engine?gcn_dsp_engine_stats(machine->dsp.engine):GcnDspEngineStats{};
-      return "{\"ok\":true,\"cycles\":"+std::to_string(cpu->cycles)+",\"pc\":"+std::to_string(cpu->pc)+
+      return "{\"ok\":true,\"title\":"+std::to_string(gx->title)+",\"cycles\":"+std::to_string(cpu->cycles)+",\"pc\":"+std::to_string(cpu->pc)+
         ",\"fields\":"+std::to_string(machine->fields)+",\"paused\":"+(paused?"true":"false")+
         ",\"halted\":"+(cpu->halted?"true":"false")+",\"gpio_out\":"+std::to_string(machine->gpio_out)+
         ",\"ppc_interpreter\":"+std::to_string(gcn_interpreter_instruction_count())+
@@ -172,6 +173,15 @@ struct WiiControl {
         ",\"dsp_interpreter\":"+std::to_string(dsp.interpreter_instructions)+",\"dsp_misses\":"+std::to_string(dsp.misses)+"}";
     }
     if(args[0]=="pause" && args.size()==1){paused=true;stop_at=0;return "{\"ok\":true}";}
+    if(args[0]=="game-actions" && args.size()==2) {
+      const auto held=number(args[1],10);
+      if(!paused || held>3)throw std::runtime_error("paused game actions required");
+      wii_mm9_mods_test_actions(unsigned(held));return "{\"ok\":true}";
+    }
+    if(args[0]=="gameplay-mods" && args.size()==1) {
+      char result[4096];if(wii_mm9_mods_status(result,sizeof result)<=0)throw std::runtime_error("mod status unavailable");
+      return result;
+    }
     if(args[0]=="review" && args.size()==3) {
       const auto volume=number(args[2],10);
       if(!paused || (args[1]!="show" && args[1]!="hide") || volume>100 ||
@@ -284,6 +294,12 @@ struct WiiControl {
       if(!paused || width>8192 || height>8192 || !gx->presentation ||
          !gx->presentation->resize_window(u32(width),u32(height)))throw std::runtime_error("window unavailable");
       return "{\"ok\":true}";
+    }
+    if(args[0]=="raster" && args.size()==1) {
+      u32 width=0,height=0;
+      if(!paused || !gx->resolution || !gx->resolution->raster_size(&width,&height) || !width || !height)
+        throw std::runtime_error("raster size unavailable");
+      return "{\"ok\":true,\"width\":"+std::to_string(width)+",\"height\":"+std::to_string(height)+"}";
     }
     if(args[0]=="display" && args.size()==1) {
       u32 width=0,height=0;

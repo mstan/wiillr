@@ -17,6 +17,18 @@ int main(void) {
     s.player_src[0]=0;input.buttons=~0u;CHECK(!wii_launcher_input_map(&s,&input).buttons);
     s.player_src[0]=2;input.buttons=0;
     CHECK(!wii_launcher_input_map(&s,&input).buttons); /* keyboard source isolated */
+    input.buttons=1u<<SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER;
+    CHECK(!(wii_launcher_input_map(&s,&input).buttons&0x10)); /* R1 is no longer HOME */
+    CHECK(wii_launcher_input_actions(&s,&input)==2);
+    input.buttons=1u<<SDL_GAMEPAD_BUTTON_LEFT_SHOULDER;
+    CHECK(wii_launcher_input_actions(&s,&input)==1);
+    input.buttons=0;input.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER]=12000;
+    CHECK(wii_launcher_input_map(&s,&input).buttons&0x10); /* L2 HOME */
+    CHECK(!wii_launcher_input_actions(&s,&input));
+    input.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER]=0;
+    s.assist_pad_bind[0]=0;input.buttons=1u<<SDL_GAMEPAD_BUTTON_LEFT_SHOULDER;
+    CHECK(!wii_launcher_input_actions(&s,&input)); /* explicit unbind */
+    input.buttons=0;
     keys[SDL_SCANCODE_F10]=true;
     CHECK(wii_launcher_input_map(&s,&input).buttons==0x20); /* physical console Sync */
     keys[SDL_SCANCODE_F10]=false;

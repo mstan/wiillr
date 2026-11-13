@@ -75,6 +75,17 @@ saved preferences apply at boot and on resuming settings. Whole-title upscale
 performance and broader renderer coverage remain unqualified.
 F10 presses the virtual console's Sync button for first-time Remote pairing.
 
+The Mods page offers two optional Mega Man 9 controls, both disabled by default.
+With the installed Proto Man DLC, character switching exchanges Mega Man and
+Proto Man on a short Select press; holding Select for two seconds opens the
+original records screen. Each character keeps separate health, weapon energy
+and selected weapon during the session. Original respawn initialization resets
+these pools; lives, acquired weapons and game mode remain shared. Switching
+waits for a safe standing position. Quick weapon switching uses L1/R1 to cycle
+only acquired weapons, or Q/E with keyboard input. Bind these actions under
+Controller. The default Home binding is L2; explicit saved bindings persist.
+Mod changes during play take effect after restarting the game.
+
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
 with gcnllr. Initial targets are the original Startup Menu and Mega Man 9.
 
@@ -146,7 +157,7 @@ one console Sync press. These feed device input without changing guest flags.
 hidden and silent. `--audio-output muted` exercises the real host device without
 speaker output. `--window-title` sets the clean game caption. Visible controls
 use arrows/left stick for the sideways D-pad, X/South for 2, Z/East for 1,
-Enter/Start for Plus, C/West for A and A/right shoulder for HOME. Hold D/right
+Enter/Start for Plus, C/West for A and A/L2 for HOME. Hold D/right
 trigger to enter virtual-remote pairing and press the console Sync button.
 I/J/K/L or the right stick move the virtual pointer. Physical-device ownership
 and the owner-facing interaction route still require qualification.
@@ -216,8 +227,12 @@ code variants with matching title/profile identities.
 `WIILLR_CONTROL_PAUSED=1` parks before the first instruction. `tools/wii_control.py`
 provides `status`, `pause`, `run [guest-cycles]`, `input mask [x y pointing present
 pairing]`, `sync`, `read hex-address byte-count`, `write hex-address hex-bytes`,
-`frame` and `quit`. With the shared launcher attached, paused `settings` opens
-the same in-session settings. Paused `review show 100` reveals the MM9 window
+`frame` and `quit`. `status` includes the active title ID. Paused `game-actions`
+sets artificial previous/next weapon buttons (bits 0/1), while `gameplay-mods`
+reports their session state. Paused `raster` reports the actual internal render-target
+dimensions when the native resolution service is attached. With the shared
+launcher attached, paused `settings` opens the same in-session settings.
+Paused `review show 100` reveals the MM9 window
 in windowed mode at normal host volume; `review hide 0` parks it silently for
 scenario setup. These commands affect the current process's window and gain,
 without advancing guest execution. Frame capture drains actual GPU work without advancing guest

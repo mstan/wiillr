@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/launcher.h"
 #include "wiillr/launcher_input.h"
+#include "wiillr/launcher_mods.h"
+#include "wiillr/mm9_mods.h"
 #include "wiillr/fs.h"
 #include "wiillr/wad.h"
 #include "recomp_launcher.h"
@@ -32,6 +34,7 @@ static const int resolution_values[]={1,960,1440,1920,3840,7680};
 static int import_dlc(void* context,const char* path,char* error,size_t capacity) {
     (void)context;WiiWadInstallResult result={0};
     if(!wii_wad_install(path,dlc.key,dlc.nand,0x0001000577523945ull,&result,error,capacity))return 0;
+    wii_launcher_mods_dlc_installed();
     char temporary[32864];
     snprintf(temporary,sizeof temporary,"%s.%llu.tmp",dlc.cache,(unsigned long long)SDL_GetTicksNS());
     if(!SDL_SaveFile(temporary,path,strlen(path)) || !SDL_RenamePath(temporary,dlc.cache)) {
@@ -148,7 +151,10 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     game.known_sha256=(const uint8_t(*)[32])expected;game.num_known_sha256=1;
     game.num_players=1;game.config_path=config_path;game.rom_cache_path=rom_cache_path;
     if(!prepare_dlc(&game,nand,directory)){SDL_free(pref);return 2;}
+    if(!wii_launcher_mods_prepare(&game,directory,nand)){SDL_free(pref);return 2;}
     game.settings_bindings=1;
+    static const char* const actions[]={"Previous weapon (L)","Next weapon (R)"};
+    game.assist_binding_labels=actions;game.assist_binding_count=2;
     if(view_supported()) {
         game.has_supersampling=1;
         game.internal_resolution_labels=resolution_labels;
@@ -183,6 +189,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     }
     if(strlen(selected)>=sizeof boot_image)return 2;
     strcpy(boot_image,selected);game_info=game;
+    wii_launcher_mods_start();
     char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
     if(!set_env("WIILLR_WINDOW","1") || !set_env("GCN_WINDOW","1") ||
        !set_env("WIILLR_WINDOW_TITLE","Mega Man 9") ||
@@ -205,6 +212,9 @@ static bool session_review(void* user,bool visible,u32 volume) {
     }
     SDL_free(windows);
     if(!ok || !gcn_host_audio_set_volume(volume))return false;
+    char gain[8];snprintf(gain,sizeof gain,"%u",volume);
+    if(!set_env("GCNLLR_RENDER_HIDDEN",visible?"0":"1") ||
+       !set_env("GCN_AUDIO_VOLUME",gain))return false;
     settings.enable_audio=1;settings.volume=(int)volume;
     wii_pacing_reset(&gx->machine->pacing);return true;
 }
@@ -216,6 +226,7 @@ static bool session_settings(void* user) {
     SDL_Window* gl_window=SDL_GL_GetCurrentWindow();
     SDL_GLContext gl_context=SDL_GL_GetCurrentContext();
     RecompLauncherCGameInfo in_session=game_info;in_session.in_session=1;
+    wii_launcher_mods_in_session();
     char selected[32768];
     const int action=recomp_launcher_run_window("Mega Man 9 Settings",&settings,
         &in_session,NULL,boot_image,selected,sizeof selected);
@@ -245,21 +256,26 @@ static void session_input(void* user,GcnllrPad* pad) {
     wii_launcher_input_poll(&settings,pad);
     const bool controls_held=pressed || pad->buttons || pad->stick_x!=128 ||
         pad->stick_y!=128 || pad->substick_x!=128 || pad->substick_y!=128 ||
-        (focused && SDL_GetMouseState(NULL,NULL));
+        wii_launcher_input_held_actions() || (focused && SDL_GetMouseState(NULL,NULL));
     if(input_release && !controls_held)input_release=false;
     gx->host_input_capture=input_release;
     if(input_release) {
         memset(pad,0,sizeof *pad);
         pad->stick_x=pad->stick_y=pad->substick_x=pad->substick_y=128;
     }
+    wii_mm9_mods_host_actions(gx->title==0x0001000157523945ull && !gx->scripted_input && !input_release &&
+        !(pad->buttons&0x10)?wii_launcher_input_held_actions():0);
 }
 
 bool wii_launcher_window(WiiGx* gx) {
     if(!active)return true;
     static int applied_scale,applied_fullscreen,applied_view;
     const bool mm9=gx->title==0x0001000157523945ull;
+    const bool menu=gx->title==0x0000000100000002ull;
     const int view=mm9 && view_supported()?settings.aspect_index:0;
-    const unsigned raster_scale=mm9 && view_supported() && settings.internal_resolution>1?
+    /* The shared raster target also renders Wii Menu. Retain the selected
+     * resolution across HOME/Start while its original layout stays unchanged. */
+    const unsigned raster_scale=(mm9 || menu) && view_supported() && settings.internal_resolution>1?
         (unsigned)settings.internal_resolution/480:1;
     if(gx->resolution) {
         if(!gx->resolution->set_scale(raster_scale))return false;

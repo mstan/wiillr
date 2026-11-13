@@ -7,6 +7,7 @@
 
 static uint32_t selected_id;
 static char selected_guid[40],selected_path[4096];
+static unsigned held_actions;
 
 static const int keys[11]={SDL_SCANCODE_UP,SDL_SCANCODE_DOWN,SDL_SCANCODE_LEFT,
     SDL_SCANCODE_RIGHT,SDL_SCANCODE_Z,SDL_SCANCODE_X,SDL_SCANCODE_RETURN,
@@ -24,6 +25,10 @@ void wii_launcher_input_defaults(RecompLauncherCSettings* s) {
         s->player_key_bind[0][b]=keys[b];
         s->player_pad_bind[0][b]=RECOMP_LAUNCHER_PAD_BUTTON(buttons[b]);
     }
+    s->player_pad_bind[0][10]=RECOMP_LAUNCHER_PAD_AXIS(SDL_GAMEPAD_AXIS_LEFT_TRIGGER,1);
+    s->assist_key_bind[0]=SDL_SCANCODE_Q;s->assist_key_bind[1]=SDL_SCANCODE_E;
+    s->assist_pad_bind[0]=RECOMP_LAUNCHER_PAD_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+    s->assist_pad_bind[1]=RECOMP_LAUNCHER_PAD_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
 }
 
 static bool key_down(const WiiLauncherInput* input,int binding) {
@@ -50,6 +55,19 @@ static bool pad_down(const WiiLauncherInput* input,int binding,int threshold) {
     }
     return false;
 }
+
+unsigned wii_launcher_input_actions(const RecompLauncherCSettings* s,const WiiLauncherInput* input) {
+    int deadzone=s->deadzone[0];if(deadzone<0)deadzone=0;if(deadzone>100)deadzone=100;
+    int threshold=deadzone*32767/100;if(threshold<1)threshold=1;
+    unsigned result=0;
+    for(int n=0;n<2;n++) {
+        bool held=s->player_src[0]==1?key_down(input,s->assist_key_bind[n]):
+            s->player_src[0]==2?pad_down(input,s->assist_pad_bind[n],threshold):false;
+        if(held)result|=1u<<n;
+    }
+    return result;
+}
+unsigned wii_launcher_input_held_actions(void){return held_actions;}
 
 GcnllrPad wii_launcher_input_map(const RecompLauncherCSettings* s,const WiiLauncherInput* input) {
     GcnllrPad pad={0};pad.stick_x=pad.stick_y=pad.substick_x=pad.substick_y=128;
@@ -150,14 +168,15 @@ void wii_launcher_input_poll(void* user,GcnllrPad* pad) {
         }
     }
     *pad=wii_launcher_input_map(s,&input);
+    held_actions=wii_launcher_input_actions(s,&input);
 }
 
 void wii_launcher_input_stop(void* user) {
-    (void)user;launcher_input_shutdown();
+    (void)user;launcher_input_shutdown();held_actions=0;
     /* Retain the device path through original title reset/SDL reinit. */
 }
 
 void wii_launcher_input_reset(void) {
-    launcher_input_shutdown();selected_id=0;
+    launcher_input_shutdown();selected_id=0;held_actions=0;
     selected_guid[0]=selected_path[0]=0;
 }

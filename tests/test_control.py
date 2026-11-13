@@ -54,6 +54,7 @@ def main():
                 assert not command('video 0 0')['ok']  # no renderer/scanout attached
                 assert not command('video 65536 65536')['ok']
                 assert not command('settings')['ok']  # no host UI attached
+                assert not command('raster')['ok']  # no native raster attached
                 assert command('fingerprint') == original
                 assert command('write 80005000 12345678')['ok']
                 changed = command('fingerprint')
