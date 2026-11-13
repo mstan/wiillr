@@ -6,6 +6,7 @@
 #include "wiillr/mm9_mods.h"
 #include "wiillr/mm9_dlc.h"
 #include "memory/memory.h"
+#include "cpu/native_code.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -56,20 +57,30 @@ static u32 r32(CPUState* c,u32 a){return mem_read32(c,a,c->pc);}
 static void w8(CPUState* c,u32 a,u8 v){mem_write8(c,a,v,c->pc);}
 static void w16(CPUState* c,u32 a,u16 v){mem_write16(c,a,v,c->pc);}
 static void w32(CPUState* c,u32 a,u32 v){mem_write32(c,a,v,c->pc);}
+/* Original 64-byte function heads from the qualified USA image. */
+static const u32 code_heads[][2]={
+    {FRAME,0xe5840b5bu},{FILES,0x861cae27u},{SPAWN,0xd4e80e98u},
+    {CACHE,0xbe825ba5u},{REFILL,0xfe346dd5u},{NEW_MEGA,0xc8946023u},
+    {NEW_PROTO,0xd9e2767fu},{CLEANUP,0x52d86237u},{STAND,0xdd2eb4bfu},
+    {WEAPON,0x82515faau},{SOUND,0x0433e1e5u}
+};
+void wii_mm9_mods_invalidate(u32 address,u32 size) {
+    const u32 a=address&0x1fffffffu;const u64 end=(u64)a+size;
+    for(unsigned k=0;k<sizeof code_heads/sizeof code_heads[0];++k) {
+        const u32 head=code_heads[k][0]&0x1fffffffu;
+        if(a<(u64)head+64 && end>head) {
+            state.attested=state.rejected=false;return;
+        }
+    }
+}
 static bool identity(CPUState* c) {
     if(state.attested || state.rejected)return state.attested;
-    /* Original 64-byte function heads from the qualified USA image. */
-    static const u32 checks[][2]={
-        {FRAME,0xe5840b5bu},{FILES,0x861cae27u},{SPAWN,0xd4e80e98u},
-        {CACHE,0xbe825ba5u},{REFILL,0xfe346dd5u},{NEW_MEGA,0xc8946023u},
-        {NEW_PROTO,0xd9e2767fu},{CLEANUP,0x52d86237u},{STAND,0xdd2eb4bfu},
-        {WEAPON,0x82515faau},{SOUND,0x0433e1e5u}
-    };
-    for(unsigned k=0;k<sizeof checks/sizeof checks[0];k++) {
-        const u32 a=checks[k][0];if(!ram(c,a,64))return false;
+    for(unsigned k=0;k<sizeof code_heads/sizeof code_heads[0];k++) {
+        const u32 a=code_heads[k][0];if(!ram(c,a,64))return false;
+        gcn_native_code_watch(a,64);
         u32 hash=2166136261u;
         for(unsigned n=0;n<64;n++)hash=(hash^r8(c,a+n))*16777619u;
-        if(hash!=checks[k][1]) {
+        if(hash!=code_heads[k][1]) {
             state.rejected=true;
             fprintf(stderr,"MM9 optional mods: unsupported original code at %08x\n",a);
             return false;
@@ -329,7 +340,14 @@ bool wii_mm9_mods_dispatch(CPUState* c,u32 pc) {
     /* FRAME is an original indirect function-pointer entry (80089388 bctr),
      * not a same-page shadow-call return. Every injected subroutine returns
      * cross-page to this catalogued entry; no generated-code seam is required. */
-    if(state.flight!=IDLE)return pc==FRAME?continuation(c):false;
+    if(state.flight!=IDLE) {
+        if(pc!=FRAME)return false;
+        if(!identity(c)) {
+            fprintf(stderr,"MM9 optional mods: code changed during native continuation\n");
+            c->halted=true;return true;
+        }
+        return continuation(c);
+    }
     if(state.skip_pc==pc) {state.skip_pc=0;return false;}
     if(pc!=FRAME && pc!=SPAWN && pc!=CACHE && pc!=REFILL &&
        pc!=NEW_MEGA && pc!=NEW_PROTO)return false;

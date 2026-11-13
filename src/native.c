@@ -3,6 +3,7 @@
 #include "wiillr/native.h"
 #include "cpu/overlay_module.h"
 #include "cpu/native_code.h"
+#include "cpu/native_candidate.h"
 #include "wiillr/mm9_dlc.h"
 #include "wiillr/mm9_mods.h"
 #include <stdio.h>
@@ -31,6 +32,7 @@ bool gcn_overlay_call(CPUState* cpu,u32 address){
 }
 void gcn_overlay_icbi(u32 address,u32 size){
     const u32 physical=address&0x1fffffffu;
+    wii_mm9_mods_invalidate(address,size);
     if(physical<0x24e000u && (u64)physical+size>0x24c000u)wii_mm9_dlc_invalidate(address,size);
 #if WIILLR_MM9_RENDERER
     wii_mm9_renderer_hook_invalidate(address,size);
@@ -47,11 +49,16 @@ void wii_native_install(void){
     gcn_overlay_module_index(&module,page_index,GCN_OVERLAY_INDEX_SLOTS);
     /* Reuse the shared store/DMA invalidation observer. Direct calls retain
      * the live physical/cached/uncached PC when selecting the compiled body. */
-    gcn_native_code_set_candidate(0,GC_MAIN_RAM_SIZE,candidate,gcn_overlay_icbi);
+    /* AOT and HLE identity checks watch their code ranges. Ordinary data keeps
+     * the existing first-write/CRC fence without repeated code invalidation. */
+    gcn_native_code_set_candidate_scoped(0,GC_MAIN_RAM_SIZE,candidate,gcn_overlay_icbi);
 }
 void wii_native_summary(void){
+    u32 observed=0;
+    for(u32 page=0;page<GC_MAIN_RAM_SIZE/4096u;++page)
+        if(gcn_native_store_pages[page]&GCN_NATIVE_STORE_OBSERVED)++observed;
     printf("{\"PPC_provider\":\"static-content-verified\",\"catalog_sha256\":\"%s\","
-           "\"native_dispatches\":%llu,\"content_hashes\":%llu,\"invalidations\":%llu}\n",
+           "\"native_dispatches\":%llu,\"content_hashes\":%llu,\"invalidations\":%llu,\"store_observed_pages\":%u}\n",
         WIILLR_PPC_CATALOG_SHA,(unsigned long long)module.dispatches,
-        (unsigned long long)module.hashes,(unsigned long long)module.invalidations);
+        (unsigned long long)module.hashes,(unsigned long long)module.invalidations,observed);
 }

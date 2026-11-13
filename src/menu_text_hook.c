@@ -5,6 +5,7 @@
 #include "wiillr/menu_picture.h"
 #include "wiillr/menu_picture_hook.h"
 #include "memory/memory.h"
+#include "cpu/native_code.h"
 #include <stdio.h>
 
 #define TEXT_DRAW 0x81521dd8u
@@ -24,6 +25,7 @@ static const u8* read_memory(void* user,u32 address,u32 size) {
 }
 static bool attest(CPUState* cpu) {
     const u8* data=read_memory(cpu,TEXT_DRAW,TEXT_BYTES);if(!data)return false;
+    gcn_native_code_watch(TEXT_DRAW,TEXT_BYTES);
     u64 hash=UINT64_C(14695981039346656037);
     for(u32 i=0;i<TEXT_BYTES;++i){hash^=data[i];hash*=UINT64_C(1099511628211);}
     return hash==TEXT_HASH;

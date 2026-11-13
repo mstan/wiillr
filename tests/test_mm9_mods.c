@@ -9,6 +9,11 @@
 
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);exit(1);}}while(0)
 static bool owned=true;
+static unsigned watch_calls;
+static u32 watch_address,watch_size;
+void gcn_native_code_watch(u32 address,u32 size) {
+    ++watch_calls;watch_address=address;watch_size=size;
+}
 bool wii_mm9_dlc_available(void){return owned;}
 u8* gcn_mem_resolve(CPUState* c,u32 a,u32* size) {
     const u32 p=a&0x1fffffffu;
@@ -34,6 +39,7 @@ static void seed_file(unsigned n,unsigned type) {
 
 static void setup(bool characters,bool weapons) {
     memset(cpu.ram,0,cpu.ram_size);memset(cpu.gpr,0,sizeof cpu.gpr);
+    cpu.halted=false;watch_calls=0;
     gx.cpu=&cpu;gx.title=0x0001000157523945ull;owned=true;
     wii_mm9_mods_configure(characters,weapons);wii_mm9_mods_bind(&gx);
     state.attested=true; /* synthetic instruction identity intentionally omitted */
@@ -92,8 +98,30 @@ int main(void) {
     memset(&cpu,0,sizeof cpu);cpu.ram_size=GC_MAIN_RAM_SIZE;cpu.ram=calloc(1,cpu.ram_size);CHECK(cpu.ram);
     setup(false,false);state.attested=false;
     CHECK(!tick(2,true));CHECK(r32(&cpu,PRESSED)==MINUS && !state.rejected);
+    CHECK(watch_calls==0);
     setup(true,true);state.attested=false;
     CHECK(!tick(2,true));CHECK(state.rejected && r32(&cpu,PRESSED)==MINUS);
+    CHECK(watch_calls==1 && watch_address==FRAME && watch_size==64);
+    CHECK(!tick(2,true));CHECK(watch_calls==1); /* rejected identity is cached */
+    wii_mm9_mods_invalidate(0x80600000u,4);CHECK(state.rejected);
+    wii_mm9_mods_invalidate((FRAME&0x1fffffffu)|0xc0000000u,1);
+    CHECK(!state.attested && !state.rejected);
+    CHECK(!tick(2,true));CHECK(watch_calls==2 && state.rejected);
+    for(unsigned n=0;n<sizeof code_heads/sizeof code_heads[0];++n) {
+        state.attested=true;state.rejected=true;
+        wii_mm9_mods_invalidate((code_heads[n][0]&0x1fffffffu)+63,1);
+        CHECK(!state.attested && !state.rejected);
+        state.attested=true;
+        wii_mm9_mods_invalidate(code_heads[n][0]+64,1);CHECK(state.attested);
+    }
+    /* Invalidating an identity while a guest helper is in flight must stop
+     * safely rather than resume FRAME with that helper's live registers. */
+    setup(true,false);CHECK(!tick(0,true));CHECK(tick(0,false));
+    CHECK(state.flight!=IDLE);const int flight=state.flight;
+    wii_mm9_mods_invalidate(FRAME,64);cpu.pc=FRAME;cpu.gpr[3]=0x12345678;
+    CHECK(wii_mm9_mods_dispatch(&cpu,FRAME));
+    CHECK(cpu.halted && state.flight==flight && cpu.pc==FRAME && cpu.gpr[3]==0x12345678);
+    CHECK(watch_calls==1 && state.rejected);
     setup(true,false);owned=false;
     CHECK(!tick(0,true));CHECK(r32(&cpu,PRESSED)==MINUS);
     CHECK(!tick(0,false));CHECK(r8(&cpu,PLAYER+9)==0);

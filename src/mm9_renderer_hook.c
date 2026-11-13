@@ -140,6 +140,7 @@ static u8 r8(CPUState* cpu,u32 address) {const u8* b=read_memory(cpu,address,1);
 static float rf(CPUState* cpu,u32 address){const u32 bits=r32(cpu,address);float value;memcpy(&value,&bits,sizeof value);return value;}
 static bool identity(CPUState* cpu,u32 address,u32 size,u64 expected) {
     const u8* b=read_memory(cpu,address,size);if(!b)return false;u64 h=UINT64_C(14695981039346656037);
+    gcn_native_code_watch(address,size);
     for(u32 n=0;n<size;n++){h^=b[n];h*=UINT64_C(1099511628211);}return h==expected;
 }
 static bool attest(CPUState* cpu) {

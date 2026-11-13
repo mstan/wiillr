@@ -5,6 +5,7 @@
 #include "wiillr/mm9_dlc.h"
 #include "wiillr/fs.h"
 #include "memory/memory.h"
+#include "cpu/native_code.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +65,7 @@ bool wii_mm9_dlc_dispatch(CPUState* cpu,u32 address) {
     if(n==3 || !owner || owner->cpu!=cpu || owner->title!=0x0001000157523945ull || !installed())return false;
     if(!verified[n]) {
         if(!ram(cpu,address,64))return false;
+        gcn_native_code_watch(address,64);
         u32 hash=2166136261u;
         for(unsigned i=0;i<64;i++)hash=(hash^mem_read8(cpu,address+i))*16777619u;
         if(hash!=hashes[n]) {fprintf(stderr,"MM9 DLC unsupported code at %08x\n",address);cpu->halted=true;return true;}

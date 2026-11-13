@@ -4,6 +4,7 @@
 #include "wiillr/menu_text_hook.h"
 #include "wiillr/menu_frame_hook.h"
 #include "memory/memory.h"
+#include "cpu/native_code.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -27,6 +28,7 @@ static const u8* read_memory(void* user,u32 address,u32 size) {
 }
 static bool attest(CPUState* cpu) {
     const u8* bytes=read_memory(cpu,MENU_DRAW,MENU_DRAW_BYTES);if(!bytes)return false;
+    gcn_native_code_watch(MENU_DRAW,MENU_DRAW_BYTES);
     u64 hash=UINT64_C(14695981039346656037);
     for(u32 i=0;i<MENU_DRAW_BYTES;i++){hash^=bytes[i];hash*=UINT64_C(1099511628211);}
     return hash==MENU_DRAW_FNV;

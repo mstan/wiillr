@@ -8,6 +8,7 @@
 void wii_mm9_mods_configure(bool characters,bool weapons);
 void wii_mm9_mods_bind(WiiGx*);
 /* Called before the original native entry. True means PC was redirected. */
+void wii_mm9_mods_invalidate(u32 address,u32 size);
 bool wii_mm9_mods_dispatch(CPUState*,u32 pc);
 /* Sample once per VI field; 1 = previous, 2 = next. No host button remapping. */
 void wii_mm9_mods_host_actions(unsigned held);
