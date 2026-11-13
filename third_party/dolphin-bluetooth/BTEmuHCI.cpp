@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "BTEmu.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
 #include <cstring>
@@ -1229,6 +1231,9 @@ void BluetoothEmuDevice::CommandWriteScanEnable(u32 input_address)
   memory.CopyFromEmu(&write_scan_enable, input_address, sizeof(write_scan_enable));
 
   m_scan_enable = write_scan_enable.scan_enable;
+  if(std::getenv("WIILLR_IOS_TRACE"))
+    std::fprintf(stderr,"Bluetooth HCI WRITE_SCAN_ENABLE cycles=%llu value=%02x\n",
+      static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(m_scan_enable));
 
   hci_write_scan_enable_rp reply;
   reply.status = 0x00;
