@@ -9,8 +9,14 @@
 #include <string.h>
 #if WIILLR_MENU_TRANSFORM
 #include <wiillr/menu_transform.h>
+#endif
+#if WIILLR_MENU_AUDIO_EFFECT
+#include <wiillr/menu_audio_effect.h>
+#endif
+#if WIILLR_MENU_TRANSFORM || WIILLR_MENU_AUDIO_EFFECT
 #include <fenv.h>
 #endif
+#include <stdlib.h>
 
 #ifndef WIILLR_MENU_FRAME_MODE
 #define WIILLR_MENU_FRAME_MODE 0
@@ -22,6 +28,7 @@ static struct {
     WiiMenuView view;float model[12];bool active,bad,projection_ready;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
     bool transform_verified,transform_sampled;u64 transforms,transform_declines;
+    bool audio_verified,audio_sampled;u64 audio_batches,audio_samples,audio_declines;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -55,14 +62,41 @@ static bool transform_identity(CPUState* cpu) {
     state.transform_verified=true;return true;
 }
 #endif
+#if WIILLR_MENU_AUDIO_EFFECT
+static bool audio_identity(CPUState* cpu) {
+    if(state.audio_verified)return true;
+    if(!identity(cpu,0x81556000,4096,UINT64_C(0x79b93e65b787c453)))return false;
+    gcn_native_code_watch(0x81556000,4096);state.audio_verified=true;return true;
+}
+static u64 fp_bits(double value){u64 bits;memcpy(&bits,&value,8);return bits;}
+static void hex_data(const u8* data,u32 size,char* output) {
+    static const char digits[]="0123456789abcdef";
+    if(!data){*output=0;return;}
+    for(u32 n=0;n<size;n++){output[n*2]=digits[data[n]>>4];output[n*2+1]=digits[data[n]&15];}output[size*2]=0;
+}
+static void audio_sample(CPUState* cpu,bool identified) {
+    if(state.audio_sampled)return;state.audio_sampled=true;
+    const char* probe=getenv("WIILLR_MENU_AUDIO_PROBE");if(!probe || strcmp(probe,"1"))return;
+    char header[657],stack[145];hex_data(bytes(cpu,cpu->gpr[4],328),328,header);hex_data(bytes(cpu,cpu->gpr[1]+8,72),72,stack);
+    fprintf(stderr,"{\"native_menu_audio_probe\":1,\"identity\":%u,\"r0\":%u,\"r1\":%u,\"r2\":%u,\"r3\":%u,\"r4\":%u,\"r5\":%u,\"r6\":%u,\"r29\":%u,\"r30\":%u,\"r31\":%u,\"fpscr\":%u,\"msr\":%u,\"host_round\":%d,\"cycles\":%llu,\"deadline\":%llu,\"fp0\":\"%016llx\",\"fp1\":\"%016llx\",\"fp3\":\"%016llx\",\"fp4\":\"%016llx\",\"fp5\":\"%016llx\",\"fp6\":\"%016llx\",\"state\":\"%s\",\"stack\":\"%s\"}\n",
+        identified?1u:0u,cpu->gpr[0],cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->gpr[5],cpu->gpr[6],cpu->gpr[29],cpu->gpr[30],cpu->gpr[31],cpu->fpscr,cpu->msr,fegetround(),
+        (unsigned long long)cpu->cycles,(unsigned long long)cpu->cycle_deadline,(unsigned long long)fp_bits(cpu->fpr[0]),(unsigned long long)fp_bits(cpu->fpr[1]),(unsigned long long)fp_bits(cpu->fpr[3]),(unsigned long long)fp_bits(cpu->fpr[4]),(unsigned long long)fp_bits(cpu->fpr[5]),(unsigned long long)fp_bits(cpu->fpr[6]),header,stack);
+}
+#endif
 void wii_menu_frame_invalidate(u32 address,u32 size) {
-#if WIILLR_MENU_TRANSFORM
+#if WIILLR_MENU_TRANSFORM || WIILLR_MENU_AUDIO_EFFECT
     const u64 begin=address&0x1fffffffu,end=begin+size;
+#endif
+#if WIILLR_MENU_TRANSFORM
     for(u32 i=0;i<sizeof transform_pages/sizeof *transform_pages;i++) {
         const u32 page=transform_pages[i].address&0x1fffffffu;
         if(begin<page+4096 && end>page){state.transform_verified=false;break;}
     }
-#else
+#endif
+#if WIILLR_MENU_AUDIO_EFFECT
+    if(begin<0x01557000 && end>0x01556000)state.audio_verified=false;
+#endif
+#if !WIILLR_MENU_TRANSFORM && !WIILLR_MENU_AUDIO_EFFECT
     (void)address;(void)size;
 #endif
 }
@@ -227,6 +261,14 @@ void wii_menu_frame_capture(const GcWiiNativeCaptureApi* api) {
 int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;state.bad=false;
+#if WIILLR_MENU_AUDIO_EFFECT
+    if(address==0x81556084) {
+        const bool identified=audio_identity(cpu);audio_sample(cpu,identified);
+        const u32 samples=identified?wii_menu_audio_effect_batch(cpu):0;
+        if(samples){++state.audio_batches;state.audio_samples+=samples;return 1;}
+        ++state.audio_declines;return 0;
+    }
+#endif
 #if WIILLR_MENU_TRANSFORM
     if(address==0x8151f22c) {
         const bool identified=transform_identity(cpu);
@@ -341,6 +383,9 @@ void wii_menu_frame_stop(void) {
     printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"isolated_buffers\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.isolated_buffers,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
 #if WIILLR_MENU_TRANSFORM
     printf("{\"native_menu_transforms\":1,\"admitted\":%llu,\"declined\":%llu}\n",(unsigned long long)state.transforms,(unsigned long long)state.transform_declines);
+#endif
+#if WIILLR_MENU_AUDIO_EFFECT
+    printf("{\"native_menu_audio_effect\":1,\"batches\":%llu,\"sample_frames\":%llu,\"declined\":%llu}\n",(unsigned long long)state.audio_batches,(unsigned long long)state.audio_samples,(unsigned long long)state.audio_declines);
 #endif
     memset(&state,0,sizeof state);
 }
