@@ -35,6 +35,16 @@ static bool attest(CPUState* cpu) {
 }
 bool wii_menu_native_boundary(WiiGx* gx) {
     WiiMachine* machine=gx->machine;CPUState* cpu=gx->cpu;
+    WiiMenuView view;
+    if(machine->gx_native_owner && !strcmp(machine->gx_native_owner,"ipl43u-frame") &&
+       wii_menu_frame_current_view(cpu,&view)==1) {
+        /* The frame begins after a complete graphics frontier and rejects
+         * every later guest gather write. Native draws share one ordered
+         * recording owner; draining here would retire each preceding pane
+         * separately. Copies, captures and frame completion keep their real
+         * frontiers. Unexpected machine-owned work must still fail closed. */
+        return !machine->gp.count && !gcn_cp_fifo_rw_distance(&machine->cp);
+    }
     /* At this high-level function boundary earlier guest commands are
      * complete. Publish a partial gather with NOP padding, then consume the
      * queued bytes before recording native geometry on the same owner. */
@@ -117,7 +127,12 @@ int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
         ++declines;if(WIILLR_MENU_PICTURES==2 || enclosing_owner(cpu)){fprintf(stderr,"Native Menu Picture effect material backend unavailable\n");cpu->halted=true;return 1;}return 0;
     }
     if(!prepared.skipped && !wii_menu_native_boundary(owner)){++failures;fprintf(stderr,"Native Menu Picture could not drain previous work\n");cpu->halted=true;return 1;}
-    const int result=wii_menu_native_draw_picture(renderer,cpu->gpr[3],cpu->gpr[4],&view);
+    const bool owned_frame=native_view==1 && owner->machine->gx_native_owner &&
+        !strcmp(owner->machine->gx_native_owner,"ipl43u-frame");
+    /* A legacy drain may publish CPU-visible memory. Keep its original
+     * post-drain preparation; only the exclusive frame reuses this snapshot. */
+    const int result=owned_frame ? wii_menu_native_submit_prepared(renderer,(u64)cpu->gpr[3]<<4,&prepared) :
+        wii_menu_native_draw_picture(renderer,cpu->gpr[3],cpu->gpr[4],&view);
     if(result!=1){++failures;WiiMenuNativeStatus status;wii_menu_native_status(renderer,&status);fprintf(stderr,"Native Menu Picture submission failed: %s\n",status.error);cpu->halted=true;return 1;}
     /* Void C++ method: preserve caller-owned registers, return through LR.
      * One native service charge provides forward progress without recreating
