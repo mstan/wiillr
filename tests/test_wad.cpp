@@ -26,6 +26,7 @@
 namespace fs=std::filesystem;
 using Bytes=std::vector<uint8_t>;
 constexpr uint64_t title=0x0001000577523945ull;
+constexpr uint64_t base_title=0x0001000157523945ull;
 static void check(bool ok,const char* text){if(!ok)throw std::runtime_error(text);}
 static void put(Bytes& b,size_t at,uint64_t value,unsigned size){check(at+size<=b.size(),"fixture extent");for(unsigned n=size;n;n--){b[at+n-1]=uint8_t(value);value>>=8;}}
 static void write(const fs::path& path,const Bytes& value){fs::create_directories(path.parent_path());std::ofstream f(path,std::ios::binary);f.write(reinterpret_cast<const char*>(value.data()),value.size());check(bool(f),"fixture write");}
@@ -36,14 +37,14 @@ static std::map<std::string,Bytes> snapshot(const fs::path& root){std::map<std::
 static std::array<uint8_t,16> key(){return {0x13,0x25,0x37,0x49,0x51,0x63,0x75,0x87,0x99,0xab,0xbd,0xcf,0xd1,0xe3,0xf5,0x07};}
 static Bytes encrypt(Bytes value,const std::array<uint8_t,16>& key,std::array<uint8_t,16> iv){value.resize((value.size()+15)&~size_t(15));Bytes result(value.size());mbedtls_aes_context a;mbedtls_aes_init(&a);check(!mbedtls_aes_setkey_enc(&a,key.data(),128),"fixture AES key");if(!value.empty())check(!mbedtls_aes_crypt_cbc(&a,MBEDTLS_AES_ENCRYPT,value.size(),iv.data(),value.data(),result.data()),"fixture AES encryption");mbedtls_aes_free(&a);return result;}
 struct Fixture {Bytes wad,ticket,tmd;std::array<Bytes,3> content;size_t content_offset{};};
-static Fixture make_wad(){
+static Fixture make_wad(uint64_t id=title,uint64_t ios=0x100000025ull,uint16_t boot=511){
     Fixture f;f.ticket.resize(0x2a4);f.tmd.resize(0x1e4+3*36);
     f.content={Bytes{1,2,3,4,5,6,7},Bytes{},Bytes(73,0x5a)};
-    put(f.ticket,0,0x10001,4);put(f.ticket,0x1dc,title,8);f.ticket[0x1f1]=141;
-    put(f.tmd,0,0x10001,4);put(f.tmd,0x184,0x100000025ull,8);put(f.tmd,0x18c,title,8);
-    put(f.tmd,0x198,12344,2);put(f.tmd,0x1dc,0,2);put(f.tmd,0x1de,3,2);put(f.tmd,0x1e0,511,2);
+    put(f.ticket,0,0x10001,4);put(f.ticket,0x1dc,id,8);f.ticket[0x1f1]=141;
+    put(f.tmd,0,0x10001,4);put(f.tmd,0x184,ios,8);put(f.tmd,0x18c,id,8);
+    put(f.tmd,0x198,12344,2);put(f.tmd,0x1dc,id==0x0001000157523945ull?1:0,2);put(f.tmd,0x1de,3,2);put(f.tmd,0x1e0,boot,2);
     const std::array<uint8_t,16> title_key{0x21,0x32,0x43,0x54,0x65,0x76,0x87,0x98,0xa9,0xba,0xcb,0xdc,0xed,0xfe,0x0f,0x10};
-    std::array<uint8_t,16> iv{};for(unsigned n=0;n<8;n++)iv[n]=uint8_t(title>>(56-8*n));
+    std::array<uint8_t,16> iv{};for(unsigned n=0;n<8;n++)iv[n]=uint8_t(id>>(56-8*n));
     const auto wrapped=encrypt(Bytes(title_key.begin(),title_key.end()),key(),iv);std::copy(wrapped.begin(),wrapped.end(),f.ticket.begin()+0x1bf);
     Bytes encrypted;
     for(unsigned n=0;n<3;n++){
@@ -76,6 +77,27 @@ int main(int argc,char** argv){
     char error[512];WiiWadInstallResult result{};
     auto install=[&](uint64_t expected=title){return wii_wad_install(utf8(wad).c_str(),utf8(common).c_str(),utf8(profile).c_str(),expected,&result,error,sizeof error);};
     auto pristine=snapshot(profile);
+    // Synthetic base content cannot equal the production boot allowlist. It
+    // must be rejected even when all ticket/TMD/content hashes are consistent.
+    WiiWadBaseInstallResult base_result{};
+    auto install_base=[&](uint64_t expected=base_title){return wii_wad_install_base(utf8(wad).c_str(),utf8(common).c_str(),utf8(profile).c_str(),expected,&base_result,error,sizeof error);};
+    const auto base=make_wad(base_title,0x100000025ull,0);write(wad,base.wad);
+    check(!install_base() && std::string(error).find("Unsupported Mega Man 9 base boot")!=std::string::npos,"internally valid noncanonical base boot rejected");
+    check(snapshot(profile)==pristine && !base_result.installed.title && !base_result.ios_title && !*base_result.boot_path,"base attestation fails before any profile publication");
+    check(!install(base_title) && snapshot(profile)==pristine,"DLC-only API cannot silently import a base title");
+    check(!install_base(title) && snapshot(profile)==pristine,"base API rejects an expected DLC title");
+    check(!install_base(0x00010001574d3845ull) && snapshot(profile)==pristine,"base API rejects another expected game");
+    const auto wrong_ios=make_wad(base_title,0x100000024ull,0);write(wad,wrong_ios.wad);
+    check(!install_base() && std::string(error).find("IOS37")!=std::string::npos && snapshot(profile)==pristine,"base IOS mismatch rejected before mutation");
+    for(unsigned boot:{511u,1u}) {
+        const auto invalid_boot=make_wad(base_title,0x100000025ull,uint16_t(boot));write(wad,invalid_boot.wad);
+        check(!install_base() && std::string(error).find("absent or empty")!=std::string::npos && snapshot(profile)==pristine,"missing or empty base boot cannot be installed");
+    }
+    auto bad_base=base.wad;bad_base[base.content_offset]^=1;write(wad,bad_base);
+    check(!install_base() && std::string(error).find("hash verification")!=std::string::npos && snapshot(profile)==pristine,"corrupt base contents fail before canonical policy/publication");
+    auto inconsistent_base=base.wad;inconsistent_base[64+0x1e3]^=1;write(wad,inconsistent_base);
+    check(!install_base() && snapshot(profile)==pristine,"inconsistent base ticket/TMD identities cannot publish");
+    write(wad,fixture.wad);
     for(const size_t size:{size_t(0),size_t(31),size_t(63),size_t(64+0x2a3),fixture.content_offset-1,fixture.wad.size()-1}){
         write(wad,Bytes(fixture.wad.begin(),fixture.wad.begin()+size));check(!install(),"truncated WAD rejected");check(snapshot(profile)==pristine && !result.title,"truncation cannot write profile");
     }
