@@ -8,7 +8,7 @@
 #include "wiillr/gx.h"
 #include "wiillr/gx_output.h"
 #include "wiillr/control.h"
-#include "wiillr/host_menu.h"
+#include "wiillr/host_session.h"
 #ifdef RECOMP_LAUNCHER
 #include "wiillr/launcher.h"
 #include "wiillr/package.h"
@@ -110,7 +110,7 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
         wii_dol_load(cpu,launch.image,launch.size,&entry);
     wii_machine_init(m,cpu);
 #ifdef RECOMP_LAUNCHER
-    wii_host_menu_bind(wii_package_standalone(package)?&m->ios:NULL);
+    wii_host_session_bind(wii_package_standalone(package)?&m->ios:NULL);
 #endif
     m->fields=fields;m->mmio_reads=reads;m->mmio_writes=writes;
     m->gx_cpu_gather_writes=gather_writes;m->gx_cpu_gather_bytes=gather_bytes;
@@ -265,7 +265,7 @@ static int run(int argc, char** argv) {
     WiiMachine machine;
     wii_machine_init(&machine, &cpu);
 #ifdef RECOMP_LAUNCHER
-    wii_host_menu_bind(wii_package_standalone(package)?&machine.ios:NULL);
+    wii_host_session_bind(wii_package_standalone(package)?&machine.ios:NULL);
 #endif
     if(argc==8 || argc==10) {
         errno=0;unsigned long uid=strtoul(argv[argc-2],&end,10);
@@ -408,7 +408,7 @@ static int run(int argc, char** argv) {
         gcn_cost_enter(GCN_COST_TIME);
         wii_machine_tick(&machine, &cpu);
 #ifdef RECOMP_LAUNCHER
-        if(wii_host_menu_requested(&machine.ios)) {
+        if(wii_host_session_menu_requested(&machine.ios)) {
             restart_launcher=true;printf("{\"host_menu_return\":\"launcher\"}\n");break;
         }
 #endif

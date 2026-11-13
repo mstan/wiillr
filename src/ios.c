@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/ios.h"
-#include "wiillr/host_menu.h"
+#include "wiillr/host_session.h"
 #include "memory/memory.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,10 +8,10 @@
 #include <time.h>
 #include <stdatomic.h>
 
-static WiiIosNative* host_menu_owner;
+static WiiIosNative* host_session_owner;
 static bool host_menu_return;
-void wii_host_menu_bind(WiiIosNative* ios){host_menu_owner=ios;host_menu_return=false;}
-bool wii_host_menu_requested(const WiiIosNative* ios){return ios && host_menu_owner==ios && host_menu_return;}
+void wii_host_session_bind(WiiIosNative* ios){host_session_owner=ios;host_menu_return=false;}
+bool wii_host_session_menu_requested(const WiiIosNative* ios){return ios && host_session_owner==ios && host_menu_return;}
 
 typedef struct {u32 message;u64 ready_at;} IpcRequest;
 typedef struct IpcRequests {
@@ -76,7 +76,7 @@ static u8* ios_memory(CPUState* cpu,u32 address,u32* available) {
 }
 
 void wii_ios_native_init(WiiIosNative* ios) {
-    if(host_menu_owner==ios)wii_host_menu_bind(NULL);
+    if(host_session_owner==ios)wii_host_session_bind(NULL);
     forget_requests(ios);
     memset(ios,0,sizeof *ios);
     // Sample the host clock once. Subsequent native KD time advances only
@@ -87,7 +87,7 @@ void wii_ios_native_init(WiiIosNative* ios) {
         if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"native IOS UTC seed=%llu epoch=unix clock=729000000\n",(unsigned long long)ios->kd_utc);
     }
 }
-void wii_ios_native_destroy(WiiIosNative* ios){if(host_menu_owner==ios)wii_host_menu_bind(NULL);forget_requests(ios);wii_es_release_launch(&ios->launch);wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
+void wii_ios_native_destroy(WiiIosNative* ios){if(host_session_owner==ios)wii_host_session_bind(NULL);forget_requests(ios);wii_es_release_launch(&ios->launch);wii_bluetooth_destroy(ios->bluetooth);ios->bluetooth=NULL;}
 static void di_registers(WiiIosNative* ios,CPUState* cpu) {
     gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_SR,
         GCN_DI_SR_TCINT|GCN_DI_SR_DEINT|GCN_DI_SR_TCINTMASK|GCN_DI_SR_DEINTMASK,4);
@@ -200,6 +200,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
             if(device==9 && !ios->bluetooth) {
                 const WiiBluetoothStore store={ios->fs,wii_fs_bt_read,wii_fs_bt_write};
                 ios->bluetooth=wii_bluetooth_create(cpu,ios->gpio_out,ios->fs?&store:NULL);if(!ios->bluetooth)return 0;
+                if(host_session_owner==ios && !wii_bluetooth_pair_first_remote(ios->bluetooth))return 0;
             }
             if(device==5) {
                 const s32 opened=wii_fs_open(ios->fs,(const char*)path,read_be32(request+16));
@@ -614,7 +615,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
             u8* data=extent?ios_memory(cpu,output,&available):NULL;
             if(extent && (!data || available<extent))return 1;
             u32 actual=0;ios->result=wii_es_ticket_views(ios->fs,title,inputs==2?data:NULL,maximum,&actual);
-            if(title==0x0000000100000002ull && host_menu_owner==ios &&
+            if(title==0x0000000100000002ull && host_session_owner==ios &&
                (ios->result || !actual)) {
                 host_menu_return=true;cpu->cycle_deadline=cpu->cycles;
             }

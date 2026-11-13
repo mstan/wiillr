@@ -125,12 +125,34 @@ void fresh_profile(const fs::path& destination) {
     const unsigned char uid[]={0,1,0,1,0x57,0x52,0x39,0x45,0,0,0x10,0};
     write("sys/uid.sys",std::string(reinterpret_cast<const char*>(uid),sizeof uid));
     const std::pair<const char*,unsigned char> entries[]={{"IPL.LNG",1},{"IPL.SND",1},{"IPL.AR",1},{"IPL.E60",1},{"IPL.PGS",0},{"BT.BAR",1},{"BT.MOT",1},{"BT.SPKV",88}};
+    struct Setting {const char* name;unsigned type;std::string data;};
+    std::vector<Setting> settings;
+    for(const auto& [name,value]:entries)settings.push_back({name,3,std::string(1,char(value))});
+    // Match the maintained emulated Bluetooth transport's public virtual
+    // addresses. These local registrations contain no pairing/link keys.
+    std::string devices(0x461,'\0');devices[0]=5;
+    for(unsigned slot=0;slot<5;++slot)for(const unsigned start:{1u,701u}) {
+        const auto at=start+70*slot;const unsigned char address[]={static_cast<unsigned char>(slot),0,0x79,0x19,2,0x11};
+        std::copy(std::begin(address),std::end(address),devices.begin()+at);
+        const char* name=slot==4?"Nintendo RVL-WBC-01":"Nintendo RVL-CNT-01";
+        devices.replace(at+6,std::char_traits<char>::length(name),name);
+    }
+    settings.push_back({"BT.DINF",1,std::move(devices)});
+    settings.push_back({"BT.CDIF",1,std::string(517,'\0')});
+    settings.push_back({"BT.SENS",5,std::string("\0\0\0\3",4)});
+    std::string nickname(22,'\0');const std::string player="Player";
+    for(size_t n=0;n<player.size();++n)nickname[2*n+1]=player[n];nickname[21]=char(player.size());
+    settings.push_back({"IPL.NIK",2,std::move(nickname)});
     std::string config(0x4000,'\0');config.replace(0,4,"SCv0");config.replace(0x3ffc,4,"SCed");
     const auto be16=[&](size_t at,unsigned value){config[at]=char(value>>8);config[at+1]=char(value);};
-    be16(4,std::size(entries));unsigned offset=6+2*(std::size(entries)+1),index=0;
-    for(const auto& [name,value]:entries) {
-        be16(6+2*index++,offset);const auto length=std::char_traits<char>::length(name);
-        config[offset++]=char((3u<<5)|(length-1));config.replace(offset,length,name);offset+=length;config[offset++]=char(value);
+    be16(4,settings.size());unsigned offset=6+2*(settings.size()+1),index=0;
+    for(const auto& setting:settings) {
+        be16(6+2*index++,offset);const auto length=std::char_traits<char>::length(setting.name);
+        config[offset++]=char((setting.type<<5)|(length-1));config.replace(offset,length,setting.name);offset+=length;
+        if(setting.type==1){be16(offset,setting.data.size()-1);offset+=2;}
+        else if(setting.type==2)config[offset++]=char(setting.data.size()-1);
+        need(offset+setting.data.size()<0x3ffc,"Fresh settings exceed the SYSCONF container");
+        config.replace(offset,setting.data.size(),setting.data);offset+=setting.data.size();
     }
     be16(6+2*index,offset);write("shared2/sys/SYSCONF",config);
     const std::string plain="AREA=USA\r\nMODEL=RVL-001(USA)\r\nDVD=0\r\nMPCH=0x7FFE\r\nCODE=LU\r\nSERNO=000000000\r\nVIDEO=NTSC\r\nGAME=US\r\n";

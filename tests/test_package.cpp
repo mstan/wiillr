@@ -88,6 +88,19 @@ int main(int argc,char** argv) {
         require(!fs::exists(fresh/"nand/title/00010001/57523945/content"),"fresh package contains no original game content");
         const auto generated=read(fresh/"nand/shared2/sys/SYSCONF");
         require(generated.size()==16384 && generated.substr(0,4)=="SCv0" && generated.substr(16380)=="SCed","fresh local settings have a complete SYSCONF container");
+        const auto setting=[&](const std::string& name) {
+            const auto word=[&](size_t at){return unsigned(uint8_t(generated.at(at)))<<8|uint8_t(generated.at(at+1));};
+            for(unsigned n=0;n<word(4);++n) {
+                auto at=word(6+2*n);const auto header=uint8_t(generated.at(at++));const auto length=(header&31)+1;
+                if(generated.substr(at,length)!=name)continue;at+=length;
+                unsigned size=1;if((header>>5)==1){size=word(at)+1;at+=2;}else if((header>>5)==2){size=uint8_t(generated.at(at++))+1;}else if((header>>5)==5)size=4;
+                return generated.substr(at,size);
+            }
+            throw std::runtime_error("Missing fresh system setting: "+name);
+        };
+        const auto devices=setting("BT.DINF");
+        require(devices.size()==1121 && uint8_t(devices[0])==5 && uint8_t(devices[3])==0x79 && uint8_t(devices[6])==0x11 && devices.substr(7,19)=="Nintendo RVL-CNT-01" && devices.substr(707,19)=="Nintendo RVL-CNT-01","fresh virtual-controller registrations match the native transport without copied link keys");
+        require(setting("BT.CDIF")==std::string(517,'\0') && setting("BT.SENS")==std::string("\0\0\0\3",4) && setting("IPL.NIK").size()==22 && setting("IPL.NIK")[21]==6,"fresh pointer/controller/nickname defaults are present");
         wii_package_close(p);
         const auto fresh_save=fresh/"nand/title/00010001/57523945/data/rm9_sav0.dat";
         write(fresh_save,"native progress");write(fresh/"config.ini","explicit player settings");

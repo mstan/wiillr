@@ -31,6 +31,8 @@ Ios=37
 
 Fresh profiles reserve the game UID before DLC installation. Existing profiles
 reuse their installed UID and retain native progress, licenses and settings.
+The first virtual controller pairs automatically through the normal Bluetooth
+authentication and key-storage flow. Existing controller pairings are reused.
 HOME's Wii Menu action returns to the launcher when the original Menu is not
 installed; an installed original Menu retains its normal launch route.
 
