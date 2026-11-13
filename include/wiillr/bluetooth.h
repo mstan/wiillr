@@ -14,6 +14,9 @@ void wii_bluetooth_close(WiiBluetooth*);
 bool wii_bluetooth_set_input(WiiBluetooth*,const WiiBluetoothInput*);
 /* Physical console Sync-button press, delivered as the controller's vendor event. */
 bool wii_bluetooth_press_sync(WiiBluetooth*);
+/* Optional first-use policy: pair remote 0 through ordinary Sync/PIN/key exchange.
+   Existing remote or controller keys make this a no-op; false means invalid/error. */
+bool wii_bluetooth_pair_first_remote(WiiBluetooth*);
 /* Actual USB requests are asynchronous. False preserves an unsupported request. */
 bool wii_bluetooth_submit(WiiBluetooth*,u32 message);
 bool wii_bluetooth_poll(WiiBluetooth*,u32* message,s32* result,bool* ready);
