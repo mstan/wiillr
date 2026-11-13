@@ -9,6 +9,7 @@
 #include <string.h>
 #if WIILLR_MENU_TRANSFORM
 #include <wiillr/menu_transform.h>
+#include <fenv.h>
 #endif
 
 #ifndef WIILLR_MENU_FRAME_MODE
@@ -20,7 +21,7 @@ static struct {
     WiiGx* owner;const GcWiiNativeRenderApi* render;const GcWiiNativeFrameApi* frame;const GcWiiNativeCaptureApi* capture;
     WiiMenuView view;float model[12];bool active,bad,projection_ready;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
-    bool transform_verified;u64 transforms,transform_declines;
+    bool transform_verified,transform_sampled;u64 transforms,transform_declines;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -228,7 +229,18 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(cpu->cycles>=cpu->cycle_deadline)return 1;state.bad=false;
 #if WIILLR_MENU_TRANSFORM
     if(address==0x8151f22c) {
-        if(transform_identity(cpu) && wii_menu_transform_apply(cpu)){++state.transforms;return 1;}
+        const bool identified=transform_identity(cpu);
+        if(identified && wii_menu_transform_apply(cpu)){++state.transforms;return 1;}
+        /* One bounded admission sample distinguishes an unsupported caller
+         * state from a code identity or device-budget decline. */
+        if(!state.transform_sampled) {
+            state.transform_sampled=true;
+            printf("{\"native_menu_transform_decline\":1,\"identity\":%u,\"r1\":%u,\"r2\":%u,\"pane\":%u,\"info\":%u,\"msr\":%u,\"hid2\":%u,\"fpscr\":%u,\"gqr0\":%u,\"host_round\":%d,\"cycles\":%llu,\"deadline\":%llu,\"fpr31\":\"%a\",\"ps130\":\"%a\",\"pane_flags\":%u,\"info_flags\":%u,\"rotation\":[%u,%u,%u]}\n",
+                identified?1u:0u,cpu->gpr[1],cpu->gpr[2],cpu->gpr[3],cpu->gpr[4],cpu->msr,cpu->hid2,cpu->fpscr,cpu->gqr[0],fegetround(),
+                (unsigned long long)cpu->cycles,(unsigned long long)cpu->cycle_deadline,cpu->fpr[31],cpu->ps1[30],
+                word(cpu,cpu->gpr[3]+0xcc)&255,word(cpu,cpu->gpr[4]+0x50)>>24,
+                word(cpu,cpu->gpr[3]+0x38),word(cpu,cpu->gpr[3]+0x3c),word(cpu,cpu->gpr[3]+0x40));
+        }
         ++state.transform_declines;return 0;
     }
 #endif

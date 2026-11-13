@@ -51,6 +51,9 @@ int main() {
     c=initial;std::memcpy(c.ram,initial_ram.data(),initial_ram.size());
     c.fpscr=0x82024004; // Original Menu context: nearest, NI, sticky status.
     CHECK(wii_menu_transform_apply(&c));CHECK((c.fpscr&0xff)==4 && c.cycles==727);
+    c=initial;std::memcpy(c.ram,initial_ram.data(),initial_ram.size());c.gpr[1]=S+8;
+    CHECK(wii_menu_transform_apply(&c));CHECK(c.gpr[1]==S+8 && c.cycles==727);
+    CHECK(read_be32(bytes(c,S+8-112))==S+8-80); // Original EABI stack alignment.
     for(unsigned test=0;test<15;test++) {
         c=initial;std::memcpy(c.ram,initial_ram.data(),initial_ram.size());
         switch(test) {

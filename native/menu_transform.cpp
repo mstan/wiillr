@@ -129,7 +129,7 @@ extern "C" bool wii_menu_transform_apply(CPUState* c) {
     if(!planned || (!(p.pane_flags&1) && !(p.info_flags&0x10)) ||
        !paired_normal(c->fpr[31]) || !paired_normal(c->ps1[30]))return false;
     const uint32_t sp=c->gpr[1],size=112+232;
-    if((sp&15) || !separate(sp-112,size,p.pane,0xd0) || !separate(sp-112,size,p.info,0x54) ||
+    if((sp&7) || !separate(sp-112,size,p.pane,0xd0) || !separate(sp-112,size,p.info,0x54) ||
        (p.parent && !separate(sp-112,size,p.parent+0x84,48)))return false;
     const uint32_t immutable[][2]={{0x8151f000,4096},{0x81540000,8192},{0x8160a000,4096},{0x8160c000,4096},
         {0x816954bc,0x148},{0x81695e38,8},{0x81697ed8,8}};
