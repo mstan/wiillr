@@ -264,6 +264,7 @@ void WiimoteDevice::SetSource(WiimoteCommon::HIDWiimote* hid_source)
 
 void WiimoteDevice::SetPairing(bool pairing)
 {
+  if(m_pairing==pairing)return;
   m_pairing=pairing;
   if(pairing && !IsConnected())SetBasebandState(BasebandState::Inactive);
 }

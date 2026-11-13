@@ -28,6 +28,7 @@ public:
   explicit BluetoothEmuDevice(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store=nullptr);
   void SetInput(const WiiBluetoothInput&);
   void PressSync();
+  void PairFirstRemote();
   System& GetSystem() {return m_system;}
   EmulationKernel& GetEmulationKernel() {return m_kernel;}
   void Submit(u32 message);
@@ -106,6 +107,10 @@ private:
 
   u32 m_packet_count[MAX_BBMOTES] = {};
   u64 m_last_ticks = 0;
+  bool m_pair_first_remote = false;
+  bool m_pair_first_sync_sent = false;
+  bool m_input_pairing = false;
+  void UpdateFirstRemotePairing();
 
   static u16 GetConnectionHandle(const bdaddr_t&);
 
