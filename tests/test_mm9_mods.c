@@ -223,6 +223,49 @@ int main(void) {
     cpu.gpr[3]=SAVED;CHECK(!wii_mm9_mods_dispatch(&cpu,REFILL));
     for(unsigned k=0;k<2;k++)for(unsigned n=0;n<WEAPONS;n++)CHECK(state.pools[k].ammo[n]==0x1c00);
     CHECK(state.pools[0].hp==13 && state.pools[1].hp==9);
+    /* Native SAVE snapshots include the respawn cache. Only the independent
+     * outgoing snapshot gets the campaign's canonical character: a normal
+     * save made as swapped Proto remains usable with the optional mod off.
+     * The running actor/cache, mode, ammo/progress and CPU call stay intact. */
+    const struct {u8 mode,incoming,mega,valid,expected;} saves[]={
+        {0,0,0,0,0},{0,1,0,0,1},{0,1,0,1,1},
+        {0,2,1,1,1},{0,2,0,1,0},{0,2,1,0,0},{0,2,2,1,0},
+        {1,0,1,1,2},{1,1,1,1,2},{1,2,1,1,2},
+        {2,1,0,1,1},{2,2,1,1,1}
+    };
+    for(unsigned n=0;n<sizeof saves/sizeof saves[0];n++) {
+        const u8 mode=saves[n].mode,incoming=saves[n].incoming;
+        setup(true,false);w8(&cpu,STAGE+0x227c,(u8)mode);
+        state.pools[0].valid=saves[n].valid;state.pools[0].character=saves[n].mega;
+        w8(&cpu,SAVED+1,incoming);w8(&cpu,PLAYER+9,incoming);
+        u8 expected[SAVE_SIZE];memset(expected,0xa5,sizeof expected);
+        expected[0x120]=(u8)mode;expected[0x85]=incoming;
+        memcpy(cpu.ram+(SAVE_BUFFER&0x1fffffffu),expected,sizeof expected);
+        cpu.gpr[3]=7;cpu.gpr[4]=SAVE_BUFFER;cpu.gpr[5]=SAVE_SIZE;
+        cpu.pc=SAVE;cpu.lr=0x80090088;Registers args;
+        save_registers(&cpu);args=state.saved;
+        CHECK(!wii_mm9_mods_dispatch(&cpu,SAVE));expected[0x85]=saves[n].expected;
+        CHECK(!memcmp(cpu.ram+(SAVE_BUFFER&0x1fffffffu),expected,sizeof expected));
+        CHECK(r8(&cpu,SAVED+1)==incoming && r8(&cpu,PLAYER+9)==incoming);
+        CHECK(state.pools[0].valid==saves[n].valid && state.pools[0].character==saves[n].mega);
+        CHECK(r8(&cpu,STAGE+0x227c)==mode && cpu.pc==SAVE && cpu.lr==args.lr);
+        CHECK(!memcmp(cpu.gpr,args.gpr,sizeof args.gpr) && state.flight==IDLE);
+    }
+    setup(true,false);w8(&cpu,SAVE_BUFFER+0x85,2);w8(&cpu,SAVE_BUFFER+0x120,0);
+    cpu.gpr[3]=8;cpu.gpr[4]=SAVE_BUFFER;cpu.gpr[5]=SAVE_SIZE;
+    CHECK(!wii_mm9_mods_dispatch(&cpu,SAVE));CHECK(r8(&cpu,SAVE_BUFFER+0x85)==2);
+    cpu.gpr[3]=0;cpu.gpr[5]=SAVE_SIZE-1;
+    CHECK(!wii_mm9_mods_dispatch(&cpu,SAVE));CHECK(r8(&cpu,SAVE_BUFFER+0x85)==2);
+    cpu.gpr[5]=SAVE_SIZE;cpu.gpr[4]=SAVE_BUFFER+4;
+    CHECK(!wii_mm9_mods_dispatch(&cpu,SAVE));CHECK(r8(&cpu,SAVE_BUFFER+0x85)==2);
+    cpu.gpr[4]=SAVE_BUFFER;w8(&cpu,SAVE_BUFFER+0x120,1);w8(&cpu,SAVE_BUFFER+0x85,1);
+    CHECK(!wii_mm9_mods_dispatch(&cpu,SAVE));CHECK(r8(&cpu,SAVE_BUFFER+0x85)==1);
+    for(unsigned enabled=0;enabled<2;enabled++) {
+        setup(false,enabled);w8(&cpu,SAVE_BUFFER+0x85,2);w8(&cpu,SAVE_BUFFER+0x120,0);
+        cpu.gpr[3]=0;cpu.gpr[4]=SAVE_BUFFER;cpu.gpr[5]=SAVE_SIZE;
+        CHECK(!wii_mm9_mods_dispatch(&cpu,SAVE));CHECK(r8(&cpu,SAVE_BUFFER+0x85)==2);
+    }
+    setup(true,false);
     char json[768];CHECK(wii_mm9_mods_status(json,sizeof json)>0);CHECK(strstr(json,"\"attested\":true"));
     wii_mm9_mods_bind(NULL);free(cpu.ram);puts("MM9 optional-mod routing/input/pool contracts passed");return 0;
 }

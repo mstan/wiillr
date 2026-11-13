@@ -13,6 +13,7 @@
 
 enum {
     FRAME=0x80089e68u, FILES=0x800aa6d8u, SPAWN=0x800b709cu,
+    SAVE=0x8000d664u, SAVE_BUFFER=0x80306440u, SAVE_SIZE=0x134u,
     CACHE=0x800b730cu, REFILL=0x800b5ac0u,
     NEW_MEGA=0x8008938cu, NEW_PROTO=0x80089604u,
     CLEANUP=0x800ba51cu, STAND=0x800b56a4u, WEAPON=0x800b5f90u,
@@ -62,7 +63,7 @@ static const u32 code_heads[][2]={
     {FRAME,0xe5840b5bu},{FILES,0x861cae27u},{SPAWN,0xd4e80e98u},
     {CACHE,0xbe825ba5u},{REFILL,0xfe346dd5u},{NEW_MEGA,0xc8946023u},
     {NEW_PROTO,0xd9e2767fu},{CLEANUP,0x52d86237u},{STAND,0xdd2eb4bfu},
-    {WEAPON,0x82515faau},{SOUND,0x0433e1e5u}
+    {WEAPON,0x82515faau},{SOUND,0x0433e1e5u},{SAVE,0x2b1a7a4eu}
 };
 void wii_mm9_mods_invalidate(u32 address,u32 size) {
     const u32 a=address&0x1fffffffu;const u64 end=(u64)a+size;
@@ -337,6 +338,32 @@ void wii_mm9_mods_test_actions(unsigned held){atomic_store(&test_held,held&3u);l
 bool wii_mm9_mods_dispatch(CPUState* c,u32 pc) {
     if(!owner || owner->cpu!=c || owner->title!=0x0001000157523945ull ||
        (!character_mod && !weapon_mod))return false;
+    if(pc==SAVE) {
+        /* Original 8009003c..84 copies STAGE+215c (134 bytes) into
+         * this independent snapshot before calling the native save API.
+         * Its +85 byte is the respawn character cache, persisted at file+99.
+         * Retain the original campaign's character in the file so that the
+         * save can load with this optional mod disabled or DLC absent. Keep
+         * the live cache/actor and original mode/progress byte-for-byte. */
+        if(character_mod && state.flight==IDLE && c->gpr[3]<8 &&
+           c->gpr[4]==SAVE_BUFFER && c->gpr[5]==SAVE_SIZE &&
+           ram(c,SAVE_BUFFER,SAVE_SIZE) && identity(c)) {
+            const u8 mode=r8(c,SAVE_BUFFER+0x120u);
+            if(mode<=2 && mode==r8(c,STAGE+0x227cu)) {
+                const u8 character=r8(c,SAVE_BUFFER+0x85u);
+                if(mode==1)w8(c,SAVE_BUFFER+0x85u,2);
+                else if(character==2) {
+                    /* Original Mega may be helmetless (character1). A live
+                     * Proto snapshot uses the retained Mega bank's choice;
+                     * an already-native Mega snapshot remains unchanged. */
+                    const Pool* mega=&state.pools[0];
+                    w8(c,SAVE_BUFFER+0x85u,
+                        mega->valid && mega->character<=1?mega->character:0);
+                }
+            }
+        }
+        return false; /* Original save API still executes exactly once. */
+    }
     /* FRAME is an original indirect function-pointer entry (80089388 bctr),
      * not a same-page shadow-call return. Every injected subroutine returns
      * cross-page to this catalogued entry; no generated-code seam is required. */

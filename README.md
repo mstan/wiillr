@@ -85,6 +85,8 @@ waits for a safe standing position. Quick weapon switching uses L1/R1 to cycle
 only acquired weapons, or Q/E with keyboard input. Bind these actions under
 Controller. The default Home binding is L2; explicit saved bindings persist.
 Mod changes during play take effect after restarting the game.
+Native saves retain the original mode's character and helmetless choice, so
+they also load with character switching disabled.
 
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
 with gcnllr. Initial targets are the original Startup Menu and Mega Man 9.

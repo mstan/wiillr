@@ -20,7 +20,8 @@ static GcnOverlayModule module={s_overlay_pages,s_overlay_variants,resident,
     GCN_OVERLAY_PAGE_COUNT,GCN_OVERLAY_VARIANT_COUNT};
 const GcnOverlayModule* wii_native_module(void){return &module;}
 bool gcn_overlay_call(CPUState* cpu,u32 address){
-    if((address&0xfffc0000u)==0x80080000u && wii_mm9_mods_dispatch(cpu,address))return true;
+    if(((address&0xfffc0000u)==0x80080000u || address==0x8000d664u) &&
+       wii_mm9_mods_dispatch(cpu,address))return true;
     if((address&0xffffe000u)==0x8024c000u && wii_mm9_dlc_dispatch(cpu,address))return true;
 #if WIILLR_MM9_RENDERER
     if(wii_mm9_renderer_hook_dispatch(cpu,address))return true;
