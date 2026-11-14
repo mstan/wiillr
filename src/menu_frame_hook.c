@@ -123,6 +123,26 @@ static bool overlay_viewport(CPUState* cpu,bool get) {
     }
     return !state.bad;
 }
+static bool overlay_projection_vector(CPUState* cpu) {
+    const u32 input=cpu->gpr[3];if(cpu->fpscr&3u)return false;
+    const float type=real(cpu,input);float values[6];
+    for(u32 i=0;i<6;i++)values[i]=real(cpu,input+4+i*4);
+    if(state.bad)return false;
+    const bool ortho=type!=0;const u32 indices[6]={0,ortho?3:2,5,ortho?7:6,10,11};
+    memset(state.view.projection,0,sizeof state.view.projection);
+    for(u32 i=0;i<6;i++)state.view.projection[indices[i]]=values[i];
+    if(ortho)state.view.projection[15]=1;else state.view.projection[14]=-1;
+    return true;
+}
+static bool overlay_depth(CPUState* cpu) {
+    if(cpu->gpr[3]>1 || cpu->gpr[4]>7 || cpu->gpr[5]>1)return false;
+    const u32 sdk=word(cpu,cpu->gpr[2]-28136u);
+    if(state.bad || !sdk || !bytes(cpu,sdk,0x600))return false;
+    const u32 z=cpu->gpr[3]|(cpu->gpr[4]<<1)|(cpu->gpr[5]<<4);
+    mem_write32(cpu,sdk+0x228,(word(cpu,sdk+0x228)&~31u)|z);mem_write16(cpu,sdk+2,0);
+    state.view.depth_flags=(cpu->gpr[3]?GC_WII_NATIVE_DEPTH_TEST:0)|(cpu->gpr[5]?GC_WII_NATIVE_DEPTH_WRITE:0);state.view.depth_func=cpu->gpr[4];
+    return !state.bad;
+}
 static bool mode(CPUState* cpu,u32 object,u32* output) {
     if(!object || (object&3))return false;
     const u32 p=word(cpu,object);if(!p || (p&3) || !bytes(cpu,p,0x3c))return false;
@@ -376,12 +396,7 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         const s32 values[4]={state.view.clip_x,state.view.clip_y,state.view.clip_width,state.view.clip_height};
         for(u32 i=0;i<4;i++)mem_write32(cpu,cpu->gpr[i+3],values[i]);
     } else if(address==0x81547810 && state.active) {
-        if(!identity(cpu,address,0x34,UINT64_C(0x55e3715dc74d55e8)) || cpu->gpr[3]>1 || cpu->gpr[4]>7 || cpu->gpr[5]>1)return stop(cpu,"overlay depth state",false);
-        const u32 sdk=word(cpu,cpu->gpr[2]-28136u);
-        if(state.bad || !sdk || !bytes(cpu,sdk,0x600))return stop(cpu,"overlay depth storage",false);
-        const u32 z=cpu->gpr[3]|(cpu->gpr[4]<<1)|(cpu->gpr[5]<<4);
-        mem_write32(cpu,sdk+0x228,(word(cpu,sdk+0x228)&~31u)|z);mem_write16(cpu,sdk+2,0);
-        state.view.depth_flags=(cpu->gpr[3]?GC_WII_NATIVE_DEPTH_TEST:0)|(cpu->gpr[5]?GC_WII_NATIVE_DEPTH_WRITE:0);state.view.depth_func=cpu->gpr[4];
+        if(!identity(cpu,address,0x34,UINT64_C(0x55e3715dc74d55e8)) || !overlay_depth(cpu))return stop(cpu,"overlay depth state",false);
     } else if(address==0x81547d20 && state.active) {
         if(!identity(cpu,address,0x50,UINT64_C(0xdc13822b9c05ca9c)) || cpu->gpr[4])return stop(cpu,"overlay model matrix",false);
         for(u32 i=0;i<12;i++)state.model[i]=real(cpu,cpu->gpr[3]+i*4);
@@ -390,6 +405,9 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         if(!identity(cpu,address,address==0x81547c30?0x64:0x40,address==0x81547c30?UINT64_C(0x3c0751e0d8158754):UINT64_C(0xa19761a78fc036f0)))return stop(cpu,"overlay projection identity",false);
         if(!overlay_projection(cpu,address==0x81547ce0))return stop(cpu,"overlay projection",false);
         if(address==0x81547c30)return 0; /* Retain its original non-FIFO SDK cache publication. */
+    } else if(address==0x81547c94 && state.active) {
+        if(!identity(cpu,address,0x4c,UINT64_C(0xf251301aee2bb581)) || !overlay_projection_vector(cpu))return stop(cpu,"overlay projection vector",false);
+        return 0;
     } else if((address==0x81547f2c || address==0x81547f58) && state.active) {
         if(!identity(cpu,address,address==0x81547f2c?0x2c:0x20,address==0x81547f2c?UINT64_C(0xf4e34fed9866613b):UINT64_C(0x85a7768d4f45cdf7)))return stop(cpu,"overlay viewport identity",false);
         if(!overlay_viewport(cpu,address==0x81547f58))return stop(cpu,"overlay viewport",false);
@@ -400,6 +418,10 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
          * enclosing graphics contract before the original epilogue returns. */
         if(!state.keyboard)return stop(cpu,"keyboard view restoration scope",false);
         state.view=state.keyboard_view;memcpy(state.model,state.keyboard_model,sizeof state.model);state.keyboard=false;
+        /* The original wrapper explicitly restores ZMode(1,Always,1), even
+         * when the preceding native pane/utility draw had disabled depth. */
+        cpu->gpr[3]=1;cpu->gpr[4]=7;cpu->gpr[5]=1;
+        if(!overlay_depth(cpu))return stop(cpu,"keyboard depth restoration",false);
         cpu->pc=0x81355b98;++cpu->cycles;return 1;
     } else if(address==0x813adfdc) {
         if(!identity(cpu,address,0x3a4,UINT64_C(0xe65a50e40d62c4d4)) || !channel_clip(cpu))return stop(cpu,"channel thumbnail clipping",false);
