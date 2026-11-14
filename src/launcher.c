@@ -30,6 +30,7 @@ static struct {char nand[32768],key[32768],cache[32768];} dlc;
 static char dlc_path[32768],dlc_status[128];
 static const char* const dlc_patterns[]={"*.wad"};
 static bool settings_key_held,input_release;
+static unsigned char menu_sha256[1][32];
 static const char* const view_labels[]={"Original 4:3","16:9","21:9","Fit to screen"};
 static const char* const resolution_labels[]={"Original (1x)","2x","3x","4x","8x","16x"};
 static const int resolution_values[]={1,960,1440,1920,3840,7680};
@@ -85,6 +86,50 @@ static bool set_env(const char* name,const char* value) {
 #else
     return setenv(name,value,1)==0;
 #endif
+}
+
+static void load_settings(RecompLauncherCGameInfo* game) {
+    memset(&settings,0,sizeof settings);
+    settings.window_scale=2;settings.enable_audio=1;settings.audio_freq=32000;
+    settings.volume=100;settings.player_src[0]=1;
+    settings.aspect_index=view_supported()?3:0;
+    settings.internal_resolution=1;
+    if(SDL_InitSubSystem(SDL_INIT_GAMEPAD) && SDL_HasGamepad())settings.player_src[0]=2;
+    wii_launcher_input_defaults(&settings);
+    default_settings=settings;game->default_settings=&default_settings;
+    launcher_settings_load(&settings,game);
+    recomp_launcher_set_preserve_sdl(1);
+}
+
+bool wii_launcher_menu_session(const char* image) {
+    const char* directory=getenv("WIILLR_USER_DIR");char* pref=NULL;
+    if(!directory || !*directory) {
+        pref=SDL_GetPrefPath("RetroPortingToolKit","Wii Menu");directory=pref;
+    }
+    if(!directory || strlen(image)>=sizeof boot_image ||
+       snprintf(config_path,sizeof config_path,"%s/config.ini",directory)>=(int)sizeof config_path ||
+       snprintf(rom_cache_path,sizeof rom_cache_path,"%s/boot.cfg",directory)>=(int)sizeof rom_cache_path) {
+        SDL_free(pref);return false;
+    }
+    size_t size=0;void* original=SDL_LoadFile(image,&size);
+    if(!original){SDL_free(pref);return false;}
+    recompui_sha256_compute(original,size,menu_sha256[0]);SDL_free(original);
+    RecompLauncherCGameInfo game={0};launcher_profile_apply("wii",&game);
+    game.name="Wii Menu";game.num_players=1;game.config_path=config_path;
+    game.rom_cache_path=rom_cache_path;game.settings_bindings=1;
+    game.known_sha256=(const uint8_t(*)[32])menu_sha256;game.num_known_sha256=1;
+    if(view_supported()) {
+        game.has_supersampling=1;game.internal_resolution_labels=resolution_labels;
+        game.internal_resolution_values=resolution_values;game.num_internal_resolutions=6;
+        game.internal_resolution_note="Raster resolution for geometry and effects. Bitmap artwork retains its original detail.";
+    }
+    load_settings(&game);game_info=game;strcpy(boot_image,image);SDL_free(pref);
+    char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
+    if(!set_env("WIILLR_WINDOW_TITLE","Wii Menu") || !set_env("GCN_WINDOW","1") ||
+       !set_env("GCN_AUDIO_VOLUME",volume))return false;
+    wii_launcher_input_reset();
+    GcnllrPad initial_input;wii_launcher_input_poll(&settings,&initial_input);
+    active=true;return true;
 }
 
 bool wii_launcher_verify(const void* image,size_t size) {
@@ -190,16 +235,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
         game.aspect_setting_label="View";
         game.aspect_setting_help="Fit to screen adapts the gameplay view to the window. Original 4:3 keeps the original view.";
     }
-    memset(&settings,0,sizeof settings);
-    settings.window_scale=2;settings.enable_audio=1;settings.audio_freq=32000;
-    settings.volume=100;settings.player_src[0]=1;
-    settings.aspect_index=view_supported()?3:0;
-    settings.internal_resolution=1;
-    if(SDL_InitSubSystem(SDL_INIT_GAMEPAD) && SDL_HasGamepad())settings.player_src[0]=2;
-    wii_launcher_input_defaults(&settings);
-    default_settings=settings;
-    game.default_settings=&default_settings;
-    launcher_settings_load(&settings,&game);
+    load_settings(&game);
     int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
     /* Keep the launcher's selected SDL instance valid for the game. */
     recomp_launcher_set_preserve_sdl(1);
@@ -227,7 +263,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
 
 static bool session_review(void* user,bool visible,u32 volume) {
     WiiGx* gx=user;
-    if(gx->title!=0x0001000157523945ull || volume>100)return false;
+    if((gx->title!=0x0001000157523945ull && gx->title!=0x0000000100000002ull) || volume>100)return false;
     int count=0;SDL_Window** windows=SDL_GetWindows(&count);bool ok=false;
     for(int i=0;windows && i<count;++i) {
         if(strcmp(SDL_GetWindowTitle(windows[i]),game_caption(gx)))continue;
@@ -251,9 +287,10 @@ static bool session_settings(void* user) {
     SDL_Window* gl_window=SDL_GL_GetCurrentWindow();
     SDL_GLContext gl_context=SDL_GL_GetCurrentContext();
     RecompLauncherCGameInfo in_session=game_info;in_session.in_session=1;
+    in_session.name=game_caption(gx);
     wii_launcher_mods_in_session();
     char selected[32768];
-    const int action=recomp_launcher_run_window("Mega Man 9 Settings",&settings,
+    const int action=recomp_launcher_run_window(game_caption(gx),&settings,
         &in_session,NULL,boot_image,selected,sizeof selected);
     if(gl_context && !SDL_GL_MakeCurrent(gl_window,gl_context))gx->cpu->halted=true;
     if(action==RECOMP_LAUNCHER_RESULT_UNAVAILABLE)return false;
@@ -273,7 +310,7 @@ static void session_input(void* user,GcnllrPad* pad) {
     SDL_Window* focus=SDL_GetKeyboardFocus();
     const bool focused=focus && !strcmp(SDL_GetWindowTitle(focus),game_caption(gx));
     int count=0;const bool* keys=SDL_GetKeyboardState(&count);
-    const bool pressed=gx->title==0x0001000157523945ull && focused &&
+    const bool pressed=(gx->title==0x0001000157523945ull || gx->title==0x0000000100000002ull) && focused &&
         keys && count>SDL_SCANCODE_F1 && keys[SDL_SCANCODE_F1];
     const bool open=pressed && !settings_key_held;
     settings_key_held=pressed;
@@ -313,8 +350,8 @@ bool wii_launcher_window(WiiGx* gx) {
     if(mm9 && view_supported() && !wii_mm9_renderer_set_view(gx,(WiiMm9View)view))return false;
 #endif
     gx->host_input_user=gx;gx->host_input=session_input;
-    gx->host_settings=gx->title==0x0001000157523945ull?session_settings:NULL;
-    gx->host_review=gx->title==0x0001000157523945ull?session_review:NULL;
+    gx->host_settings=mm9 || menu?session_settings:NULL;
+    gx->host_review=mm9 || menu?session_review:NULL;
     gx->host_input_stop=wii_launcher_input_stop;
     /* Audio/input edits and Resume preserve a manually resized Fit window. */
     if(!resize)return true;

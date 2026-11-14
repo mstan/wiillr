@@ -136,6 +136,7 @@ static SDL_Gamepad* selected_gamepad(const RecompLauncherCSettings* s) {
         SDL_Gamepad* pad=SDL_GetGamepadFromID(pads[i].id);
         if(!pad)return NULL;
         selected_id=pads[i].id;snprintf(selected_guid,sizeof selected_guid,"%s",pads[i].guid);
+        fprintf(stderr,"[input] Selected controller: %s\n",SDL_GetGamepadName(pad));
         const char* path=SDL_GetGamepadPath(pad);
         if(path && snprintf(selected_path,sizeof selected_path,"%s",path)>=(int)sizeof selected_path)
             selected_path[0]=0;
@@ -155,7 +156,8 @@ void wii_launcher_input_poll(void* user,GcnllrPad* pad) {
     const RecompLauncherCSettings* s=user;
     WiiLauncherInput input={0};
     SDL_Window* focus=SDL_GetKeyboardFocus();
-    if(focus && !strcmp(SDL_GetWindowTitle(focus),"Mega Man 9")) {
+    if(focus && (!strcmp(SDL_GetWindowTitle(focus),"Mega Man 9") ||
+                 !strcmp(SDL_GetWindowTitle(focus),"Wii Menu"))) {
         input.keys=SDL_GetKeyboardState(&input.key_count);
         if(SDL_GetMouseFocus()==focus)input.mouse=SDL_GetMouseState(NULL,NULL);
     }

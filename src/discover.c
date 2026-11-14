@@ -280,6 +280,15 @@ static int run(int argc, char** argv) {
         fprintf(stderr,"filesystem needs the build-selected native IOS provider\n");cpu_free(&cpu);return 2;
 #endif
     }
+#ifdef RECOMP_LAUNCHER
+    u64 session_title=0;
+    if(!launcher && visible_window && !strcmp(visible_window,"1") && machine.ios.fs &&
+       wii_fs_boot_title(machine.ios.fs,&session_title) && session_title==0x0000000100000002ull &&
+       !wii_launcher_menu_session(argv[1])) {
+        fprintf(stderr,"Wii Menu controls/settings setup failed\n");
+        wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+    }
+#endif
     WiiGx gx={0};
     if(gx_library) {
 #if WIILLR_GX_NATIVE || WIILLR_GX_SOFTWARE

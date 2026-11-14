@@ -8,5 +8,8 @@
 int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned gid,
     bool force,bool check_only,char* selected,size_t capacity);
 bool wii_launcher_verify(const void* image,size_t size);
+/* Attach shared controls/settings to an explicitly windowed Menu boot.
+ * The caller has already loaded the original boot image and copied NAND. */
+bool wii_launcher_menu_session(const char* image);
 bool wii_launcher_window(WiiGx*);
 #endif
