@@ -6,8 +6,8 @@
 #include <atomic>
 #include <limits>
 namespace wiillr {
-/* OHCI 1.0 control/IRQ/reset and idle Operational boundary (0x00..0x44).
- * Descriptor execution, root-hub state and transfers remain unsupported;
+/* OHCI 1.0 control/IRQ/reset, idle Operational and disconnected two-port hub.
+ * Descriptor execution, connected devices and transfers remain unsupported;
  * all list-enable and transfer-activation requests fail explicitly.
  * OpenHCI 1.0a sections4.4.1/6.2/6.5.6 define HCCA frame stores and FNO.
  * HCR selects USB suspend after a 10us reset profile at the 243MHz IOP clock.
@@ -18,10 +18,11 @@ public:
     OhciInit() {registers_[0x34/4]=0x2edf;registers_[0x44/4]=0x628;}
     bool read(uint32_t at,uint64_t cycles,uint32_t& value,const Bus& bus={}) {
         finish(cycles,bus);
-        if(at&3 || at>0x44)return false;
+        if(at&3 || at>0x58)return false;
         if(at==0) {value=0x10;return true;}
         if(at==8) {value=reset_until_?1:0;return true;}
         if(reset_until_)throw std::runtime_error("Starlet OHCI access during controller reset");
+        if(root_read(at,value))return true;
         if(at==0x10 || at==0x14) {value=enabled_;return true;}
         if(at==0x0c) {value=status_;return true;}
         if(at==0x38 && frame_running_) {value=remaining(cycles);return true;}
@@ -29,8 +30,9 @@ public:
     }
     bool write(uint32_t at,uint32_t value,uint64_t cycles,const Bus& bus={}) {
         finish(cycles,bus);
-        if(at&3 || at>0x44)return false;
+        if(at&3 || at>0x58)return false;
         if(reset_until_)throw std::runtime_error("Starlet OHCI access during controller reset");
+        if(root_write(at,value))return true;
         switch(at) {
         case 4: {
             if(value&0x3c)throw std::runtime_error("Starlet OHCI descriptor list provider is not attached");
@@ -67,6 +69,55 @@ public:
     }
     bool interrupt(uint64_t cycles,const Bus& bus={}) {finish(cycles,bus);return (enabled_&0x80000000u) && (status_&enabled_&0x4000007fu);}
 private:
+    bool root_read(uint32_t at,uint32_t& value) const {
+        switch(at) {
+        case 0x48:value=root_a_;return true;
+        case 0x4c:value=root_b_;return true;
+        case 0x50:value=root_status_;return true;
+        case 0x54:case 0x58:value=root_ports_[(at-0x54)/4];return true;
+        default:return false;
+        }
+    }
+    void port_power(unsigned port,bool enabled) {
+        if(root_a_&0x200u)enabled=true; /* NPS: electrically always powered. */
+        root_ports_[port]=(root_ports_[port]&~0x100u)|(enabled?0x100u:0);
+    }
+    bool root_write(uint32_t at,uint32_t value) {
+        if(at<0x48 || at>0x58)return false;
+        const auto old_ports=root_ports_;const auto old_status=root_status_;
+        if(at==0x48) {
+            /* OpenHCI7.4.1: NDP is read-only, DT is zero; other fields are
+             * writable profile configuration. No attached device is implied. */
+            root_a_=(value&0xff001b00u)|2;
+            if(root_a_&0x200u)for(unsigned p=0;p<2;++p)port_power(p,true);
+        } else if(at==0x4c) {
+            /* This selected profile has two removable, disconnected ports.
+             * Nonremovable DR would force CCS=1 (7.4.4), so require an actual
+             * device provider before allowing that different contract. */
+            if(value&6u)throw std::runtime_error("Starlet OHCI nonremovable device provider is not attached");
+            root_b_=value&0x00060000u;
+        } else if(at==0x50) {
+            if(value&0x8000u)root_status_|=0x8000u;
+            if(value&0x80000000u)root_status_&=~0x8000u;
+            if(value&0x10001u)for(unsigned p=0;p<2;++p)
+                if(!(root_a_&0x100u) || !(root_b_&(1u<<(17+p))))port_power(p,(value&0x10000u)!=0);
+            /* Local power status is unsupported by OHCI and reads zero;
+             * this disconnected profile has no over-current source. */
+        } else {
+            const unsigned p=(at-0x54)/4;
+            if((value&0x300u)==0x300u)throw std::runtime_error("Starlet OHCI conflicting port power commands");
+            auto& port=root_ports_[p];port&=~(value&0x1f0000u); /* change bits W1C */
+            /* OpenHCI7.4.4: enabling/suspending/resetting a disconnected port
+             * sets CSC to report the invalid attempt, never CCS/PES/PRS/PRSC. */
+            if(value&0x16u)port|=0x10000u;
+            if((root_a_&0x100u) && (root_b_&(1u<<(17+p)))) {
+                if(value&0x100u)port_power(p,true);
+                if(value&0x200u)port_power(p,false);
+            }
+        }
+        if(root_ports_!=old_ports || root_status_!=old_status)status_|=0x40; /*6.5.7*/
+        return true;
+    }
     static uint64_t scaled(uint64_t cycles) {
         if(cycles>(std::numeric_limits<uint64_t>::max()-0x4000u*81u)/4)
             throw std::runtime_error("Starlet OHCI frame clock overflow");
@@ -85,8 +136,10 @@ private:
     }
     void finish(uint64_t cycles,const Bus& bus) {
         if(reset_until_ && cycles>=reset_until_) {
-            registers_.fill(0);registers_[1]=0xc0;registers_[0x34/4]=0x2edf;
+            const auto routing=registers_[1]&0x100u;
+            registers_.fill(0);registers_[1]=0xc0|routing;registers_[0x34/4]=0x2edf;
             registers_[0x44/4]=0x628;enabled_=status_=0;reset_until_=0;
+            /* HCR preserves the root hub and must not signal downstream reset. */
         }
         if(reset_until_ || !frame_running_)return;
         const auto now=scaled(cycles);
@@ -111,5 +164,10 @@ private:
     bool frame_running_=false;
     uint32_t frame_toggle_=0;
     uint64_t frame_end_=0;
+    /* Compatible Wii profile: Dolphin OH0::GetRhDesca documents 0x02000302
+     * from a hardware test. DescriptorB=0 explicitly selects removable ports
+     * under global power control; it is not a measured console identity. */
+    uint32_t root_a_=0x02000302u,root_b_=0,root_status_=0;
+    std::array<uint32_t,2> root_ports_{0x100u,0x100u};
 };
 }

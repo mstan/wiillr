@@ -212,7 +212,8 @@ int main() {
             CHECK(usb.read32(base+4)==0xc0 && usb.read32(base+0x10)==0 && usb.read32(base+0x18)==0);
             CHECK(faults([&]{usb.write32(base+4,0xbc);})); /* No silent descriptor/USB service success. */
             CHECK(faults([&]{usb.write32(base+8,2);}));
-            CHECK(faults([&]{usb.read32(base+0x48);})); /* Root hub device profile is separate. */
+            CHECK(usb.read32(base+0x48)==0x02000302 && usb.read32(base+0x54)==0x100);
+            CHECK(faults([&]{usb.read32(base+0x5c);})); /* Selected profile has only two ports. */
             CHECK(faults([&]{usb.write16(base+0x14,0xffff);}));
         }
     }

@@ -53,5 +53,35 @@ int main() {
     CHECK(faults([&]{invalid.interrupt(243000,bus);}) && memory.stores==stores);
     invalid.read(0x3c,0,value,bus);CHECK(value==0);invalid.read(0x0c,0,value,bus);CHECK(value==0);
     memory.mapped=true;invalid.write(8,1,0,bus);CHECK(!invalid.interrupt(300000,bus) && memory.stores==stores);
+    Ohci hub;uint64_t hub_time=0;
+    auto hr=[&](uint32_t at){uint32_t v;if(!hub.read(at,hub_time,v,bus))throw std::runtime_error("Invalid hub register");return v;};
+    auto hw=[&](uint32_t at,uint32_t v){return hub.write(at,v,hub_time,bus);};
+    CHECK(hr(0x48)==0x02000302 && hr(0x4c)==0 && hr(0x50)==0);
+    CHECK(hr(0x54)==0x100 && hr(0x58)==0x100); // Powered; no connection.
+    hw(0x54,0x200);hw(0x50,1);CHECK(hr(0x54)==0x100 && hr(0x58)==0x100); // NPS wins.
+    hw(0x10,0x80000040);
+    for(uint32_t command:{2u,4u,16u}) {
+        hw(0x54,command);CHECK(hr(0x54)==0x10100 && hub.interrupt(hub_time,bus));
+        hw(0x0c,0x40);CHECK(!hub.interrupt(hub_time,bus));
+        hw(0x54,0x10000);CHECK(hr(0x54)==0x100 && hub.interrupt(hub_time,bus));
+        hw(0x0c,0x40);
+    }
+    hub_time+=4860000;CHECK(hr(0x54)==0x100 && !hub.interrupt(hub_time,bus)); // No reset completion is invented.
+    hw(0x48,hr(0x48)&~0x200u);hw(0x4c,0x20000); // Port1 individual; port2 global.
+    hw(0x54,0x200);CHECK(hr(0x54)==0 && hr(0x58)==0x100);
+    hw(0x58,0x200);CHECK(hr(0x58)==0x100);
+    hw(0x50,1);CHECK(hr(0x54)==0 && hr(0x58)==0);
+    hw(0x50,0x10000);CHECK(hr(0x54)==0 && hr(0x58)==0x100 && !(hr(0x50)&1));
+    hw(0x54,0x100);CHECK(hr(0x54)==0x100);
+    hw(0x48,hr(0x48)&~0x100u);hw(0x54,0x200);CHECK(hr(0x54)==0x100); // Global mode ignores per-port power.
+    hw(0x50,1);CHECK(hr(0x54)==0 && hr(0x58)==0);
+    hw(0x48,0x020003ff);CHECK(hr(0x48)==0x02000302 && hr(0x54)==0x100 && hr(0x58)==0x100);
+    CHECK(faults([&]{hw(0x4c,2);}) && hr(0x4c)==0x20000); // No forced connected/nonremovable device.
+    CHECK(faults([&]{hw(0x54,0x300);}) && hr(0x54)==0x100);
+    hw(0x50,0x8000);CHECK(hr(0x50)==0x8000);hw(0x50,0x80000000);CHECK(hr(0x50)==0);
+    hw(0x54,16);const auto port_before_hcr=hr(0x54),a_before_hcr=hr(0x48),b_before_hcr=hr(0x4c);
+    hw(4,0x100);hw(8,1);hub_time+=2430;
+    CHECK(hr(4)==0x1c0 && hr(0x48)==a_before_hcr && hr(0x4c)==b_before_hcr && hr(0x54)==port_before_hcr);
+    CHECK(!(hr(0x54)&0x13) && !(hr(0x54)&0x100000)); // CCS/PES/PRS/PRSC stay clear.
     return 0;
 }
