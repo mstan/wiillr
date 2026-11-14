@@ -97,7 +97,56 @@ int main() {
     const auto before_uploads=uploads,before_draws=draws;word(0x20f4,0x3000);
     CHECK(!wii_menu_text_draw(renderer,0x2000,0x2500,&view));
     CHECK(uploads==before_uploads && draws==before_draws);
-    wii_menu_text_forget(renderer,0x2000);CHECK(destroys==uploads);
-    wii_menu_text_destroy(renderer);
+    // Standalone Glyph carries original atlas coordinates, while original
+    // Print already applied the bearing. Cached vertex alpha is final: do
+    // not apply the writer opacity again, and never advance its cursor here.
+    const uint32_t writer=0x3000,value=0x3100;
+    word(writer,0);word(writer+4,0xffffffff);
+    word(writer+8,0xff000080);word(writer+12,0x00ff0040);
+    word(writer+16,0x0000ff20);word(writer+20,0xffffff10);
+    word(writer+0x24,0x3fc00000);word(writer+0x28,0x40000000);
+    word(writer+0x2c,0x42f68000);byte(writer+0x42,17);
+    word(writer+0x38,1);word(writer+0x3c,1);word(writer+0x48,0x100);
+    word(value,0x1000);byte(value+4,254);byte(value+5,6);byte(value+6,7);byte(value+7,7);
+    word(value+8,1);half(value+12,32);half(value+14,32);half(value+16,9);half(value+18,17);
+    std::array<uint8_t,0x4c> writer_before;std::memcpy(writer_before.data(),ram.data()+writer,writer_before.size());
+    float xyz[]{10,20,.25f},model[]{1,0,0,2,0,1,0,3,0,0,1,4};WiiMenuPicture quad{};WiiMenuCharWriterStyle style{};
+    CHECK(wii_menu_charwriter_style(memory,writer,&style,error,sizeof error));
+    CHECK(wii_menu_charwriter_validate(memory,writer,error,sizeof error));
+    CHECK(wii_menu_charwriter_prepare(memory,writer,value,xyz,&view,model,&style,&quad,error,sizeof error));
+    CHECK(quad.vertices[0].position[0]==10 && quad.vertices[0].position[1]==20);
+    CHECK(quad.vertices[2].position[0]==19 && quad.vertices[2].position[1]==34 && quad.vertices[2].position[2]==.25f);
+    CHECK(quad.vertices[0].uv[0]==9.f/32 && quad.vertices[2].uv[1]==24.f/32);
+    CHECK(quad.vertices[0].color[3]==128.f/255 && quad.vertices[1].color[3]==64.f/255);
+    CHECK(quad.vertices[2].color[3]==16.f/255 && quad.vertices[3].color[2]==1);
+    CHECK(quad.draw.model_view[3]==2 && quad.draw.model_view[7]==3 && quad.draw.model_view[11]==4);
+    CHECK(quad.color.low[0]==255 && quad.color.high[0]==255 && quad.color.low[3]==0);
+    CHECK(std::memcmp(writer_before.data(),ram.data()+writer,writer_before.size())==0);
+    word(writer,0x11223344);
+    CHECK(wii_menu_charwriter_prepare(memory,writer,value,xyz,&view,model,&style,&quad,error,sizeof error));
+    CHECK(quad.color.low[0]==255); // Setup snapshot survives a later class color-map edit.
+    word(writer,0);
+    const auto glyph_uploads=uploads,glyph_draws=draws;
+    CHECK(wii_menu_charwriter_draw(renderer,writer,value,xyz,&view,model,&style)==1);
+    CHECK(wii_menu_charwriter_draw(renderer,writer,value,xyz,&view,model,&style)==1);
+    CHECK(uploads==glyph_uploads+1 && draws==glyph_draws+2);
+    CHECK(std::memcmp(writer_before.data(),ram.data()+writer,writer_before.size())==0);
+    // Resource/material failures occur before upload and preserve output.
+    const auto untouched=quad;word(value+8,8);
+    CHECK(!wii_menu_charwriter_prepare(memory,writer,value,xyz,&view,model,&style,&quad,error,sizeof error));
+    CHECK(std::memcmp(&quad,&untouched,sizeof quad)==0);word(value+8,6);half(0x30a,6);
+    CHECK(wii_menu_charwriter_style(memory,writer,&style,error,sizeof error));
+    CHECK(wii_menu_charwriter_prepare(memory,writer,value,xyz,&view,model,&style,&quad,error,sizeof error));
+    CHECK(quad.color.low[0]==0 && quad.color.high[0]==255); // RGBA keeps source RGB.
+    word(writer+0x38,0);word(writer+0x3c,0);
+    CHECK(wii_menu_charwriter_prepare(memory,writer,value,xyz,&view,model,&style,&quad,error,sizeof error));
+    CHECK(quad.draw.material.texture.linear==0);
+    const auto finite_quad=quad;word(writer+0x24,0x7f7fffff);
+    CHECK(!wii_menu_charwriter_prepare(memory,writer,value,xyz,&view,model,&style,&quad,error,sizeof error));
+    CHECK(std::memcmp(&quad,&finite_quad,sizeof quad)==0);word(writer+0x24,0x3fc00000);
+    word(writer+0x38,1);word(writer+0x3c,0);const auto no_upload=uploads;
+    CHECK(!wii_menu_charwriter_draw(renderer,writer,value,xyz,&view,model,&style));CHECK(uploads==no_upload);
+    wii_menu_text_forget(renderer,0x2000);CHECK(destroys+1==uploads);
+    wii_menu_text_destroy(renderer);CHECK(destroys==uploads);
     return 0;
 }

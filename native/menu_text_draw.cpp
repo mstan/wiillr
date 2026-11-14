@@ -210,7 +210,8 @@ extern "C" int wii_menu_text_validate(WiiMenuMemory memory,uint32_t pane,uint32_
 struct WiiMenuTextNative {
     WiiMenuMemory memory;const GcWiiNativeRenderApi* meshes;const GcWiiNativeGuiApi* gui;
     std::map<uint32_t,std::vector<Stored>> panes;WiiMenuTextStatus status{};
-    ~WiiMenuTextNative(){for(auto& [pane,items]:panes)for(auto& item:items)meshes->destroy_mesh(item.mesh);}
+    std::map<std::array<uint32_t,36>,uint64_t> glyph_meshes;
+    ~WiiMenuTextNative(){for(auto& [pane,items]:panes)for(auto& item:items)meshes->destroy_mesh(item.mesh);for(auto& item:glyph_meshes)meshes->destroy_mesh(item.second);}
 };
 extern "C" WiiMenuTextNative* wii_menu_text_create(WiiMenuMemory memory,const GcWiiNativeRenderApi* meshes,const GcWiiNativeGuiApi* gui) {
     if(!memory.read || !meshes || meshes->abi!=GC_WII_NATIVE_RENDER_ABI || !meshes->create_mesh || !meshes->destroy_mesh || !gui || gui->abi!=GC_WII_NATIVE_GUI_ABI || !gui->draw)return nullptr;
@@ -251,3 +252,68 @@ extern "C" void wii_menu_text_forget(WiiMenuTextNative* renderer,uint32_t pane) 
     renderer->panes.erase(found);
 }
 extern "C" void wii_menu_text_status(const WiiMenuTextNative* renderer,WiiMenuTextStatus* out){if(renderer && out)*out=renderer->status;}
+
+namespace {
+void charwriter(const Reader& r,uint32_t writer) {
+    r.bytes(writer,0x4c);
+    need(r.u32(writer+0x38)<=1 && r.u32(writer+0x38)==r.u32(writer+0x3c),"Unsupported CharWriter texture filters");
+    (void)r.f32(writer+0x24);(void)r.f32(writer+0x28);
+}
+WiiMenuPicture prepare_charwriter(WiiMenuMemory memory,uint32_t writer,uint32_t value,
+    const float position[3],const WiiMenuView& view,const float model[12],const WiiMenuCharWriterStyle& style) {
+    const Reader r{memory};charwriter(r,writer);WiiMenuPicture out{};
+    for(unsigned n=0;n<3;++n)need(std::isfinite(position[n]),"Nonfinite CharWriter position");
+    camera(view,out.draw);
+    for(unsigned n=0;n<12;++n){need(std::isfinite(model[n]),"Nonfinite CharWriter model");out.draw.model_view[n]=model[n];}
+    WiiMenuFontGlyph g{};char error[192];need(wii_menu_charwriter_glyph(memory,value,&g,error,sizeof error)!=0,error);
+    out.draw.material.texture=g.texture;out.draw.material.texture.linear=r.u32(writer+0x38);
+    out.color=style.color;
+    for(unsigned ch=0;ch<4;ch++)need(out.color.low[ch]>=0 && out.color.low[ch]<=255 && out.color.high[ch]>=0 && out.color.high[ch]<=255,"Invalid CharWriter material");
+    // DrawGlyph receives the left-bearing-adjusted X from original Print.
+    // Original fmuls then fadds are separate single-precision operations.
+    volatile float width=float(g.glyph_width)*r.f32(writer+0x24),height=float(g.glyph_height)*r.f32(writer+0x28);
+    const float xs[]{position[0],float(position[0]+width)},ys[]{position[1],float(position[1]+height)};
+    need(std::isfinite(xs[1]) && std::isfinite(ys[1]),"Excessive CharWriter geometry");
+    const float us[]{float(uint16_t((g.cell_x<<15)/g.texture.width))/32768.f,
+                     float(uint16_t(((g.cell_x+g.glyph_width)<<15)/g.texture.width))/32768.f};
+    const float vs[]{float(uint16_t((g.cell_y<<15)/g.texture.height))/32768.f,
+                     float(uint16_t(((g.cell_y+g.glyph_height)<<15)/g.texture.height))/32768.f};
+    constexpr unsigned vx[]{0,1,1,0},vy[]{0,0,1,1},colors[]{8,12,20,16};
+    for(unsigned n=0;n<4;++n){auto& v=out.vertices[n];v.position[0]=xs[vx[n]];v.position[1]=ys[vy[n]];v.position[2]=position[2];
+        for(unsigned ch=0;ch<4;++ch)v.color[ch]=float(r.u8(writer+colors[n]+ch))/255.f;
+        v.uv[0]=us[vx[n]];v.uv[1]=vs[vy[n]];}
+    out.needs_gui=1;return out;
+}
+}
+extern "C" int wii_menu_charwriter_validate(WiiMenuMemory memory,uint32_t writer,char* error,uint32_t size) {
+    try{need(memory.read,"Missing CharWriter memory");charwriter(Reader{memory},writer);if(error && size)*error=0;return 1;}
+    catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
+}
+extern "C" int wii_menu_charwriter_prepare(WiiMenuMemory memory,uint32_t writer,uint32_t value,
+    const float position[3],const WiiMenuView* view,const float model[12],const WiiMenuCharWriterStyle* style,WiiMenuPicture* out,char* error,uint32_t size) {
+    try{need(memory.read && position && view && model && style && out,"Missing CharWriter draw input");
+        const auto ready=prepare_charwriter(memory,writer,value,position,*view,model,*style);*out=ready;if(error && size)*error=0;return 1;}
+    catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
+}
+extern "C" int wii_menu_charwriter_draw(WiiMenuTextNative* renderer,uint32_t writer,uint32_t value,
+    const float position[3],const WiiMenuView* view,const float model[12],const WiiMenuCharWriterStyle* style) {
+    if(!renderer)return 0;WiiMenuPicture p{};
+    if(!wii_menu_charwriter_prepare(renderer->memory,writer,value,position,view,model,style,&p,renderer->status.error,sizeof renderer->status.error)){++renderer->status.rejected;return 0;}
+    try {
+        static_assert(sizeof p.vertices==sizeof(std::array<uint32_t,36>));
+        std::array<uint32_t,36> key;std::memcpy(key.data(),p.vertices,sizeof p.vertices);
+        auto it=renderer->glyph_meshes.find(key);
+        if(it==renderer->glyph_meshes.end()) {
+            // Bounded geometry retention across original per-glyph calls.
+            // GUI resources, models and materials remain live draw inputs.
+            constexpr uint16_t indices[]{0,1,2,0,2,3};
+            const GcWiiNativeMesh mesh{p.vertices,indices,4,6};const auto handle=renderer->meshes->create_mesh(&mesh);
+            need(handle!=0,"CharWriter mesh upload failed");
+            if(renderer->glyph_meshes.size()>=4096){auto old=renderer->glyph_meshes.begin();renderer->meshes->destroy_mesh(old->second);renderer->glyph_meshes.erase(old);}
+            it=renderer->glyph_meshes.emplace(key,handle).first;++renderer->status.mesh_uploads;
+        }
+        p.draw.mesh=it->second;const GcWiiNativeGuiDraw draw{p.draw,p.color};
+        need(renderer->gui->draw(&draw)!=0,"CharWriter native submission failed");
+        ++renderer->status.draws;++renderer->status.glyphs;renderer->status.error[0]=0;return 1;
+    }catch(const std::exception& e){++renderer->status.rejected;std::snprintf(renderer->status.error,sizeof renderer->status.error,"%s",e.what());return -1;}
+}

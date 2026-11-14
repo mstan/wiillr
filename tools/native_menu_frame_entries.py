@@ -6,7 +6,10 @@ import json
 import re
 from pathlib import Path
 
+CHARWRITER = {0x81516e34,0x81518144}
 PAGES = {
+    'overlay_81516000_h04B1E64323F202E0.c': [0x81516e34],
+    'overlay_81518000_hD0939295F2091B27.c': [0x81518144],
     'overlay_8133D000_hD5682C7A05DD06C3.c': [0x8133de74,0x8133de78,0x8133df24,0x8133df74,0x8133dfc0,0x8133dfe4],
     'overlay_8133E000_hFED53A5E2136774C.c': [0x8133e230,0x8133e2d4],
     'overlay_81334000_h703661867DD22FE3.c': [0x81334328,0x81334c7c],
@@ -33,16 +36,19 @@ def main():
     header=source.parent.parent/'generated_abi.h';text=source.read_text(encoding='utf-8');include='#include "../generated_abi.h"'
     if not header.is_file() or text.count(include)!=1:raise ValueError('Prepared IPL43U entry/header differs')
     text=text.replace(include,'#include "'+header.as_posix()+'"\n#include "wiillr/menu_frame_hook.h"',1)
+    if any(a in CHARWRITER for a in PAGES[source.name]):
+        text=text.replace('#include "wiillr/menu_frame_hook.h"','#include "wiillr/menu_frame_hook.h"\n#include "wiillr/menu_text_hook.h"')
     for address in PAGES[source.name]:
         marker=f'\nlabel_{address:08X}:\n'
         if text.count(marker)!=1:raise ValueError('Owner entry label missing or duplicated')
         cases=re.findall(rf'case 0x{address:08X}u:\s*(?:dr_cycles -= ([0-9]+)u;\s*)?goto label_{address:08X};',text)
         if len(cases)!=1:raise ValueError('Prepared entry clock offset differs')
         offset=int(cases[0] or 0)
+        service="wii_menu_text_hook_call" if address in CHARWRITER else "wii_menu_frame_entry"
         # A middle-of-block owner must publish already completed instructions;
         # a decline retains the emitter's deferred block-charge convention.
         text=text.replace(marker,marker+f'    ctx->cycles = dr_cycles + {offset}u;\n'+f'    ctx->pc = 0x{address:08X}u;\n'+
-            f'    if (wii_menu_frame_entry(ctx,0x{address:08X}u)) return;\n    dr_cycles = ctx->cycles - '+str(offset)+'u;\n',1)
+            f'    if ({service}(ctx,0x{address:08X}u)) return;\n    dr_cycles = ctx->cycles - '+str(offset)+'u;\n',1)
     output.parent.mkdir(parents=True,exist_ok=True);data=text.encode('utf-8')
     if not output.exists() or output.read_bytes()!=data:output.write_bytes(data)
     receipt={'entries':[hex(a) for a in PAGES[source.name]],'source':str(source),
