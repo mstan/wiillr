@@ -138,11 +138,15 @@ int main(int argc,char** argv) {
   wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.fs=nand;
   const uint32_t message=0x10000200,buffer=0x10000400;
   const auto exchange=[&]() {
-    wii_ipc_write(&ipc,4,0x36,cpu.cycles);wii_ipc_write(&ipc,0,message,cpu.cycles);
+    wii_ipc_write(&ipc,4,0x36,cpu.cycles);
+    wii_ipc_write(&ipc,0x30,0x40000000u,cpu.cycles); /* Complete prior reply ISR. */
+    wii_ipc_write(&ipc,0,message,cpu.cycles);
     wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     if(!wii_ios_native_tick(&ios,&ipc,&cpu))return false;cpu.cycles+=6000;
     if(!wii_ios_native_tick(&ios,&ipc,&cpu))return false;
-    wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=6000;
+    wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    wii_ipc_write(&ipc,0x30,0x40000000u,cpu.cycles); /* Complete ACK ISR. */
+    cpu.cycles+=6000;
     return wii_ios_native_tick(&ios,&ipc,&cpu);
   };
   std::memcpy(cpu.ram+0x800,"/save",6);
