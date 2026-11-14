@@ -80,6 +80,30 @@ static const char* game_caption(const WiiGx* gx) {
     return gx->title==0x0000000100000002ull?"Wii Menu":"Mega Man 9";
 }
 
+static void session_cursor(bool hide) {
+    /* Native settings can also change SDL cursor state; query the actual state. */
+    if(hide==!SDL_CursorVisible())return;
+    if(hide)(void)SDL_HideCursor();else (void)SDL_ShowCursor();
+}
+static WiiGx* cursor_owner;
+static bool session_cursor_event(void* user,SDL_Event* event) {
+    /* SDL also pumps window events while guest execution is paused. Synthetic
+     * events may originate on other threads; cursor APIs stay on the owner. */
+    if(!SDL_IsMainThread())return true;
+    if(event->type==SDL_EVENT_WINDOW_FOCUS_LOST || event->type==SDL_EVENT_WINDOW_MOUSE_LEAVE ||
+       event->type==SDL_EVENT_WINDOW_HIDDEN) {
+        SDL_Window* window=SDL_GetWindowFromID(event->window.windowID);
+        if(window && !strcmp(SDL_GetWindowTitle(window),game_caption(user)))session_cursor(false);
+    }
+    return true;
+}
+static void session_stop(void* user) {
+    if(cursor_owner==user) {
+        SDL_RemoveEventWatch(session_cursor_event,user);cursor_owner=NULL;
+    }
+    session_cursor(false);wii_launcher_input_stop(user);
+}
+
 static bool set_env(const char* name,const char* value) {
 #ifdef _WIN32
     return _putenv_s(name,value)==0;
@@ -264,6 +288,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
 static bool session_review(void* user,bool visible,u32 volume) {
     WiiGx* gx=user;
     if((gx->title!=0x0001000157523945ull && gx->title!=0x0000000100000002ull) || volume>100)return false;
+    if(!visible)session_cursor(false);
     int count=0;SDL_Window** windows=SDL_GetWindows(&count);bool ok=false;
     for(int i=0;windows && i<count;++i) {
         if(strcmp(SDL_GetWindowTitle(windows[i]),game_caption(gx)))continue;
@@ -280,7 +305,7 @@ static bool session_review(void* user,bool visible,u32 volume) {
     wii_pacing_reset(&gx->machine->pacing);return true;
 }
 static bool session_settings(void* user) {
-    WiiGx* gx=user;
+    WiiGx* gx=user;session_cursor(false);
     /* This callback runs between fields on the simulation/graphics owner.
      * The shared in-session launcher freezes that owner until RESUME. */
     if(!gx->api->drain()) {gx->cpu->halted=true;return false;}
@@ -325,6 +350,10 @@ static void session_input(void* user,GcnllrPad* pad) {
         memset(pad,0,sizeof *pad);
         pad->stick_x=pad->stick_y=pad->substick_x=pad->substick_y=128;
     }
+    SDL_Window* mouse=SDL_GetMouseFocus();
+    session_cursor(gx->title==0x0000000100000002ull && focused && mouse &&
+        !strcmp(SDL_GetWindowTitle(mouse),game_caption(gx)) &&
+        gx->input.pointing && !input_release && !gx->scripted_input);
     wii_mm9_mods_host_actions(gx->title==0x0001000157523945ull && !gx->scripted_input && !input_release &&
         !(pad->buttons&0x10)?wii_launcher_input_held_actions():0);
 }
@@ -352,7 +381,13 @@ bool wii_launcher_window(WiiGx* gx) {
     gx->host_input_user=gx;gx->host_input=session_input;
     gx->host_settings=mm9 || menu?session_settings:NULL;
     gx->host_review=mm9 || menu?session_review:NULL;
-    gx->host_input_stop=wii_launcher_input_stop;
+    gx->host_input_stop=session_stop;
+    if(menu && cursor_owner!=gx) {
+        if(cursor_owner)SDL_RemoveEventWatch(session_cursor_event,cursor_owner);
+        cursor_owner=NULL;
+        if(!SDL_AddEventWatch(session_cursor_event,gx))return false;
+        cursor_owner=gx;
+    }
     /* Audio/input edits and Resume preserve a manually resized Fit window. */
     if(!resize)return true;
     const int width=640*settings.window_scale;
