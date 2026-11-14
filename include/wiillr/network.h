@@ -16,6 +16,12 @@ bool wii_network_link(WiiNetwork*);
 int wii_network_submit(WiiNetwork*,CPUState*,u32 message,s32* result);
 bool wii_network_poll(WiiNetwork*,CPUState*,u32* message,u32* command,s32* result);
 void wii_network_close_device(WiiNetwork*,u32 fd);
+/* Virtual WD mode3 scans only the logical host-backed wiillr endpoint. These
+ * calls do not expose a physical radio or AOSS association. Missing host
+ * routing returns IOS_ENOENT, retaining the ordinary unavailable-device path. */
+s32 wii_network_wireless_open(WiiNetwork*,u32 fd,u32 flags);
+s32 wii_network_wireless_close(WiiNetwork*,u32 fd);
+int wii_network_wireless_submit(WiiNetwork*,CPUState*,u32 message,s32* result);
 #ifdef __cplusplus
 }
 #endif

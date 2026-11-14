@@ -17,4 +17,17 @@ static inline bool wii_network_seed_config(uint8_t* data,size_t size) {
     memcpy(data+8+1988,"wiillr",6);data[8+2021]=6;
     return true;
 }
+/* A saved external SSID is never reported as associated with the virtual AP.
+ * Wired selection can use ordinary host routing without radio association. */
+static inline bool wii_network_host_profile_selected(const uint8_t* data,size_t size) {
+    if(!data || size!=7004)return false;
+    for(unsigned n=0;n<3;++n) {
+        const uint8_t* connection=data+8+n*2332;
+        if(!(connection[0]&0x80))continue;
+        if(data[4]==2 && (connection[0]&1))return true;
+        if(data[4]==1 && !(connection[0]&1) && connection[2021]==6 &&
+           !memcmp(connection+1988,"wiillr",6))return true;
+    }
+    return false;
+}
 #endif

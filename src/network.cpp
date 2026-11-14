@@ -73,7 +73,9 @@ int net_error(int e){
     }
 }
 u32 be32(const u8* p){return u32(p[0])<<24|u32(p[1])<<16|u32(p[2])<<8|p[3];}
+u16 be16(const u8* p){return u16(u16(p[0])<<8|p[1]);}
 void store32(u8* p,u32 v){p[0]=u8(v>>24);p[1]=u8(v>>16);p[2]=u8(v>>8);p[3]=u8(v);}
+void store16(u8* p,u16 v){p[0]=u8(v>>8);p[1]=u8(v);}
 u8* memory(CPUState* cpu,u32 address,u32 size){
     const u32 p=gcn_reservation_key(address);
     if(!(p<cpu->ram_size || (p>=0x10000000u && p-0x10000000u<cpu->mem2_size)))return nullptr;
@@ -93,7 +95,7 @@ struct Resolver {
 struct Request {
     u32 message,command,fd,op;std::vector<Buffer> in,out;
     Clock::time_point start=Clock::now();std::shared_ptr<Resolver> resolver;
-    bool cancelled=false;
+    bool cancelled=false,wireless=false;
 };
 struct Socket {HostSocket host=invalid;bool nonblock=false,connecting=false;};
 bool sockaddr_in_from(const u8* data,sockaddr_in* address){
@@ -132,9 +134,12 @@ Interface host_interface(){
     }
 #else
     ifaddrs* first=nullptr;
-    if(getifaddrs(&first)==0){for(auto* a=first;a;a=a->ifa_next)if(a->ifa_addr && a->ifa_netmask && a->ifa_addr->sa_family==AF_INET &&
-        ntohl(reinterpret_cast<sockaddr_in*>(a->ifa_addr)->sin_addr.s_addr)==result.ip)
-        result.mask=ntohl(reinterpret_cast<sockaddr_in*>(a->ifa_netmask)->sin_addr.s_addr);freeifaddrs(first);}
+    if(getifaddrs(&first)==0){
+        for(auto* a=first;a;a=a->ifa_next)if(a->ifa_addr && a->ifa_netmask && a->ifa_addr->sa_family==AF_INET &&
+            ntohl(reinterpret_cast<sockaddr_in*>(a->ifa_addr)->sin_addr.s_addr)==result.ip)
+            result.mask=ntohl(reinterpret_cast<sockaddr_in*>(a->ifa_netmask)->sin_addr.s_addr);
+        freeifaddrs(first);
+    }
     std::ifstream config("/etc/resolv.conf");std::string key,value;unsigned n=0;
     while(n<2 && config>>key){std::getline(config,value);if(key!="nameserver")continue;
         const auto begin=value.find_first_not_of(" \t");if(begin==std::string::npos)continue;value=value.substr(begin);value=value.substr(0,value.find_first_of(" \t#\r"));
@@ -147,19 +152,81 @@ struct WiiNetwork {
     std::shared_ptr<SocketRuntime> runtime=std::make_shared<SocketRuntime>();
     std::array<Socket,24> sockets{};std::list<Request> pending;std::array<u8,6> mac{};
     Clock::time_point next_poll{};Interface cached_interface{};Clock::time_point interface_at{};
+    s32 wireless_fd=-1;u32 wireless_mode=0;bool wireless_active=false;
     ~WiiNetwork(){for(auto& s:sockets)if(s.host!=invalid)close_socket(s.host);}
     Interface current_interface(){const auto now=Clock::now();if(now>=interface_at){cached_interface=host_interface();interface_at=now+std::chrono::seconds(1);}return cached_interface;}
 };
 namespace {
 constexpr s32 waiting=INT32_MIN;
-bool supported(u32 command,u32 op){
+constexpr s32 wd_invalid=s32(0x80008000u),wd_parameter=s32(0x80008001u),wd_unavailable=s32(0x80008002u);
+std::array<u8,6> virtual_bssid(const WiiNetwork& net){auto mac=net.mac;mac[0]=(mac[0]|2)&0xfe;mac[5]^=0x80;return mac;}
+/* The retained SDK WD_Scan supplies one 0x4e-byte ScanInfo and one result
+ * vector. Its BSS consumer reads rates at2e/30, channel36 and advances by
+ * length*2 (the descriptor length is halfwords, not bytes). The 64-byte record
+ * below has no vendor/AOSS information element and names only our endpoint. */
+s32 execute_wireless(WiiNetwork& net,Request& r){
+    if(net.wireless_fd<0 || u32(net.wireless_fd)!=r.fd)return wd_invalid;
+    if(r.op==0x1001 || r.op==0x1003){
+        if(!r.in.empty() || !r.out.empty())return wd_parameter;
+        return r.op==0x1001?s32(net.wireless_mode):s32(net.wireless_active && net.current_interface().ip);
+    }
+    if(r.op==0x1002){
+        if(r.in.size()!=1 || !r.out.empty() || r.in[0].bytes.size()<4)return wd_parameter;
+        const u32 state=be32(r.in[0].bytes.data());if(state>1)return wd_parameter;
+        net.wireless_active=state!=0;return 0;
+    }
+    if(r.op==0x100e){
+        if(!r.in.empty() || r.out.size()!=1 || r.out[0].bytes.size()<0x90)return wd_parameter;
+        std::array<u8,0x90> info{};std::memcpy(info.data(),net.mac.data(),6);
+        const bool available=net.current_interface().ip!=0;store16(info.data()+6,available?2:0);
+        /* Channel1 only; no Nintendo DS radio capability. Firmware target is
+         * USA. This is the virtual driver identity, not a host radio version. */
+        std::memcpy(info.data()+10,"US",2);info[14]=1;info[15]=u8(available);
+        const char version[]="wiillr host IPv4";std::memcpy(info.data()+16,version,sizeof version);
+        r.out[0].put(0,info.data(),u32(info.size()));return 0;
+    }
+    if(r.op==0x100a){
+        if(r.in.size()!=1 || r.out.size()!=1 || r.in[0].bytes.size()!=0x4e || r.out[0].bytes.size()<2)return wd_parameter;
+        const auto& scan=r.in[0].bytes;const u16 ssid_length=be16(scan.data()+12);
+        if(ssid_length>32 || be16(scan.data()+10)>1)return wd_parameter;
+        const auto bssid=virtual_bssid(net);bool any=true,exact=true;
+        for(unsigned n=0;n<6;++n){any=any && scan[4+n]==0xff;exact=exact && scan[4+n]==bssid[n];}
+        bool match=(any || exact) && (be16(scan.data())&2) && net.current_interface().ip;
+        if(ssid_length){
+            if(ssid_length!=6)match=false;
+            else {const char ssid[]="wiillr";for(unsigned n=0;n<6;++n)
+                if((scan[14+n]&scan[46+n])!=(u8(ssid[n])&scan[46+n]))match=false;}
+        }
+        if(match && r.out[0].bytes.size()<0x42)return wd_parameter;
+        const u8 count[2]={0,u8(match)};r.out[0].put(0,count,2);
+        if(match){
+            std::array<u8,0x40> entry{};store16(entry.data(),0x20);store16(entry.data()+2,0xffff);
+            std::memcpy(entry.data()+4,bssid.data(),bssid.size());store16(entry.data()+10,6);std::memcpy(entry.data()+12,"wiillr",6);
+            store16(entry.data()+0x2c,1); /* infrastructure, open */
+            store16(entry.data()+0x2e,0x000f);store16(entry.data()+0x30,0x0fff);
+            store16(entry.data()+0x32,100);store16(entry.data()+0x34,1);store16(entry.data()+0x36,1);
+            r.out[0].put(2,entry.data(),u32(entry.size()));
+        }return 0;
+    }
+    if(r.op==0x8000 || r.op==0x8001){
+        /* There are no raw radio frames/notifications in the host-IP
+         * transport. A valid receive stays pending until descriptor close;
+         * no event payload or radio association is invented. */
+        if(r.out.empty())return wd_parameter;
+        return waiting;
+    }
+    return wd_unavailable; /* notably no AOSS vendor pairing/802.11 raw frames */
+}
+bool supported(u32 command,u32 op,bool wireless){
+    if(wireless)return command==7 && ((op>=0x1000 && op<=0x1010) || op==0x8000 || op==0x8001);
     if(command==6)switch(op){case 2:case 3:case 4:case 5:case 6:case 7:case 14:case 15:case 16:case 17:case 21:case 31:return true;}
     if(command==7)switch(op){case 12:case 13:case 26:case 27:case 28:return true;}
     return false;
 }
 s32 execute(WiiNetwork& net,Request& r){
-    if(r.cancelled)return -11;
     for(auto& b:r.out)b.writes.clear();
+    if(r.cancelled)return r.wireless?wd_invalid:-11;
+    if(r.wireless)return execute_wireless(net,r);
     if(r.command==6){
         auto& in=r.in[0].bytes;auto& out=r.out[0];
         if(r.op==31)return net.runtime->ok?0:-38;
@@ -212,8 +279,9 @@ s32 execute(WiiNetwork& net,Request& r){
                 const bool socket_op=(p.command==6 && (p.op==2 || p.op==4 || p.op==5 || p.op==6 || p.op==7 || p.op==14)) ||
                     (p.command==7 && (p.op==12 || p.op==13));
                 const unsigned input=p.command==7 && p.op==13?1:0;
-                if(socket_op && p.in.size()>input && p.in[input].bytes.size()>=4 && be32(p.in[input].bytes.data())==fd)p.cancelled=true;
-            }return 0;
+                if(!p.wireless && socket_op && p.in.size()>input && p.in[input].bytes.size()>=4 && be32(p.in[input].bytes.data())==fd)p.cancelled=true;
+            }
+            return 0;
         }
         if(r.op==5){if(in.size()<12)return -28;const u32 command=be32(in.data()+4);if(command==3)return s.nonblock?4:0;if(command!=4 || (be32(in.data()+8)&~4u))return -28;s.nonblock=(be32(in.data()+8)&4)!=0;return 0;}
         if(r.op==14){if(in.size()<8 || be32(in.data()+4)>2)return -28;return shutdown(s.host,int(be32(in.data()+4)))==0?0:net_error(socket_error());}
@@ -233,7 +301,7 @@ s32 execute(WiiNetwork& net,Request& r){
         }
     }else{
         if(r.op==26)return net.runtime->ok?0:-38;
-        if(r.op==27){for(auto& s:net.sockets){if(s.host!=invalid)close_socket(s.host);s={};}for(auto& p:net.pending)if(&p!=&r)p.cancelled=true;return 0;}
+        if(r.op==27){for(auto& s:net.sockets){if(s.host!=invalid)close_socket(s.host);s={};}for(auto& p:net.pending)if(&p!=&r && !p.wireless)p.cancelled=true;return 0;}
         if(r.op==28){
             if(r.in.size()!=1 || r.in[0].bytes.size()<8 || r.out.size()!=2 || r.out[1].bytes.size()<4)return -28;
             const auto& in=r.in[0].bytes;if(be32(in.data())!=0xfffe)return -51;
@@ -294,12 +362,12 @@ bool capture(CPUState* cpu,u32 address,u32 size,Buffer* buffer){
 extern "C" WiiNetwork* wii_network_create(const u8 mac[6]){try{auto* net=new WiiNetwork;if(mac)std::memcpy(net->mac.data(),mac,6);return net;}catch(...){return nullptr;}}
 extern "C" void wii_network_destroy(WiiNetwork* net){delete net;}
 extern "C" bool wii_network_link(WiiNetwork* net){try{return net && net->runtime->ok && net->current_interface().ip;}catch(...){return false;}}
-extern "C" int wii_network_submit(WiiNetwork* net,CPUState* cpu,u32 message,s32* result){
+static int submit(WiiNetwork* net,CPUState* cpu,u32 message,s32* result,bool wireless){
     if(!net || !cpu || !result)return 0;
     try{
         const u8* raw=memory(cpu,message,32);if(!raw)return 0;
-        Request r{};r.message=message;r.command=be32(raw);r.fd=be32(raw+8);r.op=be32(raw+12);
-        if(!supported(r.command,r.op))return 0;
+        Request r{};r.message=message;r.command=be32(raw);r.fd=be32(raw+8);r.op=be32(raw+12);r.wireless=wireless;
+        if(!supported(r.command,r.op,wireless))return 0;
         *result=-4;
         if(net->pending.size()>=24){*result=-2;return 1;}
         for(const auto& p:net->pending)if(p.message==message){*result=-2;return 1;}
@@ -319,16 +387,30 @@ extern "C" int wii_network_submit(WiiNetwork* net,CPUState* cpu,u32 message,s32*
         net->pending.erase(at);return 1;
     }catch(...){net->pending.remove_if([message](const Request& r){return r.message==message;});*result=-49;return 1;}
 }
+extern "C" int wii_network_submit(WiiNetwork* net,CPUState* cpu,u32 message,s32* result){return submit(net,cpu,message,result,false);}
+extern "C" int wii_network_wireless_submit(WiiNetwork* net,CPUState* cpu,u32 message,s32* result){return submit(net,cpu,message,result,true);}
+extern "C" s32 wii_network_wireless_open(WiiNetwork* net,u32 fd,u32 flags){
+    if(!net || !wii_network_link(net))return -6;
+    if(fd>=24)return wd_invalid;
+    if((flags&0xffff)!=3 || (flags&~0x10003u))return wd_unavailable;
+    if(net->wireless_fd>=0)return wd_unavailable;
+    net->wireless_fd=s32(fd);net->wireless_mode=3;net->wireless_active=false;return 0;
+}
+extern "C" s32 wii_network_wireless_close(WiiNetwork* net,u32 fd){
+    if(!net || net->wireless_fd<0 || u32(net->wireless_fd)!=fd)return wd_invalid;
+    for(auto& r:net->pending)if(r.wireless && r.fd==fd)r.cancelled=true;
+    net->wireless_fd=-1;net->wireless_mode=0;net->wireless_active=false;return 0;
+}
 extern "C" bool wii_network_poll(WiiNetwork* net,CPUState* cpu,u32* message,u32* command,s32* result){
     if(!net || net->pending.empty() || Clock::now()<net->next_poll)return false;
     net->next_poll=Clock::now()+std::chrono::milliseconds(1);
     for(auto at=net->pending.begin();at!=net->pending.end();++at){
         s32 value;
         try{value=execute(*net,*at);}catch(...){value=-49;}
-        if(value==waiting && Clock::now()-at->start<std::chrono::seconds(30))continue;
+        if(value==waiting && (at->wireless || Clock::now()-at->start<std::chrono::seconds(30)))continue;
         if(value==waiting)value=-76;
         if(!publish(cpu,*at))value=-4;
         *message=at->message;*command=at->command;*result=value;net->pending.erase(at);return true;
     }return false;
 }
-extern "C" void wii_network_close_device(WiiNetwork* net,u32 fd){if(net)for(auto& p:net->pending)if(p.fd==fd)p.cancelled=true;}
+extern "C" void wii_network_close_device(WiiNetwork* net,u32 fd){if(net)for(auto& p:net->pending)if(!p.wireless && p.fd==fd)p.cancelled=true;}

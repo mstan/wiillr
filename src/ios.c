@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/ios.h"
 #include "wiillr/host_session.h"
+#include "wiillr/network_profile.h"
 #include "memory/memory.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -197,22 +198,21 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/usb/kbd"))device=11;
         if(!strcmp((const char*)path,"/dev/net/ip/top"))device=12;
         if(!strcmp((const char*)path,"/dev/sdio/slot0"))device=13;
-        if(!strcmp((const char*)path,"/dev/net/wd/command")) {
-            /* Host IP routing does not expose an 802.11 scan/association radio.
-             * WD_Startup uses open mode0x10003. A known absent driver reports
-             * IOS_ENOENT so original scan/AOSS code can clean up and display
-             * its error, rather than waiting on a fabricated radio event. */
-            ios->result=-6;return true;
-        }
+        if(!strcmp((const char*)path,"/dev/net/wd/command"))device=14;
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
             return false;
         }
         if(getenv("WIILLR_IOS_TRACE"))fprintf(stderr,"IOS open device=%u path=%s\n",device,(const char*)path);
-        if(read_be32(request+16)>3) {ios->result=-4;return true;}
+        if(device!=14 && read_be32(request+16)>3) {ios->result=-4;return true;}
         ios->result=-5;
         for(u32 n=0;n<24;n++)if(!ios->descriptors[n]) {
+            if(device==14) {
+                if(!network_ready(ios)){ios->result=-22;return true;}
+                const s32 opened=wii_network_wireless_open(ios->network,n,read_be32(request+16));
+                if(opened<0){ios->result=opened;return true;}
+            }
             if(device==9 && !ios->bluetooth) {
                 const WiiBluetoothStore store={ios->fs,wii_fs_bt_read,wii_fs_bt_write};
                 ios->bluetooth=wii_bluetooth_create(cpu,ios->gpio_out,ios->fs?&store:NULL);if(!ios->bluetooth)return 0;
@@ -237,6 +237,8 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!status)fprintf(stderr,"native IOS unsupported IP command=%u operation=%u\n",ios->command,read_be32(request+12));
         return status;
     }
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==14 && ios->network)
+        return wii_network_wireless_submit(ios->network,cpu,ios->message,&ios->result);
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==9 && ios->bluetooth)
         return wii_bluetooth_submit(ios->bluetooth,ios->message)?2:0;
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==13 &&
@@ -309,8 +311,10 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!vector || available<8 || read_be32(vector+4)<8)return 1;
         const u32 output=read_be32(vector),size=read_be32(vector+4);
         if(!ios_memory(cpu,output,&available) || available<size)return 1;
-        u8 config[WIILLR_NETWORK_CONFIG_SIZE]={0};ios->result=ios->fs?wii_fs_network_config(ios->fs,config):0;if(ios->result)return 1;
-        const bool link=config[4] && network_ready(ios) && wii_network_link(ios->network);
+        u8 config[WIILLR_NETWORK_CONFIG_SIZE]={0};
+        if(ios->ncd_config_valid)memcpy(config,ios->ncd_config,sizeof config);
+        else {ios->result=ios->fs?wii_fs_network_config(ios->fs,config):0;if(ios->result)return 1;}
+        const bool link=wii_network_host_profile_selected(config,sizeof config) && network_ready(ios) && wii_network_link(ios->network);
         const u32 status=config[4]==1?(link?5u:4u):config[4]==2?(link?3u:2u):2u;
         mem_write32_cia(cpu,output,0,cpu->pc);mem_write32_cia(cpu,output+4,status,cpu->pc);
         ios->result=0;return 1;
@@ -861,6 +865,11 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(fd<24 && ios->descriptors[fd]) {
             if(ios->descriptors[fd]==9)wii_bluetooth_close(ios->bluetooth);
             if(ios->descriptors[fd]==12)wii_network_close_device(ios->network,fd);
+            if(ios->descriptors[fd]==14) {
+                ios->result=wii_network_wireless_close(ios->network,fd);
+                if(!ios->result)ios->descriptors[fd]=0;
+                return true;
+            }
             ios->result=ios->descriptors[fd]==5 ? wii_fs_close(ios->fs,ios->fs_handles[fd]):0;
             if(!ios->result)ios->descriptors[fd]=0;
         }
