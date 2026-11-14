@@ -184,7 +184,7 @@ void wii_native_install(void){
      * one page-wide execution decision cannot represent those catalogs. */
     bindings_ready=full_pages;
 #if WIILLR_NATIVE_CHAIN
-    call_depth=0;chained_dispatches=last_chained=0;
+    call_depth=0;last_chained=0;
     chain=(DrNativeChain){.entries=bound,.entry_count=GCN_OVERLAY_INDEX_SLOTS,
         .excluded_pages=hook_pages,.stop_pc=chain_stop,.dispatches=&chained_dispatches,
         .before=chain_boundary};
@@ -199,4 +199,8 @@ void wii_native_summary(void){
            "\"native_dispatches\":%llu,\"content_hashes\":%llu,\"invalidations\":%llu,\"store_observed_pages\":%u}\n",
         WIILLR_PPC_CATALOG_SHA,(unsigned long long)module.dispatches,
         (unsigned long long)module.hashes,(unsigned long long)module.invalidations,observed);
+#if WIILLR_NATIVE_CHAIN
+    printf("{\"native_chaining\":1,\"chained_dispatches\":%llu,\"depth_limit\":%u}\n",
+        (unsigned long long)chained_dispatches,DR_NATIVE_CHAIN_MAX_DEPTH);
+#endif
 }
