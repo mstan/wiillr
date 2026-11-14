@@ -12,6 +12,7 @@ extern "C" {
  * 1: current typed native view. Negative: an owned view is unsupported;
  * callers must stop rather than resume through an omitted GX setup. */
 int wii_menu_frame_current_view(CPUState*,WiiMenuView*);
+int wii_menu_frame_current_model(CPUState*,float output[12]);
 bool wii_menu_frame_start(WiiGx*,const GcWiiNativeRenderApi*,const GcWiiNativeFrameApi*);
 void wii_menu_frame_capture(const GcWiiNativeCaptureApi*);
 void wii_menu_frame_stop(void);

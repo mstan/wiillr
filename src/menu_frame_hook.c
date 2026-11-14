@@ -291,6 +291,11 @@ int wii_menu_frame_current_view(CPUState* cpu,WiiMenuView* view) {
     if(!state.active || !state.projection_ready || !view)return -1;
     *view=state.view;return 1;
 }
+int wii_menu_frame_current_model(CPUState* cpu,float output[12]) {
+    if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
+    if(!state.active || !state.projection_ready || !output)return -1;
+    memcpy(output,state.model,sizeof state.model);return 1;
+}
 bool wii_menu_frame_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcWiiNativeFrameApi* frame) {
     if(!WIILLR_MENU_FRAME_MODE)return true;
     if(state.owner || !gx || !render || !frame || render->abi!=GC_WII_NATIVE_RENDER_ABI || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
