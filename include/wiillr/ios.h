@@ -45,7 +45,7 @@ typedef struct {
     WiiBluetooth* bluetooth;
     WiiHollywood* hollywood;
     WiiNetwork* network; /* owned by the private IOS request queue */
-    u32 ncd_lock; /* nonzero wireless-driver lock handle */
+    u32 ncd_lock,ncd_serial; /* opaque lock survives individual NCD descriptor closes */
     u8 ncd_config[WIILLR_NETWORK_CONFIG_SIZE];
     bool ncd_config_valid;
 } WiiIosNative;

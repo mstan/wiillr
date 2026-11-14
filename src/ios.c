@@ -197,6 +197,13 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(!strcmp((const char*)path,"/dev/usb/kbd"))device=11;
         if(!strcmp((const char*)path,"/dev/net/ip/top"))device=12;
         if(!strcmp((const char*)path,"/dev/sdio/slot0"))device=13;
+        if(!strcmp((const char*)path,"/dev/net/wd/command")) {
+            /* Host IP routing does not expose an 802.11 scan/association radio.
+             * WD_Startup uses open mode0x10003. A known absent driver reports
+             * IOS_ENOENT so original scan/AOSS code can clean up and display
+             * its error, rather than waiting on a fabricated radio event. */
+            ios->result=-6;return true;
+        }
         if(path[0]=='/' && strncmp((const char*)path,"/dev/",5) && ios->fs)device=5;
         if(!device) {
             fprintf(stderr,"native IOS unsupported open path=%s\n",(const char*)path);
@@ -288,7 +295,10 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         const u32 output=read_be32(vectors),size=read_be32(vectors+4);
         if(size<(locking?8u:4u) || !ios_memory(cpu,output,&available) || available<size)return 1;
         s32 result=0;
-        if(locking){if(ios->ncd_lock)result=-4;else{ios->ncd_lock=fd+1;mem_write32_cia(cpu,output+4,ios->ncd_lock,cpu->pc);}}
+        if(locking){if(ios->ncd_lock)result=-4;else{
+            ios->ncd_serial=(ios->ncd_serial+1)&0x7fffffffu;if(!ios->ncd_serial)ios->ncd_serial=1;
+            ios->ncd_lock=ios->ncd_serial;mem_write32_cia(cpu,output+4,ios->ncd_lock,cpu->pc);
+        }}
         else if(!handle || handle!=ios->ncd_lock)result=-3;else ios->ncd_lock=0;
         mem_write32_cia(cpu,output,(u32)result,cpu->pc);ios->result=0;return 1;
     }
@@ -851,7 +861,6 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(fd<24 && ios->descriptors[fd]) {
             if(ios->descriptors[fd]==9)wii_bluetooth_close(ios->bluetooth);
             if(ios->descriptors[fd]==12)wii_network_close_device(ios->network,fd);
-            if(ios->descriptors[fd]==10 && ios->ncd_lock==fd+1)ios->ncd_lock=0;
             ios->result=ios->descriptors[fd]==5 ? wii_fs_close(ios->fs,ios->fs_handles[fd]):0;
             if(!ios->result)ios->descriptors[fd]=0;
         }
