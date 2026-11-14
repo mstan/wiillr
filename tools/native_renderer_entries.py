@@ -39,7 +39,7 @@ def main():
     if text.count(include)!=1 or not header.is_file():
         raise ValueError('Prepared MM9 entry/header seam differs')
     owner_header='wiillr/mm9_mods.h' if args.gameplay else 'wiillr/mm9_renderer_hook.h'
-    text=text.replace(include,'#include "'+header.as_posix()+'"\n#include "'+owner_header+'"',1)
+    text=text.replace(include,'#define DOLRECOMP_BLOCK_ENTRY_COMPAT 1\n#include "'+header.as_posix()+'"\n#include "'+owner_header+'"',1)
     if args.gameplay:
         # The original rlwinm. sets CR for the following pause branch. Raise
         # its existing predicate BEFORE that instruction, never after CR was

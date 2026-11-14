@@ -36,7 +36,7 @@ def main():
     if source.name not in PAGES:raise ValueError('Original IPL43U frame page required')
     header=source.parent.parent/'generated_abi.h';text=source.read_text(encoding='utf-8');include='#include "../generated_abi.h"'
     if not header.is_file() or text.count(include)!=1:raise ValueError('Prepared IPL43U entry/header differs')
-    text=text.replace(include,'#include "'+header.as_posix()+'"\n#include "wiillr/menu_frame_hook.h"',1)
+    text=text.replace(include,'#define DOLRECOMP_BLOCK_ENTRY_COMPAT 1\n#include "'+header.as_posix()+'"\n#include "wiillr/menu_frame_hook.h"',1)
     if any(a in CHARWRITER for a in PAGES[source.name]):
         text=text.replace('#include "wiillr/menu_frame_hook.h"','#include "wiillr/menu_frame_hook.h"\n#include "wiillr/menu_text_hook.h"')
     for address in PAGES[source.name]:
