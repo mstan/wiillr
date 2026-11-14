@@ -12,6 +12,21 @@ static bool faults(auto&& operation) {
 int main() {
     std::vector<uint8_t> mem1(0x1800000),mem2(0x4000000);
     {
+        /* Public FIPS197 C.1 data, CBC IV zero. Real AES DMA publishes through
+         * the same PPC invalidation observer before Hollywood IRQ2. */
+        wiillr::Starlet aes(mem1,mem2);unsigned stores=0;
+        aes.observe_stores([](void* p,uint32_t at,uint32_t size){if(at==0x10002000 && size==16)++*static_cast<unsigned*>(p);},&stores);
+        for(uint32_t word:{0x00010203u,0x04050607u,0x08090a0bu,0x0c0d0e0fu})aes.write32(0x0d02000c,word);
+        for(unsigned i=0;i<4;++i)aes.write32(0x0d020010,0);
+        for(unsigned i=0;i<4;++i)aes.write32(0x1000+i*4,0x00112233u+i*0x44444444u);
+        aes.write32(0x0d020004,0x1000);aes.write32(0x0d020008,0x10002000);aes.write32(0x0d020000,0xd0000000);
+        aes.advance(wiillr::AesEngine::block_cycles-1);CHECK(!stores && !(aes.ipc().arm_flags&4));
+        aes.advance(1);CHECK(stores==1 && (aes.ipc().arm_flags&4));
+        CHECK(aes.read32(0x10002000)==0x69c4e0d8 && aes.read32(0x1000200c)==0x70b4c55a);
+        aes.write32(0x0d800038,4);aes.advance(wiillr::AesEngine::block_cycles);CHECK(!(aes.ipc().arm_flags&4));
+        CHECK(faults([&]{aes.read32(0x0d02000c);}));
+    }
+    {
         wiillr::Starlet exception(mem1,mem2);
         exception.coproc_write(15,0,1,0,0,0x500f8); /* Explicit low-vector case. */
         exception.write32(8,0xe1b0f00e); /* Original handler-style MOVS PC,LR. */

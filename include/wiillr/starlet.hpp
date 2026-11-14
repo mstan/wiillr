@@ -8,6 +8,7 @@
 #include "wiillr/ohci_init.hpp"
 #include "wiillr/nand_controller.hpp"
 #include "wiillr/sha1_engine.hpp"
+#include "wiillr/aes_engine.hpp"
 #include <array>
 #include <span>
 #include <cstdint>
@@ -74,6 +75,7 @@ private:
             return address>=0xffff0000u?nullptr:m.physical(address,size);
         }};
     }
+    AesEngine::Bus aes_bus() {const auto b=nand_bus();return {b.user,b.map,b.stored};}
     OhciInit::Bus ohci_bus() {const auto b=nand_bus();return {b.user,b.map,b.stored};}
     /* Starlet's high exception vectors are selected on entry (ARM926
      * VINITHI/SCTLR.V). The original IOS startup preserves that V bit. */
@@ -106,13 +108,13 @@ private:
     uint32_t usb_force_reset_=0;
     std::array<uint32_t,4> usb_phy_{};
     std::array<uint32_t,3> io_strength_{};
-    uint32_t aes_control_=0;
     std::array<uint32_t,8> gpio_{};
     uint32_t gpio_enable_=0;
     Seeprom seeprom_;
     std::array<OhciInit,2> ohci_;
     NandController nand_;
     Sha1Engine sha_;
+    AesEngine aes_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
     uint32_t spare0_=0;
