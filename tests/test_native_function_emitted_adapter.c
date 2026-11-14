@@ -31,7 +31,7 @@ unsigned fixture_function_adapter_calls;
 static unsigned unit_ram_stores,unit_ram_loads,code_store_delegations,unit_code_stores;
 static unsigned unit_mem2_reads,unit_mem2_loopbacks;
 static u64 unit_mem2_cycles;
-static unsigned clean_store_admissions,local_store_proofs;
+static unsigned clean_store_admissions,local_store_proofs,local_mem2_store_proofs;
 typedef struct {const DrFunctionUnitOwner* owner;bool root_seen;} ReadObserver;
 
 static bool observe_memory(const CPUState* cpu,u32 ea,u32 width,bool write,void* user) {
@@ -46,6 +46,9 @@ static bool observe_memory(const CPUState* cpu,u32 ea,u32 width,bool write,void*
          * still old. A callback query alone cannot establish this fact. */
         ++local_store_proofs;++unit_ram_stores;
     }
+    if(allowed && !write && unit.info->entry==0x80006ff8u && width==4u &&
+       (ea&0x1fffffffu)==0x10000004u && cpu->mem2 && cpu->mem2_size>=8u &&
+       read_be32(cpu->mem2)!=cpu->gpr[7])++local_mem2_store_proofs;
     if(allowed && !write && unit.info->entry==0x80007ff8u && width==4u)++unit_mem2_reads;
     return allowed;
 }
@@ -134,10 +137,11 @@ void fixture_function_adapter_end(void) {
     gcn_native_code_set_candidate(0,0,NULL,NULL);
     if(!unit_ram_stores || !unit_ram_loads || !code_store_delegations || unit_code_stores ||
        !unit_mem2_reads || !unit_mem2_loopbacks || !unit_mem2_cycles ||
-       !clean_store_admissions || !local_store_proofs)abort();
+       !clean_store_admissions || !local_store_proofs || !local_mem2_store_proofs)abort();
     printf("composed function adapter: calls=%u unit_ram_stores=%u unit_ram_loads=%u code_store_delegations=%u unit_code_stores=%u unit_root_cycles=%llu mem2_reads=%u mem2_loopbacks=%u mem2_guest_cycles=%llu\n",
         fixture_function_adapter_calls,unit_ram_stores,unit_ram_loads,code_store_delegations,unit_code_stores,
         (unsigned long long)unit.root_guest_cycles,unit_mem2_reads,unit_mem2_loopbacks,
         (unsigned long long)unit_mem2_cycles);
-    printf("composed clean stores: admissions=%u dirty_local_store_proofs=%u\n",clean_store_admissions,local_store_proofs);
+    printf("composed clean stores: admissions=%u dirty_local_store_proofs=%u mem2_dirty_local_store_proofs=%u\n",
+        clean_store_admissions,local_store_proofs,local_mem2_store_proofs);
 }
