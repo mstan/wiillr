@@ -195,9 +195,27 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,buffer+32,0x11223344,0);mem_write32_cia(&cpu,buffer+36,0xabcdef01,0);
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer+32,0));
-  CHECK(!cpu.mem2[0x2004] && !cpu.mem2[0x2008] && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
+  CHECK(cpu.mem2[0x2004]==1 && cpu.mem2[0x2008]==0x86 && !std::memcmp(cpu.mem2+0x2008+1988,"wiillr",6) &&
+        cpu.mem2[0x2008+2021]==6 && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
+  // Upgrade only the old byte-exact empty generated profile, never a partly
+  // configured, disabled or unselected owner connection.
+  std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> legacy_empty{};
+  std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(legacy_empty.data()),legacy_empty.size());
+  CHECK(!wii_fs_network_config(nand,legacy_empty.data()) && legacy_empty[4]==1 && legacy_empty[8]==0x86);
   std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> network{};network[4]=1;network.back()=0x5a;
   std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(network.data()),network.size());
+  es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
+  // NCDiSetConfig changes the working copy only; ReadConfig reloads NAND.
+  cpu.mem2[0x2000+network.size()-1]=0x77;
+  es_request(4,1,1);mem_write32_cia(&cpu,message+8,2,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> persisted{};
+  CHECK(!wii_fs_network_config(nand,persisted.data()) && persisted==network);
+  std::memset(cpu.mem2+0x2000,0,network.size());mem_write32_cia(&cpu,0x100c,8,0);
+  es_request(3,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && cpu.mem2[0x2000+network.size()-1]==0x77 &&
+        !mem_read32_cia(&cpu,buffer+32,0) && !mem_read32_cia(&cpu,buffer+36,0));
+  mem_write32_cia(&cpu,0x100c,32,0);mem_write32_cia(&cpu,buffer+36,0xabcdef01,0);
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
   const auto ncd_write=[&]() {
