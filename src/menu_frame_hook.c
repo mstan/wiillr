@@ -184,8 +184,11 @@ static int submit_quad(const GcWiiNativeDraw* view,const GcWiiNativeVertex* vert
     GcWiiNativeDraw draw=*view;draw.mesh=state.mesh;if(!state.render->draw(&draw))return -1;++state.quads;return 1;
 }
 static int utility_quad(CPUState* cpu,u32 address) {
-    const u32 rect=cpu->gpr[3],texture=cpu->gpr[4],rgba=cpu->gpr[address==0x81362d3c?4:5];
+    const u32 rect=cpu->gpr[3],texture=cpu->gpr[4],color=cpu->gpr[address==0x81362d3c?4:5];
     if(!state.active || !state.projection_ready || (cpu->fpscr&3u))return 0;
+    /* Both original helpers receive GXColor by reference, then load its four
+     * bytes into TEV color 1. Fold that constant into the native vertex tint. */
+    const u32 rgba=word(cpu,color);
     const float left=real(cpu,rect),top=real(cpu,rect+4),right=real(cpu,rect+8),bottom=real(cpu,rect+12);
     if(state.bad || left==right || top==bottom)return 0;
     GcWiiNativeDraw draw={0};memcpy(draw.projection,state.view.projection,sizeof draw.projection);memcpy(draw.model_view,state.model,sizeof draw.model_view);
