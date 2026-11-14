@@ -22,6 +22,21 @@
 #ifndef WIILLR_NATIVE_EXTERNAL_TABLES
 #include "overlay_module_tables.inc"
 #endif
+#if WIILLR_NATIVE_FUNCTION_UNITS
+#include "wiillr/native_function.h"
+#include "cpu/native_boundary.h"
+#include "cpu/fast_title.h"
+#ifndef WIILLR_NATIVE_EXTERNAL_FUNCTIONS
+#include "overlay_function_units.inc"
+#endif
+static WiiNativeFunctionUnit* function_index[GCN_OVERLAY_INDEX_SLOTS];
+static u32 function_stop_pc;
+static bool function_boundary(const CPUState* cpu,u32 target,u64 cycles,void* user) {
+    (void)cycles;(void)user;
+    return target!=function_stop_pc && (!(cpu->msr&0x8000u) ||
+        (!*ppc_native_decrementer_pending() && !gcn_pi_external_pending()));
+}
+#endif
 static u32 resident[GCN_OVERLAY_PAGE_COUNT];
 static u32 page_index[GCN_OVERLAY_INDEX_SLOTS];
 static GcnOverlayModule module={s_overlay_pages,s_overlay_variants,resident,
@@ -75,7 +90,7 @@ static void install_hook_pages(void) {
     /* Picture/TextBox draws and both destructors. */
     hook_pages[0x1520]|=HOOK_MENU;hook_pages[0x1521]|=HOOK_MENU;
 #endif
-#if WIILLR_NATIVE_CHAIN
+#if WIILLR_NATIVE_CHAIN || WIILLR_NATIVE_FUNCTION_UNITS
     /* Reuse the actual build's transformed-page list. Every injected owner
      * and its continuations retain the ordinary native dispatch boundary. */
     const u32 owners[]={WIILLR_NATIVE_OWNED_PAGES};
@@ -107,6 +122,10 @@ bool gcn_overlay_call(CPUState* cpu,u32 address){
         return gcn_overlay_module_call(&module,cpu,address);
     }
     if(hook_pages[page] && dispatch_hooks(cpu,address,hook_pages[page]))return true;
+#if WIILLR_NATIVE_FUNCTION_UNITS
+    WiiNativeFunctionUnit* unit=function_index[slot];
+    if(unit && wii_native_function_call(&module,cpu,unit,address))return true;
+#endif
     if(!bound_known[slot]) {
         bound[slot]=gcn_overlay_module_bind(&module,cpu,address);
         bound_known[slot]=1;
@@ -114,6 +133,10 @@ bool gcn_overlay_call(CPUState* cpu,u32 address){
     return gcn_overlay_binding_call(&module,cpu,bound[slot]);
 }
 void gcn_overlay_icbi(u32 address,u32 size){
+#if WIILLR_NATIVE_FUNCTION_UNITS
+    for(u32 i=0;i<WIILLR_FUNCTION_UNIT_COUNT;++i)
+        wii_native_function_invalidate(&native_function_units[i],address,size);
+#endif
     const u32 physical=address&0x1fffffffu;
     u32 page;
     if(size && binding_slot(address,&page)>=0) {
@@ -135,6 +158,9 @@ void gcn_overlay_icbi(u32 address,u32 size){
     gcn_overlay_module_invalidate(&module,address,size);
 }
 void wii_native_set_stop_pc(u32 address) {
+#if WIILLR_NATIVE_FUNCTION_UNITS
+    function_stop_pc=address;
+#endif
 #if WIILLR_NATIVE_CHAIN
     chain_stop=address;chain.stop_pc=address;
 #else
@@ -175,6 +201,25 @@ void wii_native_install(void){
     install_hook_pages();
     for(u32 i=0;i<GCN_OVERLAY_PAGE_COUNT;i++)resident[i]=GCN_OVERLAY_UNKNOWN;
     const bool full_pages=gcn_overlay_module_index(&module,page_index,GCN_OVERLAY_INDEX_SLOTS);
+#if WIILLR_NATIVE_FUNCTION_UNITS
+    memset(function_index,0,sizeof function_index);
+    for(u32 i=0;i<WIILLR_FUNCTION_UNIT_COUNT;++i) {
+        WiiNativeFunctionUnit* unit=&native_function_units[i];
+        unit->region.boundary=function_boundary;
+        wii_native_function_enable(unit,full_pages,hook_pages,sizeof hook_pages);
+        if(!unit->region.enabled)continue;
+        bool allowed=true;
+        for(u32 n=0;n<unit->region.page_count;++n) {
+            u32 physical_page;const int slot=binding_slot(unit->region.start+n*4096u,&physical_page);
+            if(slot<0 || function_index[slot]) {allowed=false;break;}
+        }
+        if(!allowed) {wii_native_function_enable(unit,false,hook_pages,sizeof hook_pages);continue;}
+        for(u32 n=0;n<unit->region.page_count;++n) {
+            u32 physical_page;const int slot=binding_slot(unit->region.start+n*4096u,&physical_page);
+            function_index[slot]=unit;
+        }
+    }
+#endif
     /* Reuse the shared store/DMA invalidation observer. Direct calls retain
      * the live physical/cached/uncached PC when selecting the compiled body. */
     /* AOT and HLE identity checks watch their code ranges. Ordinary data keeps
@@ -192,6 +237,21 @@ void wii_native_install(void){
 #endif
 }
 void wii_native_summary(void){
+#if WIILLR_NATIVE_FUNCTION_UNITS
+    for(u32 i=0;i<WIILLR_FUNCTION_UNIT_COUNT;++i) {
+        const WiiNativeFunctionUnit* unit=&native_function_units[i];
+        printf("{\"native_function_unit\":%u,\"enabled\":%u,\"handled_root\":%llu,"
+               "\"handled_continuation\":%llu,\"compatibility\":%llu,"
+               "\"progressed_root\":%llu,\"progressed_continuation\":%llu,"
+               "\"root_guest_cycles\":%llu,\"continuation_guest_cycles\":%llu,"
+               "\"zero_progress_delegations\":%llu}\n",i,
+               (unsigned)unit->region.enabled,(unsigned long long)unit->handled_root,
+               (unsigned long long)unit->handled_continuation,
+               (unsigned long long)unit->compatibility,(unsigned long long)unit->progressed_root,
+               (unsigned long long)unit->progressed_continuation,(unsigned long long)unit->root_guest_cycles,
+               (unsigned long long)unit->continuation_guest_cycles,(unsigned long long)unit->zero_progress_delegations);
+    }
+#endif
     u32 observed=0;
     for(u32 page=0;page<GC_MAIN_RAM_SIZE/4096u;++page)
         if(gcn_native_store_pages[page]&GCN_NATIVE_STORE_OBSERVED)++observed;
