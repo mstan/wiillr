@@ -95,7 +95,7 @@ struct Resolver {
 struct Request {
     u32 message,command,fd,op;std::vector<Buffer> in,out;
     Clock::time_point start=Clock::now();std::shared_ptr<Resolver> resolver;
-    bool cancelled=false,wireless=false;
+    bool cancelled=false,wireless=false,scan_started=false;u64 scan_ready_cycle=0;
 };
 struct Socket {HostSocket host=invalid;bool nonblock=false,connecting=false;};
 bool sockaddr_in_from(const u8* data,sockaddr_in* address){
@@ -164,7 +164,7 @@ std::array<u8,6> virtual_bssid(const WiiNetwork& net){auto mac=net.mac;mac[0]=(m
  * vector. Its BSS consumer reads rates at2e/30, channel36 and advances by
  * length*2 (the descriptor length is halfwords, not bytes). The 64-byte record
  * below has no vendor/AOSS information element and names only our endpoint. */
-s32 execute_wireless(WiiNetwork& net,Request& r){
+s32 execute_wireless(WiiNetwork& net,Request& r,u64 cycles){
     if(net.wireless_fd<0 || u32(net.wireless_fd)!=r.fd)return wd_invalid;
     if(r.op==0x1001 || r.op==0x1003){
         if(!r.in.empty() || !r.out.empty())return wd_parameter;
@@ -198,6 +198,18 @@ s32 execute_wireless(WiiNetwork& net,Request& r){
                 if((scan[14+n]&scan[46+n])!=(u8(ssid[n])&scan[46+n]))match=false;}
         }
         if(match && r.out[0].bytes.size()<0x42)return wd_parameter;
+        /* A scan occupies the virtual channel for the caller's requested
+         * per-channel dwell (milliseconds), in Broadway guest time. Returning
+         * synchronously can complete before the caller has entered its wait
+         * page. Keep the captured request/output private until completion;
+         * this is device time, independent of host speed and UI state. */
+        if(!r.scan_started){
+            constexpr u64 cycles_per_ms=729000;
+            const u64 dwell=(be16(scan.data())&2)?u64(be16(scan.data()+2))*cycles_per_ms:0;
+            if(dwell>~u64(0)-cycles)return wd_parameter;
+            r.scan_ready_cycle=cycles+dwell;r.scan_started=true;
+        }
+        if(cycles<r.scan_ready_cycle)return waiting;
         const u8 count[2]={0,u8(match)};r.out[0].put(0,count,2);
         if(match){
             std::array<u8,0x40> entry{};store16(entry.data(),0x20);store16(entry.data()+2,0xffff);
@@ -223,10 +235,10 @@ bool supported(u32 command,u32 op,bool wireless){
     if(command==7)switch(op){case 12:case 13:case 26:case 27:case 28:return true;}
     return false;
 }
-s32 execute(WiiNetwork& net,Request& r){
+s32 execute(WiiNetwork& net,Request& r,u64 cycles){
     for(auto& b:r.out)b.writes.clear();
     if(r.cancelled)return r.wireless?wd_invalid:-11;
-    if(r.wireless)return execute_wireless(net,r);
+    if(r.wireless)return execute_wireless(net,r,cycles);
     if(r.command==6){
         auto& in=r.in[0].bytes;auto& out=r.out[0];
         if(r.op==31)return net.runtime->ok?0:-38;
@@ -382,7 +394,7 @@ static int submit(WiiNetwork* net,CPUState* cpu,u32 message,s32* result,bool wir
             for(u32 n=0;n<inputs+outputs;++n)if(!capture(cpu,be32(vectors+n*8),be32(vectors+n*8+4),n<inputs?&r.in[n]:&r.out[n-inputs]))return 1;
         }
         net->pending.push_back(std::move(r));auto at=std::prev(net->pending.end());
-        *result=execute(*net,*at);if(*result==waiting)return 2;
+        *result=execute(*net,*at,cpu->cycles);if(*result==waiting)return 2;
         if(!publish(cpu,*at))*result=-4;
         net->pending.erase(at);return 1;
     }catch(...){net->pending.remove_if([message](const Request& r){return r.message==message;});*result=-49;return 1;}
@@ -406,7 +418,7 @@ extern "C" bool wii_network_poll(WiiNetwork* net,CPUState* cpu,u32* message,u32*
     net->next_poll=Clock::now()+std::chrono::milliseconds(1);
     for(auto at=net->pending.begin();at!=net->pending.end();++at){
         s32 value;
-        try{value=execute(*net,*at);}catch(...){value=-49;}
+        try{value=execute(*net,*at,cpu->cycles);}catch(...){value=-49;}
         if(value==waiting && (at->wireless || Clock::now()-at->start<std::chrono::seconds(30)))continue;
         if(value==waiting)value=-76;
         if(!publish(cpu,*at))value=-4;
