@@ -45,6 +45,22 @@ static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     ++m->mmio_reads;
     u32 physical = address & 0x3fffffffu;
     wii_machine_observe_register(m,cpu,physical);
+    /* GXPeekARGB/GXPeekZ address the EFB, not main RAM. The selected
+     * provider retires preceding GX work before returning a raw ARGB/depth
+     * sample. PE's alpha-read policy belongs to the CPU-facing aperture. */
+    if(physical>=0x08000000u && physical<0x0c000000u && width==4 && !(address&3) &&
+       !(physical&0x00800000u) && m->gx_peek) {
+        const u16 x=(u16)((physical>>2)&0x3ffu),y=(u16)((physical>>12)&0x3ffu);
+        const u32 depth=(physical>>22)&1u;
+        const u32 alpha=m->pe.reg[GCN_PE_ALPHAREAD>>1]&3u;
+        if(x>=640 || y>=528)return 0;
+        u32 value;
+        if((depth || alpha!=3) && m->gx_peek(m->gx_user,depth,x,y,&value)) {
+            if(!depth && alpha==0)value&=0x00ffffffu;
+            else if(!depth && alpha==1)value|=0xff000000u;
+            return value;
+        }
+    }
     const u32 gpio=physical&~0x00800000u;
     u32 hollywood_value;
     if(width==4 && wii_hollywood_read(&m->hollywood,physical,&hollywood_value))return hollywood_value;

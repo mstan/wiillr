@@ -227,6 +227,8 @@ command decoder and rasterizer. This reference build consumes the actual FIFO,
 resolves textures, palettes, arrays and display lists in MEM1 or MEM2, and writes
 EFB copies to their physical RAM bank before PE completion. VI selects the real
 RAM scanout; the existing TCP `frame` command captures it without a GPU service.
+Aligned CPU EFB color/depth peeks use the selected renderer and the PE alpha-read
+mode. Combined accesses and CPU EFB pokes remain unsupported.
 It runs serially, ignores GPU backend environment selections and supports a
 portable scalar path. It is a headless correctness reference rather than an
 interactive performance configuration.

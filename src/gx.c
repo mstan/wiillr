@@ -62,6 +62,9 @@ static int write_copy(void* user,u32 address,const u8* bytes,u32 size,u32 flags,
     if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING))++g->copies;return 1;
 }
 static int fifo(void* user,const u8* bytes,u32 size) {WiiGx* g=user;return g->api->fifo(bytes,size);}
+static int peek(void* user,u32 depth,u16 x,u16 y,u32* value) {
+    WiiGx* g=user;return g->api && g->api->peek && g->api->peek(depth,x,y,value);
+}
 static void drain(void* user) {WiiGx* g=user;if(!g->api->drain())g->cpu->halted=true;}
 bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const char* data,const char* cache) {
     memset(g,0,sizeof *g);g->machine=m;g->cpu=cpu;
@@ -188,7 +191,7 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     /* The current unowned synchronous renderer publishes on this machine
      * thread. Deferred providers need memory ownership before idle admission. */
     m->idle_memory_serial=(g->api->capabilities&GCNLLR_NATIVE_GX_SERIAL_RAM_WRITES)!=0;
-    m->gx_fifo=fifo;m->gx_user=g;gcn_gp_set_drain_hook(&m->gp,drain,g);return true;
+    m->gx_fifo=fifo;m->gx_peek=peek;m->gx_user=g;gcn_gp_set_drain_hook(&m->gp,drain,g);return true;
 }
 bool wii_gx_tick(WiiGx* g) {
     if(!g->api)return true;
@@ -264,7 +267,7 @@ void wii_gx_stop(WiiGx* g) {
     wii_menu_frame_stop();
     wii_menu_picture_hook_stop();
 #endif
-    if(g->machine) {g->machine->gx_fifo=NULL;g->machine->gx_user=NULL;gcn_gp_set_drain_hook(&g->machine->gp,NULL,NULL);}
+    if(g->machine) {g->machine->gx_fifo=NULL;g->machine->gx_peek=NULL;g->machine->gx_user=NULL;gcn_gp_set_drain_hook(&g->machine->gp,NULL,NULL);}
     if(!wii_gx_output_close(g)) {
         fprintf(stderr,"Could not materialize native output at shutdown\n");
         if(g->cpu)g->cpu->halted=true;
