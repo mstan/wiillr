@@ -60,6 +60,60 @@ int main() {
     CHECK(!execute(0x9c600000,243));CHECK(execute(0xc0d08000,486000));
     CHECK(std::all_of(nand.page_bytes(5),nand.page_bytes(5)+Nand::page_size,[](auto b){return b==0xff;}));
     CHECK(original[5*Nand::page_size+1]==1); /* Backing input was never programmed/erased. */
+    {
+        Nand split;split.load(original);Memory io;const auto dma=io.bus();uint64_t t=0;
+        auto wr=[&](uint32_t at,uint32_t v){return split.write(at,v,t,dma);};
+        auto run=[&](uint32_t cmd,uint64_t latency) {
+            wr(0,cmd);if(split.advance(t+latency-1,dma))throw std::runtime_error("Early phase IRQ");
+            t+=latency;return split.advance(t,dma);
+        };
+        std::array<uint8_t,0x800> main{};main[3]=4;
+        const uint8_t syndrome[16]={0xe5,0x0f,0x1a,0,0,0,0,0,0,0,0,0,0,0,0,0};
+        std::copy(main.begin(),main.end(),io.bytes.begin()+0x1000);std::fill_n(io.bytes.data()+0x2000,16,0x6d);
+        wr(8,0);wr(12,10);wr(16,0x1000);wr(20,0x2040);wr(0,0xdf805800);
+        wr(20,0x3000); // Active syndrome destination remains latched at0x2000.
+        CHECK(!split.advance(242,dma) && io.stores.empty() && io.bytes[0x2000]==0x6d);
+        CHECK(split.page_bytes(10)[3]==0xff);t=243;CHECK(split.advance(t,dma));
+        CHECK(io.stores.size()==1 && io.stores[0]==std::make_pair(0x2000u,16u));
+        CHECK(std::equal(std::begin(syndrome),std::end(syndrome),io.bytes.begin()+0x2000));
+        CHECK(split.page_bytes(10)[3]==0xff && split.page_bytes(10)[0x830]==0xff);
+        std::array<uint8_t,0x40> spare;spare.fill(0xa5);std::copy(std::begin(syndrome),std::end(syndrome),spare.begin()+0x30);
+        std::copy(spare.begin(),spare.end(),io.bytes.begin()+0x2200);
+        wr(8,0x800);wr(16,0x2200);CHECK(run(0xc3854040,243));
+        CHECK(split.page_bytes(10)[0]==0xff && split.page_bytes(10)[0x800]==0xff);
+        CHECK(run(0xc0108000,48600));
+        CHECK(std::equal(main.begin(),main.end(),split.page_bytes(10)) && std::equal(spare.begin(),spare.end(),split.page_bytes(10)+0x800));
+        // Read back through the real DMA path; XOR syndrome can precede spare.
+        wr(8,0);wr(12,10);CHECK(!run(0x9f000000,243));wr(16,0x2800);wr(20,0x3840);io.stores.clear();
+        CHECK(run(0xc030b840,6075));CHECK(std::equal(main.begin(),main.end(),io.bytes.begin()+0x2800));
+        CHECK(std::equal(spare.begin(),spare.end(),io.bytes.begin()+0x3840));
+        CHECK(std::equal(std::begin(syndrome),std::end(syndrome),io.bytes.begin()+0x3800));
+        CHECK(io.stores.size()==3 && io.stores[2]==std::make_pair(0x3800u,16u));
+        // Reset aborts an uncompleted ECC phase, including its future IRQ/write.
+        wr(12,11);wr(16,0x1000);wr(20,0x2040);std::fill_n(io.bytes.data()+0x2000,16,0x6d);io.stores.clear();
+        wr(0,0xdf805800);wr(0,0x80ff8000);CHECK(!split.advance(t+243,dma) && io.stores.empty());
+        t+=24300;CHECK(!split.advance(t,dma) && io.bytes[0x2000]==0x6d);
+        CHECK(faults([&]{wr(0,0xc0108000);}) && faults([&]{wr(0,0xc3854040);}));
+        CHECK(split.page_bytes(11)[0]==0xff);
+        // Both input and output bounds are checked before any guest write.
+        const auto untouched=io.bytes;wr(8,0);wr(16,0x3ff0);wr(20,0x2040);
+        CHECK(faults([&]{wr(0,0xdf805800);}) && io.bytes==untouched && io.stores.empty());
+        wr(16,0x1000);wr(20,0x4000);
+        CHECK(faults([&]{wr(0,0xdf805800);}) && io.bytes==untouched && io.stores.empty());
+        wr(20,0x3ff0);CHECK(faults([&]{wr(0,0xdf805840);}) && io.bytes==untouched);
+        // ECC output may alias main input; the page register already owns it.
+        wr(12,12);wr(16,0x1000);wr(20,0x1100);CHECK(run(0xdf805800,243));
+        CHECK(std::equal(std::begin(syndrome),std::end(syndrome),io.bytes.begin()+0x1140));
+        CHECK(run(0xc0108000,48600));CHECK(std::equal(main.begin(),main.end(),split.page_bytes(12)));
+        // A full raw transfer preserves its supplied spare, including ECC area.
+        std::copy(main.begin(),main.end(),io.bytes.begin()+0x1000);std::fill_n(io.bytes.data()+0x3000,0x40,0xa5);
+        wr(12,13);wr(20,0x3000);CHECK(run(0xdf805840,243));CHECK(run(0xc0108000,48600));
+        CHECK(std::all_of(split.page_bytes(13)+0x800,split.page_bytes(13)+Nand::page_size,[](auto b){return b==0xa5;}));
+        // Reset after a completed random-input phase also kills staged confirm.
+        wr(12,14);wr(20,0x2040);CHECK(run(0xdf805800,243));wr(8,0x800);wr(16,0x2200);CHECK(run(0xc3854040,243));
+        CHECK(!run(0x80ff8000,24300));CHECK(faults([&]{wr(0,0xc0108000);}));
+        CHECK(split.page_bytes(14)[0]==0xff && original[10*Nand::page_size]==0xff);
+    }
     nand.load(original);now=0;memory.bytes.fill(0x6d);memory.stores.clear();
     reg(8,0);reg(12,5);CHECK(!execute(0x9f000000,243));reg(16,0x1000);reg(20,0xffff);reg(0,0xc030b840);
     const auto before=memory.bytes;now+=6075;CHECK(faults([&]{nand.advance(now,bus);}));

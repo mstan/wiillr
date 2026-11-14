@@ -233,6 +233,15 @@ int main() {
         flash.advance(1);CHECK(flash.ipc().arm_flags&2);
         CHECK(flash.read32(0x10001000)==0x5c5c5c5c && flash.read32(0x10002000)==0xffffffff);
         CHECK(stores.size()==2 && stores[0]==std::make_pair(0x10001000u,0x800u) && stores[1]==std::make_pair(0x10002000u,0x50u));
+        stores.clear();flash.write32(0x0d800038,2);
+        std::fill_n(mem2.data()+0x3000,0x800,0);mem2[0x3003]=4;
+        std::fill_n(mem2.data()+0x4000,16,0x6d);
+        flash.write32(0x0d01000c,6);flash.write32(0x0d010010,0x10003000);flash.write32(0x0d010014,0x10004040);
+        flash.write32(0x0d010000,0xdf805800);flash.advance(242);
+        CHECK(stores.empty() && !(flash.ipc().arm_flags&2) && flash.read32(0x10004000)==0x6d6d6d6d);
+        flash.advance(1);CHECK(flash.ipc().arm_flags&2);
+        CHECK(stores.size()==1 && stores[0]==std::make_pair(0x10004000u,16u));
+        CHECK(flash.read32(0x10004000)==0xe50f1a00 && flash.read32(0x10004004)==0);
     }
     {
         wiillr::Starlet idle(mem1,mem2);unsigned stores=0;
