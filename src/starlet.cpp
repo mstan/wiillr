@@ -364,9 +364,11 @@ void Starlet::write32(uint32_t at,uint32_t v) {
      * the native title-handoff helper only accepts completed clock presets. */
     if(bus_address==0x0d8001ccu) {hollywood_->audio_pll=v;return;}
     if(bus_address==0x0d8001d0u) {hollywood_->audio_control=v;return;}
-    if(bus_address==0x0d800180u && !((v^hollywood_->compat)&~0x106u)) {
+    if(bus_address==0x0d800180u && !((v^hollywood_->compat)&~0x200106u)) {
         /* Kernel boot also sets COMPAT.B1/B2. Its PPC-side interface is not
-         * attached here; preserve the control without changing other bits. */
+         * attached here. Bit21 is the DVDVIDEO command filtering control;
+         * retain its set/clear state without starting a drive operation.
+         * DI commands remain unsupported in this isolated machine. */
         hollywood_->compat=v;return;
     }
     /* HW_USBFRCRST: USB reset output configuration, not a completion flag.

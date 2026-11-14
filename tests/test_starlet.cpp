@@ -374,5 +374,20 @@ int main() {
     machine.write32(0x0d8001cc,wii_audio_pll_preset(false));
     CHECK(machine.read32(0x0d8001cc)==wii_audio_pll_preset(false));
     CHECK(faults([&]{machine.write32(0x0d800180,0xffffffff);}));
+    /* IOS DI permission changes only the DVDVIDEO control latch. It does
+     * not send a drive command or create an IPC/interrupt completion. */
+    const auto arm_flags=machine.ipc().arm_flags,ppc_flags=machine.ipc().ppc_flags;
+    const auto ipc_x=machine.ipc().x,ipc_y=machine.ipc().y;
+    machine.write32(0x0d800180,0x200106);
+    CHECK(machine.read32(0x0d800180)==0x200106);
+    machine.write32(0x0d800180,0x106);
+    CHECK(machine.read32(0x0d800180)==0x106);
+    CHECK(faults([&]{machine.write32(0x0d800180,0x400106);}));
+    CHECK(machine.read32(0x0d800180)==0x106);
+    CHECK(machine.ipc().arm_flags==arm_flags && machine.ipc().ppc_flags==ppc_flags);
+    CHECK(machine.ipc().x==ipc_x && machine.ipc().y==ipc_y);
+    CHECK(faults([&]{machine.write32(0x0d80601c,1);})); /* No drive transfer. */
+    WiiHollywood native{};wii_hollywood_init(&native);
+    CHECK(!wii_hollywood_write(&native,0x0d800180,native.compat^0x200000));
     return 0;
 }
