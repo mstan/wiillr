@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/native_function.h"
 #include "cpu/overlay_binding.h"
+#include "cpu/native_code.h"
+#include "wiillr/gx_output.h"
+#include <stdint.h>
 
 typedef struct {
     WiiNativeFunctionUnit* unit;
@@ -8,10 +11,59 @@ typedef struct {
     GcnOverlayModule* module;
     const CPUState* cpu;
     const u8* ram;
+    const u8* mem2;
+    u32 ram_size,mem2_size;
     u32 page,resume_pc;
     u64 resume_cycles;
     bool resume;
 } FunctionOwner;
+
+static bool host_range(const void* pointer,size_t size,uintptr_t* end) {
+    const uintptr_t start=(uintptr_t)pointer;
+    if(!pointer || !size || size>UINTPTR_MAX-start)return false;
+    *end=start+size;return true;
+}
+static bool host_overlaps(const void* a,size_t as,const void* b,size_t bs) {
+    uintptr_t ae,be;
+    return !host_range(a,as,&ae) || !host_range(b,bs,&be) ||
+        ((uintptr_t)a<be && (uintptr_t)b<ae);
+}
+static bool memory(const CPUState* cpu,u32 address,u32 size,bool write,void* user) {
+    const FunctionOwner* owner=user;
+    if(!owner || cpu!=owner->cpu || !cpu ||
+       (size!=1u && size!=2u && size!=4u && size!=8u) ||
+       cpu->ram!=owner->ram || cpu->ram_size!=owner->ram_size ||
+       cpu->mem2!=owner->mem2 || cpu->mem2_size!=owner->mem2_size ||
+       !cpu->ram || !cpu->ram_size || cpu->ram_size>GC_MAIN_RAM_SIZE ||
+       cpu->mem2_size>WII_MEM2_SIZE || (!!cpu->mem2!=!!cpu->mem2_size) ||
+       host_overlaps(cpu->ram,cpu->ram_size,cpu,sizeof *cpu) ||
+       (cpu->mem2 && (host_overlaps(cpu->mem2,cpu->mem2_size,cpu,sizeof *cpu) ||
+                     host_overlaps(cpu->ram,cpu->ram_size,cpu->mem2,cpu->mem2_size))) ||
+       !owner->unit->region.enabled || !owner->unit->region.known || !owner->unit->region.valid ||
+       owner->unit->region.generation!=owner->invocation.generation)return false;
+    u32 offset,physical;
+    if(address<cpu->ram_size)offset=address;
+    else if(address>=GC_RAM_BASE && address-GC_RAM_BASE<cpu->ram_size)offset=address-GC_RAM_BASE;
+    else if(address>=GC_RAM_UNCACHED && address-GC_RAM_UNCACHED<cpu->ram_size)offset=address-GC_RAM_UNCACHED;
+    else {
+        if(!cpu->mem2)return false;
+        if(address>=0x10000000u && address-0x10000000u<cpu->mem2_size)offset=address-0x10000000u;
+        else if(address>=WII_MEM2_BASE && address-WII_MEM2_BASE<cpu->mem2_size)offset=address-WII_MEM2_BASE;
+        else if(address>=WII_MEM2_UNCACHED && address-WII_MEM2_UNCACHED<cpu->mem2_size)offset=address-WII_MEM2_UNCACHED;
+        else return false;
+        if(size>cpu->mem2_size-offset)return false;
+        physical=0x10000000u+offset;
+        return wii_gx_output_access_unobserved(cpu,physical,size);
+    }
+    if(size>cpu->ram_size-offset)return false;
+    physical=offset;
+    if(write) {
+        if(!gcn_overlay_module_unowned_range(owner->module,address,size))return false;
+        for(u32 page=offset/4096u;page<=(offset+size-1u)/4096u;++page)
+            if(gcn_native_store_pages[page] & (u8)~GCN_NATIVE_STORE_DIRTY)return false;
+    }
+    return wii_gx_output_access_unobserved(cpu,physical,size);
+}
 
 static bool contains(const u32* values,size_t count,u32 value) {
     for(size_t i=0;i<count;++i)if(values[i]==value)return true;
@@ -63,8 +115,9 @@ static void invoke(CPUState* cpu) {
     WiiNativeFunctionUnit* unit=(WiiNativeFunctionUnit*)invocation.region;
     FunctionOwner context={.unit=unit,.invocation=invocation,
         .module=(GcnOverlayModule*)unit->region.module,.cpu=cpu,.ram=cpu->ram,
+        .mem2=cpu->mem2,.ram_size=cpu->ram_size,.mem2_size=cpu->mem2_size,
         .page=cpu->pc&~4095u};
-    const DrFunctionUnitOwner owner={guard,&context};
+    const DrFunctionUnitOwner owner={guard,&context,memory};
     const u32 entry=cpu->pc;
     const u64 entry_cycles=cpu->cycles;
     if(unit->body(cpu,&owner)) {

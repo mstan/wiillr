@@ -15,9 +15,13 @@
 static struct {GcnllrNativeGxCopy copy;u8 value;} copies[16];
 static WiiGx gx;
 static volatile u32 materials[16],releases[16],dirty;
+static bool fail_materialize;
 void gcn_native_code_content_dirty(u32 address,u32 size){(void)address;(void)size;++dirty;}
 static int materialize(u64 token) {
     assert(token<16);++materials[token];const GcnllrNativeGxCopy* c=&copies[token].copy;
+    if(c->address<gx.cpu->ram_size)
+        assert(!wii_gx_output_access_unobserved(gx.cpu,0,4)); /* Reentrant/observing state. */
+    if(fail_materialize)return 0;
     u8* base=c->address>=0x10000000u?gx.cpu->mem2:gx.cpu->ram;
     const u32 offset=c->address>=0x10000000u?c->address-0x10000000u:c->address;
     for(u32 row=0;row<c->rows;row++)memset(base+offset+row*c->stride,copies[token].value,c->row_bytes);
@@ -36,14 +40,25 @@ int main(void) {
     cpu.mem2=calloc(1,cpu.mem2_size);assert(cpu.mem2);memset(cpu.ram,0xe5,cpu.ram_size);
     const GcnllrNativeGxApi api={.abi=GCNLLR_NATIVE_GX_ABI,.materialize_copy=materialize,.release_copy=release,.present_copy=present};
     gx=(WiiGx){.cpu=&cpu,.api=&api};assert(wii_gx_output_open(&gx));
+    assert(wii_gx_output_access_unobserved(&cpu,0x1000,4));
+    assert(wii_gx_output_access_unobserved(&cpu,0x10000000u,4));
+    assert(!wii_gx_output_access_unobserved(&cpu,0x1000,0));
+    assert(!wii_gx_output_access_unobserved(&cpu,0xffff,2));
     cpu.reserve_valid=true;cpu.reserve_addr=0x80001000;
     publish(1,0x1000,32,2,64,0x41);assert(!cpu.reserve_valid);
+    assert(!wii_gx_output_access_unobserved(&cpu,0x1000,4));
+    assert(!wii_gx_output_access_unobserved(&cpu,0x1fff,1)); /* Guarded padding. */
+    assert(materials[1]==0 && releases[1]==0); /* Query has no observation. */
+    assert(wii_gx_output_access_unobserved(&cpu,0x2000,4));
+    u8* const original_ram=cpu.ram;cpu.ram+=4096;
+    assert(!wii_gx_output_access_unobserved(&cpu,0x2000,4));cpu.ram=original_ram;
     assert(wii_gx_output_pending(&gx,0xc0001000,1));
     volatile u8* raw=cpu.ram;
     errno=ERANGE;SetLastError(ERROR_INVALID_PARAMETER);
     assert(raw[0x100f]==0x41);assert(materials[1]==1 && releases[1]==1);
     assert(errno==ERANGE && GetLastError()==ERROR_INVALID_PARAMETER);
     assert(raw[0x1021]==0xe5 && raw[0x1041]==0x41); // stride padding retained
+    assert(wii_gx_output_access_unobserved(&cpu,0x1000,4));
     publish(2,0x1000,32,2,64,0x42);raw[0x1001]=0x88;
     assert(materials[2]==1 && raw[0x1001]==0x88 && raw[0x1002]==0x42 && raw[0x1041]==0x42);
     publish(3,0x2000,64,1,64,0x43);publish(4,0x2000,64,1,64,0x44);
@@ -67,10 +82,22 @@ int main(void) {
     assert(wii_gx_output_prepare(&gx,0x80005fff,2));
     assert(VirtualQuery(cpu.ram+0x6000,&info,sizeof info) && info.Protect==PAGE_READWRITE);
     assert(materials[10]==1 && releases[10]==1 && raw[0x6020]==0x4a && raw[0x6000]==0xe5);
+    publish(11,0x7020,32,1,32,0x4b);fail_materialize=true;
+    assert(!wii_gx_output_prepare(&gx,0x7020,4));
+    assert(!wii_gx_output_access_unobserved(&cpu,0,4)); /* Failed owner rejects even a clear page. */
+    fail_materialize=false;
     assert(wii_gx_output_close(&gx));assert(raw[0x4003]==0x48 && materials[8]==1 && releases[8]==1);
-    assert(gx.copies==10 && dirty>0 && !gx.output);
+    assert(gx.copies==11 && dirty>0 && !gx.output);
     gcn_mem1_release(cpu.ram);free(cpu.mem2);return 0;
 }
 #else
-int main(void){WiiGx gx={0};assert(!wii_gx_output_open(&gx));assert(wii_gx_output_close(&gx));return 0;}
+int main(void){
+    WiiGx gx={0};assert(!wii_gx_output_open(&gx));assert(wii_gx_output_close(&gx));
+    u8 bytes[32];CPUState cpu={.ram=bytes,.ram_size=16,.mem2=bytes+16,.mem2_size=16};
+    assert(wii_gx_output_access_unobserved(&cpu,0,4));
+    assert(wii_gx_output_access_unobserved(&cpu,0x10000000u,4));
+    assert(!wii_gx_output_access_unobserved(&cpu,15,2));
+    assert(!wii_gx_output_access_unobserved(&cpu,0x1000000fu,2));
+    assert(!wii_gx_output_access_unobserved(&cpu,0,0));return 0;
+}
 #endif

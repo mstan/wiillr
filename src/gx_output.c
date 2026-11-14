@@ -20,6 +20,8 @@ typedef struct {
     GcnResidentMemory* memory;
     u8* pages;
     u8* armed;
+    u8* ram;
+    u32 ram_size;
     u32 page_size,page_count;
     DWORD thread;
     void* handler;
@@ -84,7 +86,8 @@ bool wii_gx_output_open(WiiGx* g) {
         if(!VirtualQuery(g->cpu->ram+at,&info,sizeof info) || info.State!=MEM_COMMIT ||
            info.Protect!=PAGE_READWRITE)return false;
     Output* o=calloc(1,sizeof *o);if(!o)return false;
-    o->gx=g;o->page_size=page;o->page_count=g->cpu->ram_size/page;o->thread=GetCurrentThreadId();
+    o->gx=g;o->ram=g->cpu->ram;o->ram_size=g->cpu->ram_size;
+    o->page_size=page;o->page_count=g->cpu->ram_size/page;o->thread=GetCurrentThreadId();
     o->pages=calloc(o->page_count,1);o->armed=calloc(o->page_count,1);
     if(o->pages && o->armed) {
         const GcnResidentMemoryConfig c={g->cpu->ram_size,page,32,o->pages,o->page_count,materialize,release,o};
@@ -133,6 +136,23 @@ int wii_gx_output_pending(void* user,u32 address,u32 size) {
     WiiGx* g=user;Output* o=g->output;const u32 at=address&0x1fffffff;
     return o && at<g->cpu->ram_size && gcn_resident_memory_pending(o->memory,at,size);
 }
+bool wii_gx_output_access_unobserved(const CPUState* cpu,u32 physical,u32 size) {
+    if(!cpu || !size)return false;
+    const bool mem1=cpu->ram && physical<cpu->ram_size && size<=cpu->ram_size-physical;
+    const bool mem2=cpu->mem2 && physical>=0x10000000u &&
+        physical-0x10000000u<cpu->mem2_size && size<=cpu->mem2_size-(physical-0x10000000u);
+    if(!mem1 && !mem2)return false;
+    const Output* o=active;
+    if(!o)return true;
+    if(o->gx->cpu!=cpu || o->failed || o->materializing || GetCurrentThreadId()!=o->thread ||
+       cpu->ram!=o->ram || cpu->ram_size!=o->ram_size)return false;
+    /* MEM2 output is eagerly materialized; only MEM1 is page protected. */
+    if(mem2)return true;
+    if(gcn_resident_memory_pending(o->memory,physical,size))return false;
+    for(u32 page=physical/o->page_size;page<=(physical+size-1u)/o->page_size;++page)
+        if(o->armed[page])return false;
+    return true;
+}
 int wii_gx_output_prepare(void* user,u32 address,u32 size) {
     WiiGx* g=user;Output* o=g->output;const u32 at=address&0x1fffffff;
     if(!o || at>=g->cpu->ram_size)return 1;
@@ -162,5 +182,10 @@ bool wii_gx_output_close(WiiGx* g){(void)g;return true;}
 int wii_gx_output_own(void* g,const GcnllrNativeGxCopy* c){(void)g;(void)c;return 0;}
 int wii_gx_output_pending(void* g,u32 a,u32 n){(void)g;(void)a;(void)n;return 0;}
 int wii_gx_output_prepare(void* g,u32 a,u32 n){(void)g;(void)a;(void)n;return 1;}
+bool wii_gx_output_access_unobserved(const CPUState* cpu,u32 physical,u32 size) {
+    return cpu && size && ((cpu->ram && physical<cpu->ram_size && size<=cpu->ram_size-physical) ||
+        (cpu->mem2 && physical>=0x10000000u && physical-0x10000000u<cpu->mem2_size &&
+         size<=cpu->mem2_size-(physical-0x10000000u)));
+}
 int wii_gx_output_present(WiiGx* g,u32 a,u32 w,u32 h,u32 s){(void)g;(void)a;(void)w;(void)h;(void)s;return 0;}
 #endif

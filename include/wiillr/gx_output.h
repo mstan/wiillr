@@ -12,5 +12,9 @@ u32 wii_gx_output_allocation_alignment(const WiiGx*);
 int wii_gx_output_own(void*,const GcnllrNativeGxCopy*);
 int wii_gx_output_pending(void*,u32,u32);
 int wii_gx_output_prepare(void*,u32,u32);
+/* Owner-thread, read-only check for normalized physical MEM1/MEM2 bytes.
+ * True means this access cannot enter the resident fault/materialize path.
+ * Unlike prepare(), this never observes/publishes RAM or calls the GPU. */
+bool wii_gx_output_access_unobserved(const CPUState*,u32 physical,u32 size);
 int wii_gx_output_present(WiiGx*,u32,u32,u32,u32);
 #endif

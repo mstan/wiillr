@@ -615,7 +615,7 @@ if(WIILLR_PPC_GENERATED_DIR)
 endif()
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/gc-wii-core/include/cpu/overlay_region.h"
    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/powerpc-recomp-core/src/cpu/function_unit.h")
-  add_executable(test_wii_native_functions tests/test_native_functions.c src/native_function.c)
+  add_executable(test_wii_native_functions tests/test_native_functions.c src/native_function.c src/gx_output.c)
   target_include_directories(test_wii_native_functions PRIVATE include external/gc-wii-core/include
     external/gc-wii-core/dsp_lle/include external/powerpc-recomp-core/src
     external/powerpc-recomp-core/runtime/include)
@@ -629,9 +629,9 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/gc-wii-core/include/cpu/overlay_
       DEPENDS test_function_unit_gen VERBATIM)
     add_executable(test_wii_native_functions_emitted
       external/powerpc-recomp-core/tests/test_function_unit.c
-      tests/test_native_function_emitted_adapter.c src/native_function.c "${_wii_function_fixture}")
+      tests/test_native_function_emitted_adapter.c src/native_function.c src/gx_output.c "${_wii_function_fixture}")
     target_include_directories(test_wii_native_functions_emitted PRIVATE include external/gc-wii-core/include
-      external/powerpc-recomp-core/src)
+      external/powerpc-recomp-core/src external/gc-wii-core/dsp_lle/include)
     target_compile_definitions(test_wii_native_functions_emitted PRIVATE FUNCTION_UNIT_REAL_ADAPTER=1
       DOLRECOMP_FUNCTION_UNIT=1 DOLRECOMP_OBSERVE_CYCLES=1)
     target_link_libraries(test_wii_native_functions_emitted PRIVATE gcn_runtime_core)

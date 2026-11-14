@@ -31,7 +31,24 @@ unsigned fixture_function_adapter_calls;
 static unsigned unit_ram_stores,unit_ram_loads,code_store_delegations,unit_code_stores;
 static unsigned unit_mem2_reads,unit_mem2_loopbacks;
 static u64 unit_mem2_cycles;
+static unsigned clean_store_admissions,local_store_proofs;
 typedef struct {const DrFunctionUnitOwner* owner;bool root_seen;} ReadObserver;
+
+static bool observe_memory(const CPUState* cpu,u32 ea,u32 width,bool write,void* user) {
+    const ReadObserver* proxy=user;const DrFunctionUnitOwner* owner=proxy->owner;
+    const bool allowed=owner->memory && owner->memory(cpu,ea,width,write,owner->user);
+    if(allowed && write && ea==GC_RAM_BASE+0x1000u && width==4u) {
+        if(!gcn_native_store_pages[1])++clean_store_admissions;
+    }
+    if(allowed && !write && ea==GC_RAM_BASE+0x1004u && width==4u &&
+       read_be32(cpu->ram+0x1000u)!=cpu->gpr[7]) {
+        /* The preceding store used dirty local r7 while canonical r7 is
+         * still old. A callback query alone cannot establish this fact. */
+        ++local_store_proofs;++unit_ram_stores;
+    }
+    if(allowed && !write && unit.info->entry==0x80007ff8u && width==4u)++unit_mem2_reads;
+    return allowed;
+}
 
 static bool observe(const CPUState* cpu,u32 pc,u64 cycles,bool scheduling,void* user) {
     ReadObserver* proxy=user;const DrFunctionUnitOwner* owner=proxy->owner;
@@ -55,9 +72,13 @@ static bool observe(const CPUState* cpu,u32 pc,u64 cycles,bool scheduling,void* 
 }
 static bool body(CPUState* cpu,const DrFunctionUnitOwner* owner) {
     ReadObserver observation={owner,false};
-    const DrFunctionUnitOwner proxy={observe,&observation};
-    return unit.info->entry==0x80007ff8u?func_80007FF8_unit_candidate(cpu,&proxy):
+    const DrFunctionUnitOwner proxy={observe,&observation,observe_memory};
+    const u32 old_load=cpu->gpr[9];
+    const bool result=unit.info->entry==0x80007ff8u?func_80007FF8_unit_candidate(cpu,&proxy):
         func_80006FF8_unit_candidate(cpu,&proxy);
+    if(result && cpu->gpr[5]==GC_RAM_BASE+0x1000u && cpu->gpr[9]!=old_load &&
+       cpu->gpr[9]==read_be32(cpu->ram+0x1004u))++unit_ram_loads;
+    return result;
 }
 
 static void invalidate(u32 address,u32 size) {
@@ -89,8 +110,8 @@ void fixture_function_adapter_begin(CPUState* cpu,u32 base) {
     wii_native_function_enable(&unit,true,excluded,sizeof excluded);
     if(!unit.region.enabled)abort();
     gcn_native_code_set_candidate_scoped(start&0x1fffffffu,(start&0x1fffffffu)+8192u,candidate,invalidate);
-    if(cpu->gpr[5]==GC_RAM_BASE+0x1000u)
-        gcn_native_code_invalidate(0x1000u,8u); /* Existing real dirty-page policy. */
+    /* Ordinary scratch begins clean. The real owner must admit its first
+     * write without weakening code/native/resident observation boundaries. */
 }
 void fixture_function_adapter_event(CPUState* cpu) {
     (void)cpu;
@@ -112,9 +133,11 @@ bool fixture_function_adapter(CPUState* cpu,u32 base) {
 void fixture_function_adapter_end(void) {
     gcn_native_code_set_candidate(0,0,NULL,NULL);
     if(!unit_ram_stores || !unit_ram_loads || !code_store_delegations || unit_code_stores ||
-       !unit_mem2_reads || !unit_mem2_loopbacks || !unit_mem2_cycles)abort();
+       !unit_mem2_reads || !unit_mem2_loopbacks || !unit_mem2_cycles ||
+       !clean_store_admissions || !local_store_proofs)abort();
     printf("composed function adapter: calls=%u unit_ram_stores=%u unit_ram_loads=%u code_store_delegations=%u unit_code_stores=%u unit_root_cycles=%llu mem2_reads=%u mem2_loopbacks=%u mem2_guest_cycles=%llu\n",
         fixture_function_adapter_calls,unit_ram_stores,unit_ram_loads,code_store_delegations,unit_code_stores,
         (unsigned long long)unit.root_guest_cycles,unit_mem2_reads,unit_mem2_loopbacks,
         (unsigned long long)unit_mem2_cycles);
+    printf("composed clean stores: admissions=%u dirty_local_store_proofs=%u\n",clean_store_admissions,local_store_proofs);
 }

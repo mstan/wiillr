@@ -14,6 +14,7 @@ static bool pending,decline,first_fault,nested,reset_nested,safety_probe,raise_p
 static bool interior_invalidate,changed_interior;
 static bool delegate_helper,helper_changes_ram,delegate_store;
 static bool immediate_delegate,delegate_continuation;
+static bool memory_probe,malformed_banks;
 static u8* alternate_ram;
 static u32 mutate;
 bool gcn_pi_external_pending(void){return pending;}
@@ -85,6 +86,44 @@ static bool inner(CPUState* cpu,const DrFunctionUnitOwner* owner) {
 static bool function(CPUState* cpu,const DrFunctionUnitOwner* owner) {
     ++producer_calls;
     if(decline || !owner->guard(cpu,cpu->pc,cpu->cycles,true,owner->user))return false;
+    if(memory_probe) {
+        const CPUState before=*cpu;
+        CHECK(owner->memory);
+        if(malformed_banks) {
+            CHECK(!owner->memory(cpu,0x81107fecu,4,true,owner->user));
+            CHECK(memcmp(cpu,&before,sizeof before)==0);return true;
+        }
+        const u32 aliases[]={0x01107fecu,0x81107fecu,0xc1107fecu};
+        CHECK(gcn_native_store_pages[0x1107u]==0); /* Actual clean stack case. */
+        for(unsigned i=0;i<3;++i)for(u32 width=1;width<=8;width*=2) {
+            CHECK(owner->memory(cpu,aliases[i],width,true,owner->user));
+            CHECK(owner->memory(cpu,aliases[i],width,false,owner->user));
+        }
+        CHECK(!owner->memory(cpu,0x80001fffu,2,true,owner->user));
+        CHECK(!owner->memory(cpu,0x80001000u,4,true,owner->user));
+        CHECK(!owner->memory(cpu,0xc0006000u,4,true,owner->user));
+        CHECK(!owner->memory(cpu,0x817fffffu,2,true,owner->user));
+        CHECK(!owner->memory(cpu,0xcc008000u,4,true,owner->user));
+        CHECK(!owner->memory(cpu,0xfffffffdu,8,false,owner->user));
+        CHECK(!owner->memory(cpu,aliases[0],3,true,owner->user));
+        CHECK(!owner->memory(cpu,aliases[0],0,true,owner->user));
+        const u32 mem2[]={0x10000000u,WII_MEM2_BASE,WII_MEM2_UNCACHED};
+        for(unsigned i=0;i<3;++i) {
+            CHECK(owner->memory(cpu,mem2[i],8,true,owner->user));
+            CHECK(owner->memory(cpu,mem2[i],8,false,owner->user));
+            CHECK(!owner->memory(cpu,mem2[i]+cpu->mem2_size-1,2,true,owner->user));
+        }
+        CHECK(memcmp(cpu,&before,sizeof before)==0);
+        const u8 flags=gcn_native_store_pages[0x1107u];
+        gcn_native_code_watch(0x81107000u,1);
+        CHECK(!owner->memory(cpu,aliases[0],4,true,owner->user));
+        CHECK(owner->memory(cpu,aliases[0],4,false,owner->user));
+        gcn_native_store_pages[0x1107u]=flags; /* Test-only conservative watch cleanup. */
+        const u8* ram=cpu->ram;cpu->ram+=1;
+        CHECK(!owner->memory(cpu,aliases[0],4,true,owner->user));cpu->ram=(u8*)ram;
+        ++cpu->mem2_size;CHECK(!owner->memory(cpu,mem2[0],4,true,owner->user));--cpu->mem2_size;
+        CHECK(memcmp(cpu,&before,sizeof before)==0);return true;
+    }
     if(immediate_delegate) {
         CHECK(owner->guard(cpu,cpu->pc,cpu->cycles,false,owner->user));return true;
     }
@@ -137,10 +176,12 @@ static void reset(CPUState* cpu,u32 pc) {
     interior_invalidate=changed_interior=false;
     delegate_helper=helper_changes_ram=delegate_store=false;
     immediate_delegate=delegate_continuation=false;
+    memory_probe=malformed_banks=false;
     mutate=0;wii_native_set_stop_pc(0);
 }
 int main(void) {
     CPUState cpu;if(!cpu_init(&cpu))return 1;
+    if(!cpu_alloc_mem2(&cpu,0x1000u)){cpu_free(&cpu);return 1;}
     s_overlay_variants[0].hash=gcn_aot_fnv1a64(cpu.ram+0x1000u,4096u);
     wii_native_install();reset(&cpu,info.entry);
     CHECK(native_function_units[0].region.enabled && native_function_units[1].region.enabled);
@@ -252,6 +293,12 @@ int main(void) {
     mem_write8(&cpu,0xc0002000u,0,cpu.pc);reset(&cpu,info.entry);CHECK(wii_native_call(&cpu,cpu.pc) && cpu.pc==info.end);
     CPUState other=cpu;other.pc=info.entry;const u32 old_pc=other.pc;
     CHECK(!wii_native_function_call(&module,&other,&native_function_units[0],other.pc) && other.pc==old_pc);
+    reset(&cpu,info.entry);memory_probe=true;
+    CHECK(wii_native_call(&cpu,cpu.pc));
+    /* A bank alias into MEM1 or the CPU cannot safely retain local GPRs. */
+    u8* const mem2=cpu.mem2;reset(&cpu,info.entry);memory_probe=malformed_banks=true;
+    cpu.mem2=cpu.ram+0x100;CHECK(wii_native_call(&cpu,cpu.pc));
+    cpu.mem2=(u8*)&cpu;CHECK(wii_native_call(&cpu,cpu.pc));cpu.mem2=mem2;
     gcn_native_code_set_candidate(0,0,NULL,NULL);cpu_free(&cpu);
     return failures?1:0;
 }
