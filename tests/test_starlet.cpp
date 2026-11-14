@@ -251,6 +251,33 @@ int main() {
         CHECK(faults([&]{cache.coproc_read(15,0,7,10,3);}));
     }
     {
+        wiillr::Starlet drain(mem1,mem2);
+        CHECK(drain.read32(0x0d800188)==0 && drain.read32(0x0d80018c)==0x1000);
+        drain.write32(0x10000500,0x12345678);
+        drain.load_nand(std::vector<uint8_t>(wiillr::NandController::page_size,0xff));
+        drain.write32(0x0d010000,0xc0ff8000); /* A pending timed flash reset. */
+        drain.write32(0x0d800188,0x02000000);
+        CHECK((drain.read32(0x0d80018c)&15)==0); /* Request alone cannot ACK. */
+        drain.write32(0x0d800134,0x400);
+        CHECK((drain.read32(0x0d80018c)&15)==0);
+        drain.write32(0x0d800124,0x280);
+        CHECK(drain.read32(0x0d80018c)==0x1009);
+        drain.write32(0x0d8b0008,0x8000);
+        CHECK(drain.read32(0x0d8b0008)==0x8000 && drain.read32(0x10000500)==0x12345678);
+        CHECK((drain.read32(0x0d010000)&0x80000000) && !(drain.ipc().arm_flags&2));
+        drain.write32(0x0d800134,0);CHECK(drain.read32(0x0d80018c)==0x1000);
+        drain.write32(0x0d800134,0x400);CHECK(drain.read32(0x0d80018c)==0x1009);
+        drain.write32(0x0d800188,0x02010000);CHECK(drain.read32(0x0d80018c)==0x1000);
+        drain.write32(0x0d800188,0x02000000);CHECK(drain.read32(0x0d80018c)==0x1009);
+        CHECK(faults([&]{drain.write32(0x0d800188,0x02000001);}));
+        CHECK(drain.read32(0x0d800188)==0x02000000 && drain.read32(0x0d80018c)==0x1009);
+        CHECK(faults([&]{drain.write32(0x0d80018c,0x1000);})); /* Status is not a writable ACK. */
+        drain.write32(0x0d800188,0);CHECK(drain.read32(0x0d80018c)==0x1000);
+        CHECK(!drain.ipc().arm_flags && !drain.ipc().ppc_flags && !drain.ipc().x && !drain.ipc().y);
+        drain.advance(24299);CHECK(drain.read32(0x0d010000)&0x80000000);
+        drain.advance(1);CHECK(!(drain.read32(0x0d010000)&0x80000000) && (drain.ipc().arm_flags&2));
+    }
+    {
         wiillr::Starlet hardware(mem1,mem2);
         hardware.write32(0x0d800014,3);hardware.write32(0x0d80003c,1);
         hardware.advance(383);CHECK(!(hardware.ipc().arm_flags&1));

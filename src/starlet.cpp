@@ -48,6 +48,17 @@ void Starlet::advance(uint64_t arm_cycles) {
     if(ticks>=(distance ? uint64_t(distance):0x100000000ull))ipc_->arm_flags|=1;
     wii_ipc_tick(ipc_,ppc_origin_+cycles_*3);
 }
+void Starlet::update_ahb_drain() {
+    /* SPARE0/M9/MD handshake exercised by original IOS and documented by
+     * https://github.com/fail0verflow/mini/blob/master/memory.c (_ahb_flush_to).
+     * This bus publishes RAM stores synchronously and retains no AHB FIFO.
+     * Acknowledge a configured drain only after publishing those stores.
+     * Peripheral command latency/completion belongs to advance(), not here. */
+    const bool drained=(spare0_&0x02000000u) && !(spare0_&0x00010000u) &&
+        (arbiter_config_[9]&0x7c0u)==0x280u && (arbiter_config_[13]&0x400u);
+    if(drained)std::atomic_thread_fence(std::memory_order_seq_cst);
+    spare1_=(spare1_&~0xfu)|(drained?9u:0u);
+}
 void Starlet::exception(armv4t::Mode mode,uint32_t vector,uint32_t link) {
     auto bank=[](uint8_t current) {
         using namespace armv4t;
@@ -283,6 +294,7 @@ uint32_t Starlet::read32(uint32_t at) {
     if(bus_address==0x0d8b0008u)return ahb_flush_mask_;
     if(bus_address==0x0d800070u)return exi_control_;
     if(bus_address==0x0d8b0010u)return ahb_prefetch_;
+    if(bus_address==0x0d800188u)return spare0_;
     if(bus_address==0x0d80018cu)return spare1_;
     if(bus_address>=0x0d800100u && bus_address<=0x0d800144u && !(bus_address&3))
         return arbiter_config_[(bus_address-0x0d800100u)/4];
@@ -395,6 +407,11 @@ void Starlet::write32(uint32_t at,uint32_t v) {
         return;
     }
     if(wii_hollywood_write(hollywood_,bus_address,v))return;
+    if(bus_address==0x0d800188u) {
+        if((v^spare0_)&~0x02010000u)
+            unsupported("SPARE0 control change",cpu.R[15],v);
+        spare0_=v;update_ahb_drain();return;
+    }
     if(bus_address==0x0d80018cu) {
         /* IOS initializes the decoupled graphics/PI reset lines. They have no
          * attached PPC/GX in this isolated route. Boot-ROM remapping requires
@@ -409,6 +426,7 @@ void Starlet::write32(uint32_t at,uint32_t v) {
          * machine has one synchronous bus master, so priorities cannot change
          * an access result. Performance counters are deliberately unsupported. */
         arbiter_config_[(bus_address-0x0d800100u)/4]=v;
+        update_ahb_drain();
         return;
     }
     if(bus_address==0x0d800070u) {exi_control_=v;return;}

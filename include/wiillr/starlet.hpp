@@ -56,6 +56,7 @@ private:
     void check_alignment(uint32_t,uint32_t);
     uint32_t translate(uint32_t,bool writing);
     void exception(armv4t::Mode mode,uint32_t vector,uint32_t link);
+    void update_ahb_drain();
     uint32_t gpio_outputs() const {return gpio_[0]&gpio_[1]&gpio_enable_;}
     NandController::Bus nand_bus() {
         return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
@@ -105,6 +106,7 @@ private:
     NandController nand_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
+    uint32_t spare0_=0;
     uint32_t spare1_=0x1000; /* IOS entry: boot0 ROM is already unmapped. */
     WiiHollywood owned_hollywood_{};
     WiiHollywood* hollywood_=&owned_hollywood_;
