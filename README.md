@@ -39,11 +39,14 @@ installed; an installed original Menu retains its normal launch route.
 Native IOS provisions an unconfigured network profile as Connection 1, with
 wireless name `wiillr` and automatic IP/DNS. It upgrades the former entirely
 empty generated default and preserves every nonempty existing configuration.
-Traffic uses host IPv4 sockets and the host resolver; it does not associate
-the computer with another wireless access point. The connection-test flag stays
-unset until the original software completes its test. TCP/UDP and asynchronous
-DNS have component coverage; original Menu connection-test success, wireless
-scanning, SSL and WiiConnect24 network services remain unqualified or unsupported.
+Traffic uses host IPv4 sockets and the host resolver. When a host IPv4 interface
+is available, the virtual wireless driver advertises only the logical `wiillr`
+access point; it does not scan the computer's radio or expose its credentials.
+An existing external SSID is preserved and is not reported as associated with
+that virtual access point. The connection-test flag stays unset until original
+software completes its test. TCP/UDP, asynchronous DNS and virtual scan packets
+have component coverage. Original Menu AP selection and Internet success remain
+unqualified; AOSS pairing, SSL and WiiConnect24 network services are unsupported.
 
 The legacy prepared-data package is also supported. Place
 `game.ini`, the graphics service and its runtime DLLs, the CMake-staged `assets`

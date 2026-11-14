@@ -356,17 +356,19 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !ios.descriptors[0]);
-    /* A host-routed network has no radio association/scan device. The exact
-     * WD_Startup open mode returns ENOENT, not a native-discovery halt or a
-     * successful radio handle. Original AOSS/search can take their error path. */
+    /* The virtual WD is present only when a host IPv4 interface exists. Its
+     * exact WD_Startup open mode remains ENOENT on an unavailable host. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);
     memcpy(cpu.ram+path,"/dev/net/wd/command",sizeof "/dev/net/wd/command");
     mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);mem_write32_cia(&cpu,message+16,0x10003,0);
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.result==-6 && !ios.descriptors[0]);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+    const bool host_available=wii_network_link(ios.network);
+    CHECK(ios.result==(host_available?0:-6) && ios.descriptors[0]==(host_available?14:0));
     consume_mailbox(&ipc,0x32,cpu.cycles);cpu.cycles+=6000;
-    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && mem_read32_cia(&cpu,message,0)==8 && (s32)mem_read32_cia(&cpu,message+4,0)==-6);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && mem_read32_cia(&cpu,message,0)==8 &&
+          (s32)mem_read32_cia(&cpu,message+4,0)==(host_available?0:-6));
     /* The SD slot can be queried while physically empty. Both status and
      * reset report no card; a short output cannot modify the buffer. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);

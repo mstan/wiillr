@@ -234,6 +234,25 @@ int main(int argc,char** argv) {
   std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(network.data()),network.size());
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
+  // Selected virtual association follows the live SetConfig working copy;
+  // it neither overwrites NAND nor associates another saved external SSID.
+  cpu.mem2[0x2008]=0x86;std::memcpy(cpu.mem2+0x2008+1988,"wiillr",6);cpu.mem2[0x2008+2021]=6;
+  es_request(4,1,1);mem_write32_cia(&cpu,message+8,2,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  mem_write32_cia(&cpu,0x1000,buffer+64,0);mem_write32_cia(&cpu,0x1004,8,0);
+  es_request(7,0,1);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer+64,0) &&
+        mem_read32_cia(&cpu,buffer+68,0)==(wii_network_link(ios.network)?5u:4u));
+  cpu.mem2[0x2008+1988]='x';
+  mem_write32_cia(&cpu,0x1000,0x10002000,0);mem_write32_cia(&cpu,0x1004,WIILLR_NETWORK_CONFIG_SIZE,0);
+  es_request(4,1,1);mem_write32_cia(&cpu,message+8,2,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  mem_write32_cia(&cpu,0x1000,buffer+64,0);mem_write32_cia(&cpu,0x1004,8,0);
+  es_request(7,0,1);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer+68,0)==4);
+  std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> association_persisted{};
+  CHECK(!wii_fs_network_config(nand,association_persisted.data()) && association_persisted==network);
+  mem_write32_cia(&cpu,0x1000,0x10002000,0);mem_write32_cia(&cpu,0x1004,WIILLR_NETWORK_CONFIG_SIZE,0);
+  es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
   // NCDiSetConfig changes the working copy only; ReadConfig reloads NAND.
   cpu.mem2[0x2000+network.size()-1]=0x77;
   es_request(4,1,1);mem_write32_cia(&cpu,message+8,2,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
@@ -536,7 +555,7 @@ int main(int argc,char** argv) {
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-106 && wii_fs_uid(nand)==0x1000);
   CHECK(fs::file_size(root/"sys/uid.sys")==36);wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0x1001,0x3344);CHECK(nand && wii_fs_boot_title(nand,&boot_title) && boot_title==0x0001000155555555ull);
-  wii_fs_unmount(nand);cpu_free(&cpu);
+  wii_ios_native_destroy(&ios);wii_fs_unmount(nand);cpu_free(&cpu);
   // Only this exclusively created, flat disposable fixture is removed.
   CHECK(fs::remove(root/"uid-test"));
   CHECK(fs::remove(root/".wiillr-network-mac"));
