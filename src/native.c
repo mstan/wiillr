@@ -22,6 +22,22 @@
 #ifndef WIILLR_NATIVE_EXTERNAL_TABLES
 #include "overlay_module_tables.inc"
 #endif
+#if WIILLR_NATIVE_REGIONS
+#include "cpu/overlay_region.h"
+#include "cpu/native_boundary.h"
+#include "pi/pi.h"
+#ifndef WIILLR_NATIVE_EXTERNAL_REGIONS
+#include "overlay_regions.inc"
+#endif
+static GcnOverlayRegion* region_index[GCN_OVERLAY_INDEX_SLOTS];
+static u32 region_stop_pc;
+static bool region_boundary(const CPUState* cpu,u32 target,u64 cycles,void* user) {
+    (void)cycles;(void)user;
+    if(target==region_stop_pc)return false;
+    return !(cpu->msr&0x8000u) ||
+        (!*ppc_native_decrementer_pending() && !gcn_pi_external_pending());
+}
+#endif
 static u32 resident[GCN_OVERLAY_PAGE_COUNT];
 static u32 page_index[GCN_OVERLAY_INDEX_SLOTS];
 static GcnOverlayModule module={s_overlay_pages,s_overlay_variants,resident,
@@ -75,7 +91,7 @@ static void install_hook_pages(void) {
     /* Picture/TextBox draws and both destructors. */
     hook_pages[0x1520]|=HOOK_MENU;hook_pages[0x1521]|=HOOK_MENU;
 #endif
-#if WIILLR_NATIVE_CHAIN
+#if WIILLR_NATIVE_CHAIN || WIILLR_NATIVE_REGIONS
     /* Reuse the actual build's transformed-page list. Every injected owner
      * and its continuations retain the ordinary native dispatch boundary. */
     const u32 owners[]={WIILLR_NATIVE_OWNED_PAGES};
@@ -107,6 +123,10 @@ bool gcn_overlay_call(CPUState* cpu,u32 address){
         return gcn_overlay_module_call(&module,cpu,address);
     }
     if(hook_pages[page] && dispatch_hooks(cpu,address,hook_pages[page]))return true;
+#if WIILLR_NATIVE_REGIONS
+    GcnOverlayRegion* region=region_index[slot];
+    if(region && gcn_overlay_region_call(&module,cpu,region,address))return true;
+#endif
     if(!bound_known[slot]) {
         bound[slot]=gcn_overlay_module_bind(&module,cpu,address);
         bound_known[slot]=1;
@@ -114,6 +134,10 @@ bool gcn_overlay_call(CPUState* cpu,u32 address){
     return gcn_overlay_binding_call(&module,cpu,bound[slot]);
 }
 void gcn_overlay_icbi(u32 address,u32 size){
+#if WIILLR_NATIVE_REGIONS
+    for(u32 i=0;i<GCN_OVERLAY_REGION_COUNT;++i)
+        gcn_overlay_region_invalidate(&native_regions[i],address,size);
+#endif
     const u32 physical=address&0x1fffffffu;
     u32 page;
     if(size && binding_slot(address,&page)>=0) {
@@ -135,6 +159,9 @@ void gcn_overlay_icbi(u32 address,u32 size){
     gcn_overlay_module_invalidate(&module,address,size);
 }
 void wii_native_set_stop_pc(u32 address) {
+#if WIILLR_NATIVE_REGIONS
+    region_stop_pc=address;
+#endif
 #if WIILLR_NATIVE_CHAIN
     chain_stop=address;chain.stop_pc=address;
 #else
@@ -175,6 +202,29 @@ void wii_native_install(void){
     install_hook_pages();
     for(u32 i=0;i<GCN_OVERLAY_PAGE_COUNT;i++)resident[i]=GCN_OVERLAY_UNKNOWN;
     const bool full_pages=gcn_overlay_module_index(&module,page_index,GCN_OVERLAY_INDEX_SLOTS);
+#if WIILLR_NATIVE_REGIONS
+    memset(region_index,0,sizeof region_index);
+    for(u32 i=0;i<GCN_OVERLAY_REGION_COUNT;++i) {
+        GcnOverlayRegion* region=&native_regions[i];
+        region->boundary=region_boundary;
+        gcn_overlay_region_enable(region,full_pages);
+        if(!region->enabled)continue;
+        bool allowed=true;
+        for(u32 member=0;member<region->page_count;++member) {
+            u32 physical_page;
+            const int member_slot=binding_slot(region->start+member*4096u,&physical_page);
+            if(member_slot<0 || hook_pages[physical_page] || region_index[member_slot]) {
+                allowed=false;break;
+            }
+        }
+        if(!allowed) {gcn_overlay_region_enable(region,false);continue;}
+        for(u32 member=0;member<region->page_count;++member) {
+            u32 physical_page;
+            const int member_slot=binding_slot(region->start+member*4096u,&physical_page);
+            region_index[member_slot]=region;
+        }
+    }
+#endif
     /* Reuse the shared store/DMA invalidation observer. Direct calls retain
      * the live physical/cached/uncached PC when selecting the compiled body. */
     /* AOT and HLE identity checks watch their code ranges. Ordinary data keeps
@@ -192,6 +242,17 @@ void wii_native_install(void){
 #endif
 }
 void wii_native_summary(void){
+#if WIILLR_NATIVE_REGIONS
+    for(u32 i=0;i<GCN_OVERLAY_REGION_COUNT;++i) {
+        const GcnOverlayRegion* region=&native_regions[i];
+        printf("{\"native_region\":%u,\"region_source\":\"%s\",\"start\":%u,"
+               "\"pages\":%u,\"enabled\":%u,\"calls\":%llu,\"crossings\":%llu,"
+               "\"declined_crossings\":%llu}\n",i,WIILLR_PPC_REGIONS_SHA,
+               region->start,region->page_count,(unsigned)region->enabled,
+               (unsigned long long)region->calls,(unsigned long long)region->crossings,
+               (unsigned long long)region->declined_crossings);
+    }
+#endif
     u32 observed=0;
     for(u32 page=0;page<GC_MAIN_RAM_SIZE/4096u;++page)
         if(gcn_native_store_pages[page]&GCN_NATIVE_STORE_OBSERVED)++observed;
