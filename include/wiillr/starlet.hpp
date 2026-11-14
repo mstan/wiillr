@@ -74,6 +74,7 @@ private:
             return address>=0xffff0000u?nullptr:m.physical(address,size);
         }};
     }
+    OhciInit::Bus ohci_bus() {const auto b=nand_bus();return {b.user,b.map,b.stored};}
     /* Starlet's high exception vectors are selected on entry (ARM926
      * VINITHI/SCTLR.V). The original IOS startup preserves that V bit. */
     uint32_t sctl_=0x000520f8u,ttbr_=0,dacr_=0,dfsr_=0,far_=0,fcse_=0;

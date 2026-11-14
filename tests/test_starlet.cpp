@@ -210,7 +210,7 @@ int main() {
             usb.advance(2429);CHECK(usb.read32(base+8)==1);
             usb.advance(1);CHECK(usb.read32(base+8)==0);
             CHECK(usb.read32(base+4)==0xc0 && usb.read32(base+0x10)==0 && usb.read32(base+0x18)==0);
-            CHECK(faults([&]{usb.write32(base+4,0x80);})); /* No silent DMA/USB service success. */
+            CHECK(faults([&]{usb.write32(base+4,0xbc);})); /* No silent descriptor/USB service success. */
             CHECK(faults([&]{usb.write32(base+8,2);}));
             CHECK(faults([&]{usb.read32(base+0x48);})); /* Root hub device profile is separate. */
             CHECK(faults([&]{usb.write16(base+0x14,0xffff);}));
@@ -232,6 +232,20 @@ int main() {
         flash.advance(1);CHECK(flash.ipc().arm_flags&2);
         CHECK(flash.read32(0x10001000)==0x5c5c5c5c && flash.read32(0x10002000)==0xffffffff);
         CHECK(stores.size()==2 && stores[0]==std::make_pair(0x10001000u,0x800u) && stores[1]==std::make_pair(0x10002000u,0x50u));
+    }
+    {
+        wiillr::Starlet idle(mem1,mem2);unsigned stores=0;
+        idle.observe_stores([](void* p,uint32_t at,uint32_t size){if(at==0x10001080 && size==4)++*static_cast<unsigned*>(p);},&stores);
+        idle.load_nand(std::vector<uint8_t>(wiillr::NandController::page_size*64,0xff));
+        idle.write32(0x0d010000,0x9c600000);idle.advance(243);
+        idle.write32(0x0d010000,0xc0d08000); // A real 2ms peripheral operation.
+        const uint32_t base=0x0d060000;
+        idle.write32(base+0x18,0x10001000);idle.write32(base+0x10,0x80000004);idle.write32(base+4,0x283);
+        idle.advance(243000-1);CHECK(!stores && !(idle.ipc().arm_flags&0x40));
+        idle.advance(1);CHECK(stores==1 && (idle.ipc().arm_flags&0x40));
+        CHECK(idle.read32(0x10001080)==0x01000000); // Actual LE16 frame plus zero pad.
+        CHECK((idle.read32(0x0d010000)&0x80000000) && !(idle.ipc().arm_flags&2));
+        idle.advance(243000);CHECK(!(idle.read32(0x0d010000)&0x80000000) && (idle.ipc().arm_flags&2));
     }
     {
         wiillr::Starlet cache(mem1,mem2);

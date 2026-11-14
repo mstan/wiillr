@@ -43,7 +43,7 @@ void Starlet::advance(uint64_t arm_cycles) {
     cycles_+=arm_cycles;
     if(nand_.advance(cycles_,nand_bus()))ipc_->arm_flags|=2;
     if(sha_.advance(cycles_,sha_bus()))ipc_->arm_flags|=8;
-    for(unsigned i=0;i<ohci_.size();++i)if(ohci_[i].interrupt(cycles_))ipc_->arm_flags|=1u<<(5+i);
+    for(unsigned i=0;i<ohci_.size();++i)if(ohci_[i].interrupt(cycles_,ohci_bus()))ipc_->arm_flags|=1u<<(5+i);
     const uint64_t ticks=cycles_/128-old_timer;
     const uint32_t distance=alarm_-uint32_t(old_timer);
     if(ticks>=(distance ? uint64_t(distance):0x100000000ull))ipc_->arm_flags|=1;
@@ -251,7 +251,7 @@ uint32_t Starlet::read32(uint32_t at) {
     if(bus_address>=0x0d030000u && bus_address<=0x0d030018u &&
        sha_.read(bus_address-0x0d030000u,ipc_value))return ipc_value;
     if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
-       ohci_[(bus_address-0x0d050000u)>>16].read(bus_address&0xffffu,cycles_,ipc_value))return ipc_value;
+       ohci_[(bus_address-0x0d050000u)>>16].read(bus_address&0xffffu,cycles_,ipc_value,ohci_bus()))return ipc_value;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
        wii_ipc_read(ipc_,bus_address-0x0d800000u,&ipc_value))return ipc_value;
     /* HW_TIMER: free-running AHB/128 counter (243MHz /128). */
@@ -340,7 +340,7 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     if(bus_address>=0x0d030000u && bus_address<=0x0d030018u &&
        sha_.write(bus_address-0x0d030000u,v,cycles_,sha_bus()))return;
     if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
-       ohci_[(bus_address-0x0d050000u)>>16].write(bus_address&0xffffu,v,cycles_))return;
+       ohci_[(bus_address-0x0d050000u)>>16].write(bus_address&0xffffu,v,cycles_,ohci_bus()))return;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
        wii_ipc_write(ipc_,bus_address-0x0d800000u,v,ppc_origin_+cycles_*3))return;
     if(bus_address==0x0d800014u) {alarm_=v;return;}
