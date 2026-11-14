@@ -3,13 +3,33 @@
 #include "cpu/overlay_module.h"
 #include "cpu/aot_module.h"
 #include "memory/memory.h"
+#include "wiillr/native.h"
+#if WIILLR_NATIVE_CHAIN
+#include "cpu/native_chain_inline.h"
+static bool exercise_chain,nested_chain,in_nested,invalidate_chain;
+static u32 chain_target;
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 static int failures;
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);++failures;}}while(0)
 static unsigned body_calls,mods_calls,dlc_calls,renderer_calls,menu_calls,save_calls;
 static bool handle_mods,handle_dlc,handle_renderer,handle_menu;
-static void body(CPUState* cpu){++body_calls;cpu->pc+=4;}
+static void body(CPUState* cpu){
+    ++body_calls;cpu->pc+=4;
+#if WIILLR_NATIVE_CHAIN
+    if(exercise_chain) {
+        ++cpu->cycles;
+        if(chain_target)cpu->pc=chain_target;
+        if(invalidate_chain){invalidate_chain=false;mem_write8(cpu,0x1000,1,cpu->pc);}
+        if(nested_chain && !in_nested) {
+            in_nested=true;const u32 resume=cpu->pc;
+            CHECK(wii_native_call(cpu,cpu->pc));cpu->pc=resume;in_nested=false;
+        }
+        (void)dr_native_chain_next(cpu);
+    }
+#endif
+}
 static void save_body(CPUState* cpu){CHECK(cpu->gpr[4]==save_calls);body(cpu);}
 #define GCN_OVERLAY_PAGE_COUNT 5u
 #define GCN_OVERLAY_VARIANT_COUNT 2u
@@ -89,6 +109,37 @@ int main(void){
         const u32 pc=(menu_entries[n]&0x1fffffffu)|(bank==0?0:bank==1?0x80000000u:0xc0000000u);
         clear_spies();CHECK(call(&cpu,pc));CHECK(menu_calls==1 && !mods_calls && !renderer_calls);
     }
+#if WIILLR_NATIVE_CHAIN
+    handle_menu=false;exercise_chain=true;cpu.cycles=100;cpu.cycle_deadline=10000;
+    unsigned calls=body_calls;u64 dispatched=module.dispatches;
+    CHECK(call(&cpu,0x80001000));
+    CHECK(body_calls==calls+9 && module.dispatches==dispatched+9 && cpu.pc==0x80001024);
+    CHECK(wii_native_chained_dispatches()==8 && !chain.depth && !chain.admitted && !call_depth);
+    cpu.cycles=100;cpu.cycle_deadline=103;calls=body_calls;
+    CHECK(call(&cpu,0x80001000));CHECK(cpu.pc==0x8000100c && body_calls==calls+3);
+    CHECK(wii_native_chained_dispatches()==2);
+    cpu.cycles=100;cpu.cycle_deadline=10000;wii_native_set_stop_pc(0x8000100c);
+    CHECK(call(&cpu,0x80001000));CHECK(cpu.pc==0x8000100c && wii_native_chained_dispatches()==2);
+    wii_native_set_stop_pc(0);
+    /* A pure source must yield before a SAVE owner, even if that owner's
+     * body has already been verified and cached by the ordinary route. */
+    chain_target=0x8000d664;calls=save_calls;
+    CHECK(call(&cpu,0x80001000));CHECK(cpu.pc==chain_target && save_calls==calls);
+    CHECK(!wii_native_chained_dispatches());chain_target=0;exercise_chain=false;
+    CHECK(call(&cpu,0x8000d664));CHECK(save_calls==calls+1);
+    exercise_chain=true;hook_pages[1]|=HOOK_OWNER;calls=body_calls;
+    CHECK(call(&cpu,0x80001000));CHECK(body_calls==calls+1 && !wii_native_chained_dispatches());
+    hook_pages[1]&=(u8)~HOOK_OWNER;
+    /* Nested guest ownership executes once and suspends chaining. Its native
+     * dispatches are counted once, independently of additional root chunks. */
+    nested_chain=true;calls=body_calls;dispatched=module.dispatches;
+    CHECK(call(&cpu,0x80001000));CHECK(body_calls==calls+18 && module.dispatches==dispatched+18);
+    CHECK(wii_native_chained_dispatches()==8 && !call_depth && !chain.depth);
+    nested_chain=false;invalidate_chain=true;calls=body_calls;
+    CHECK(call(&cpu,0x80001000));CHECK(body_calls==calls+1 && !wii_native_chained_dispatches());
+    exercise_chain=false;CHECK(!call(&cpu,0x80001000));
+    mem_write8(&cpu,0x1000,0,cpu.pc);CHECK(call(&cpu,0x80001000));
+#endif
     /* A partial catalog must keep search routing even after an inside call
      * has selected its body. Neither neighboring address shares that range. */
     handle_menu=false;

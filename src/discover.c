@@ -328,6 +328,7 @@ static int run(int argc, char** argv) {
         machine.dsp.output_sink=gcn_host_audio_submit_be_s16;machine.dsp.output_rate=32000u;
     }
 #if WIILLR_PPC_STATIC
+    wii_native_set_stop_pc((u32)stop);
     wii_native_install();
     const GcnOverlayModule* native_module=wii_native_module();
 #else
@@ -393,7 +394,11 @@ static int run(int argc, char** argv) {
             cpu.halted=true;break;
 #endif
         }
+#if WIILLR_NATIVE_CHAIN
+        steps+=1+wii_native_chained_dispatches();
+#else
         ++steps;
+#endif
 #if WIILLR_SCHED_DEADLINE
         } while(cpu.cycles<cpu.cycle_deadline && !cpu.halted && !cpu.exception &&
                 (!stop || cpu.pc!=stop));

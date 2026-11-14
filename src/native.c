@@ -9,6 +9,10 @@
 #include "wiillr/mm9_mods.h"
 #include <stdio.h>
 #include <string.h>
+#if WIILLR_NATIVE_CHAIN
+#include "cpu/native_chain.h"
+#include "debug/cost_ring.h"
+#endif
 #if WIILLR_MENU_PICTURES
 #include "wiillr/menu_picture_hook.h"
 #endif
@@ -26,9 +30,26 @@ static GcnOverlayModule module={s_overlay_pages,s_overlay_variants,resident,
  * identities. The existing invalidation observer retires all three aliases. */
 static GcnOverlayFn bound[GCN_OVERLAY_INDEX_SLOTS];
 static u8 bound_known[GCN_OVERLAY_INDEX_SLOTS];
-enum {HOOK_MODS=1,HOOK_DLC=2,HOOK_RENDERER=4,HOOK_MENU=8};
+enum {HOOK_MODS=1,HOOK_DLC=2,HOOK_RENDERER=4,HOOK_MENU=8,HOOK_OWNER=16};
 static u8 hook_pages[GC_MAIN_RAM_SIZE/4096u];
 static bool bindings_ready;
+#if WIILLR_NATIVE_CHAIN
+static DrNativeChain chain;
+static unsigned call_depth;
+static u32 chain_stop;
+static u64 chained_dispatches,last_chained;
+static bool chain_boundary(const CPUState* cpu,void* user) {
+    (void)user;
+#if GCN_COST_RING_ENABLED
+    const u8* thread=cpu->ram+0xe4;
+    gcn_cost_thread_boundary(cpu->cycles,((u32)thread[0]<<24)|((u32)thread[1]<<16)|
+        ((u32)thread[2]<<8)|thread[3]);
+#else
+    (void)cpu;
+#endif
+    return true;
+}
+#endif
 static int binding_slot(u32 address,u32* page) {
     const u32 physical=address&0x1fffffffu;
     if(physical>=GC_MAIN_RAM_SIZE)return -1;
@@ -53,6 +74,15 @@ static void install_hook_pages(void) {
 #if WIILLR_MENU_PICTURES
     /* Picture/TextBox draws and both destructors. */
     hook_pages[0x1520]|=HOOK_MENU;hook_pages[0x1521]|=HOOK_MENU;
+#endif
+#if WIILLR_NATIVE_CHAIN
+    /* Reuse the actual build's transformed-page list. Every injected owner
+     * and its continuations retain the ordinary native dispatch boundary. */
+    const u32 owners[]={WIILLR_NATIVE_OWNED_PAGES};
+    for(u32 i=0;i<sizeof owners/sizeof *owners;++i) {
+        const u32 physical=owners[i]&0x1fffffffu;
+        if(physical<GC_MAIN_RAM_SIZE)hook_pages[physical>>12u]|=HOOK_OWNER;
+    }
 #endif
 }
 const GcnOverlayModule* wii_native_module(void){return &module;}
@@ -104,9 +134,42 @@ void gcn_overlay_icbi(u32 address,u32 size){
 #endif
     gcn_overlay_module_invalidate(&module,address,size);
 }
-bool wii_native_call(CPUState* cpu,u32 address){return gcn_overlay_call(cpu,address);}
+void wii_native_set_stop_pc(u32 address) {
+#if WIILLR_NATIVE_CHAIN
+    chain_stop=address;chain.stop_pc=address;
+#else
+    (void)address;
+#endif
+}
+u64 wii_native_chained_dispatches(void) {
+#if WIILLR_NATIVE_CHAIN
+    return last_chained;
+#else
+    return 0;
+#endif
+}
+bool wii_native_call(CPUState* cpu,u32 address){
+#if WIILLR_NATIVE_CHAIN
+    const bool root=call_depth++==0,previous=chain.admitted;
+    const u64 before=chained_dispatches;
+    u32 page=0;const int slot=binding_slot(address,&page);
+    /* Only the root driver admits a pure page. Reentrant native/HLE calls
+     * retain their own stop/return contract, even inside an admitted root. */
+    if(root) {chain.cpu=cpu;chain.halted=cpu?&cpu->halted:NULL;last_chained=0;}
+    chain.admitted=root && cpu && bindings_ready && slot>=0 && !hook_pages[page];
+    const bool result=gcn_overlay_call(cpu,address);
+    chain.admitted=previous;--call_depth;
+    if(root) {last_chained=chained_dispatches-before;module.dispatches+=last_chained;}
+    return result;
+#else
+    return gcn_overlay_call(cpu,address);
+#endif
+}
 static int candidate(CPUState* cpu,u32 address){return wii_native_call(cpu,address);}
 void wii_native_install(void){
+#if WIILLR_NATIVE_CHAIN
+    if(call_depth || !dr_native_chain_bind(NULL))return; /* Installation is quiescent only. */
+#endif
     bindings_ready=false;
     memset(bound,0,sizeof bound);memset(bound_known,0,sizeof bound_known);
     install_hook_pages();
@@ -120,6 +183,13 @@ void wii_native_install(void){
     /* Partial, unaligned or duplicate ranges retain the original search path;
      * one page-wide execution decision cannot represent those catalogs. */
     bindings_ready=full_pages;
+#if WIILLR_NATIVE_CHAIN
+    call_depth=0;chained_dispatches=last_chained=0;
+    chain=(DrNativeChain){.entries=bound,.entry_count=GCN_OVERLAY_INDEX_SLOTS,
+        .excluded_pages=hook_pages,.stop_pc=chain_stop,.dispatches=&chained_dispatches,
+        .before=chain_boundary};
+    if(!dr_native_chain_bind(&chain))bindings_ready=false;
+#endif
 }
 void wii_native_summary(void){
     u32 observed=0;
