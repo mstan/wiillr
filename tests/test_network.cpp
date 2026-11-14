@@ -54,6 +54,12 @@ static bool completion(WiiNetwork* net,CPUState* cpu,u32 expected,u32 command,s3
         if(wii_network_poll(net,cpu,&message,&cmd,result))return message==expected && cmd==command;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));}return false;
 }
+/* The filter fixtures request a 40ms single-channel dwell. */
+static bool scan_complete(WiiNetwork* net,CPUState* cpu,s32* result){
+    if(ioctlv(net,cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},result,0x200,true)!=2)return false;
+    cpu->cycles+=40ull*729000;
+    return completion(net,cpu,0x200,7,result);
+}
 static std::vector<u8> words(std::initializer_list<u32> list){std::vector<u8> bytes(list.size()*4);unsigned n=0;for(const auto v:list){put(bytes.data()+n,v);n+=4;}return bytes;}
 static void address(u8* out,const sockaddr_in& in){out[0]=8;out[1]=2;std::memcpy(out+2,&in.sin_port,2);std::memcpy(out+4,&in.sin_addr,4);}
 int main(){
@@ -137,16 +143,26 @@ int main(){
         std::memset(cpu.ram+0x6000,0,0x4e);cpu.ram[0x6001]=2;cpu.ram[0x6003]=40;
         std::memset(cpu.ram+0x6004,0xff,6);std::memset(cpu.ram+0x602e,0xff,32);
         std::memset(cpu.ram+0x7000,0xa5,0x100);writes=0;
-        CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==1 && !result && writes==0x42);
+        const u64 started=cpu.cycles;
+        CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==2 && !writes);
+        CHECK(cpu.ram[0x7000]==0xa5 && cpu.ram[0x7041]==0xa5);
+        cpu.ram[0x600d]=33; /* queued scan must own the pre-ACK input */
+        cpu.cycles=started+40ull*729000-1;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));u32 message=0,command=0;
+        CHECK(!wii_network_poll(net,&cpu,&message,&command,&result) && !writes && cpu.ram[0x7000]==0xa5);
+        ++cpu.cycles;
+        CHECK(completion(net,&cpu,0x200,7,&result) && !result && writes==0x42);
+        CHECK(!wii_network_poll(net,&cpu,&message,&command,&result)); /* exactly once */
+        cpu.ram[0x600d]=0;
         CHECK(cpu.ram[0x7001]==1 && cpu.ram[0x7003]==0x20 && cpu.ram[0x700d]==6 && !std::memcmp(cpu.ram+0x700e,"wiillr",6));
         CHECK(cpu.ram[0x7038]==0 && cpu.ram[0x7039]==1 && cpu.ram[0x7042]==0xa5);
         const std::array<u8,6> bssid{cpu.ram[0x7006],cpu.ram[0x7007],cpu.ram[0x7008],cpu.ram[0x7009],cpu.ram[0x700a],cpu.ram[0x700b]};
         CHECK((bssid[0]&3)==2 && std::memcmp(bssid.data(),mac,6));
         cpu.ram[0x600d]=6;std::memcpy(cpu.ram+0x600e,"other!",6);writes=0;
-        CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==1 && !result && writes==2 && !cpu.ram[0x7001]);
+        CHECK(scan_complete(net,&cpu,&result) && !result && writes==2 && !cpu.ram[0x7001]);
         std::memcpy(cpu.ram+0x600e,"wiillr",6);std::memcpy(cpu.ram+0x6004,bssid.data(),6);
-        CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==1 && !result && cpu.ram[0x7001]==1);
-        cpu.ram[0x6009]^=1;CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==1 && !result && !cpu.ram[0x7001]);
+        CHECK(scan_complete(net,&cpu,&result) && !result && cpu.ram[0x7001]==1);
+        cpu.ram[0x6009]^=1;CHECK(scan_complete(net,&cpu,&result) && !result && !cpu.ram[0x7001]);
         std::memset(cpu.ram+0x6004,0xff,6);cpu.ram[0x6001]=4;
         CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==1 && !result && !cpu.ram[0x7001]);
         cpu.ram[0x6001]=2;writes=0;
@@ -164,7 +180,23 @@ int main(){
         CHECK(wii_network_wireless_close(net,12)==0);
         CHECK(completion(net,&cpu,0x200,7,&result) && result==s32(0x80008000u) && !writes && cpu.ram[0x7000]==0xa5);
         CHECK(wii_network_wireless_close(net,12)==s32(0x80008000u));
-        CHECK(wii_network_wireless_open(net,12,0x10003)==0 && wii_network_wireless_close(net,12)==0);
+        CHECK(wii_network_wireless_open(net,12,0x10003)==0);
+        std::memset(cpu.ram+0x6000,0,0x4e);cpu.ram[0x6001]=2;cpu.ram[0x6002]=1;cpu.ram[0x6003]=44; /* 300ms */
+        std::memset(cpu.ram+0x6004,0xff,6);std::memset(cpu.ram+0x602e,0xff,32);
+        std::memset(cpu.ram+0x7000,0xa5,0x100);writes=0;
+        CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==2 && !writes);
+        CHECK(wii_network_wireless_close(net,12)==0);
+        CHECK(completion(net,&cpu,0x200,7,&result) && result==s32(0x80008000u) && !writes && cpu.ram[0x7000]==0xa5);
+        CHECK(wii_network_wireless_open(net,12,0x10003)==0);
+        CHECK(ioctlv(net,&cpu,0x100a,{{0x6000,0x4e}},{{0x7000,0x100}},&result,0x200,true)==2 && !writes);
+        wii_network_destroy(net);net=wii_network_create(mac);CHECK(net);
+        cpu.cycles+=300ull*729000;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        CHECK(!wii_network_poll(net,&cpu,&message,&command,&result) && !writes && cpu.ram[0x7000]==0xa5);
+        CHECK(wii_network_wireless_open(net,12,0x10003)==0);
+        cpu.ram[0x6002]=0;cpu.ram[0x6003]=40;
+        CHECK(scan_complete(net,&cpu,&result) && !result && cpu.ram[0x7001]==1);
+        CHECK(wii_network_wireless_close(net,12)==0);
     }
     wii_network_destroy(net);std::puts("host network: profile preservation, UDP/TCP, pending/cancel, guest buffers, resolver and virtual WD PASS");return 0;
 }
