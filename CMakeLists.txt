@@ -147,6 +147,11 @@ add_library(wii_bluetooth STATIC third_party/dolphin-bluetooth/BTEmuHCI.cpp
 target_include_directories(wii_bluetooth PRIVATE third_party/dolphin-bluetooth PUBLIC include)
 target_link_libraries(wii_bluetooth PUBLIC gcn_runtime_core)
 target_link_libraries(wii_boot PUBLIC wii_bluetooth)
+add_executable(test_wii_menu_frame_quad tests/test_menu_frame_quad.c)
+target_compile_definitions(test_wii_menu_frame_quad PRIVATE
+  WIILLR_MENU_FRAME_MODE=0 WIILLR_MENU_TRANSFORM=0)
+target_link_libraries(test_wii_menu_frame_quad PRIVATE wii_boot)
+add_test(NAME wii_menu_utility_quads COMMAND test_wii_menu_frame_quad)
 add_executable(test_wii_bluetooth tests/test_bluetooth.cpp)
 target_link_libraries(test_wii_bluetooth PRIVATE wii_bluetooth)
 add_test(NAME wii_bluetooth_transport COMMAND test_wii_bluetooth)
