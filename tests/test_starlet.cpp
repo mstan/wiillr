@@ -162,6 +162,33 @@ int main() {
         program(3,0x9876);serial.advance(wiillr::Seeprom::program_cycles);CHECK(read(3)==0x5c5d);
     }
     {
+        /* Exception return takes its state from SPSR, then ignores the low
+         * PC bits for that state. Target bit0 must not act like BX. Cover
+         * logical/arithmetic PC writes and LDM's common return helper. */
+        const uint32_t returns[]={0xe1b0f00e,0xe25ef004,0xe8d08000};
+        for(unsigned op=0;op<3;++op)for(unsigned thumb=0;thumb<2;++thumb)for(unsigned low=0;low<4;++low) {
+            wiillr::Starlet returning(mem1,mem2);
+            returning.coproc_write(15,0,1,0,0,0x520fa); /* Alignment checking on. */
+            const uint32_t target=0x300|low;
+            returning.cpu.R[13]=0x1000;returning.cpu.R[14]=target+(op==1?4:0);
+            returning.cpu.R[15]=0x100;returning.cpu.R[0]=0x2000;
+            returning.cpu.banked_sp[armv4t::Bank_User]=0x500;
+            returning.cpu.banked_lr[armv4t::Bank_User]=0x9876;
+            returning.cpu.banked_spsr[armv4t::Bank_Supervisor]=0xa000001f|(thumb?0x20:0);
+            returning.write32(0x2000,target);
+            returning.execute(armv4t::ArmDecoder::decode(returns[op],0x100));
+            CHECK(returning.cpu.R[15]==(target&~(thumb?1u:3u)));
+            CHECK(returning.cpu.cpsr.t==bool(thumb) && returning.cpu.thumb==bool(thumb));
+            CHECK(returning.cpu.cpsr.mode==uint8_t(armv4t::Mode::System));
+            CHECK(returning.cpu.cpsr.n && returning.cpu.cpsr.c && !returning.cpu.cpsr.z && !returning.cpu.cpsr.v);
+            CHECK(!returning.cpu.cpsr.i && !returning.cpu.cpsr.f);
+            CHECK(returning.cpu.R[13]==0x500 && returning.cpu.R[14]==0x9876);
+            CHECK(returning.cpu.banked_sp[armv4t::Bank_Supervisor]==0x1000);
+            CHECK(returning.cpu.banked_lr[armv4t::Bank_Supervisor]==target+(op==1?4:0));
+            CHECK(!faults([&]{if(thumb)returning.fetch16(returning.cpu.R[15]);else returning.fetch32(returning.cpu.R[15]);}));
+        }
+    }
+    {
         wiillr::Starlet hardware(mem1,mem2);
         hardware.write32(0x0d800014,3);hardware.write32(0x0d80003c,1);
         hardware.advance(383);CHECK(!(hardware.ipc().arm_flags&1));
