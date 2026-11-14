@@ -189,6 +189,34 @@ int main() {
         }
     }
     {
+        wiillr::Starlet usb(mem1,mem2);
+        for(unsigned port=0;port<2;++port) {
+            const uint32_t base=0x0d050000+port*0x10000;
+            CHECK(usb.read32(base)==0x10 && usb.read32(base+0x10)==0);
+            usb.write32(base+4,0x100); /* Route to old owner, then request ownership. */
+            usb.write32(base+8,8);CHECK(usb.read32(base+0xc)==0x40000000);
+            usb.write32(base+0x10,0xc0000000);usb.advance(1);
+            const uint32_t interrupt=1u<<(5+port);
+            CHECK(usb.ipc().arm_flags&interrupt);
+            usb.write32(base+0x14,0x40000000); /* Disable does NOT acknowledge status. */
+            CHECK(usb.read32(base+0x10)==0x80000000 && usb.read32(base+0x14)==0x80000000);
+            CHECK(usb.read32(base+0xc)==0x40000000);
+            usb.write32(0x0d800038,interrupt);usb.advance(1);CHECK(!(usb.ipc().arm_flags&interrupt));
+            usb.write32(base+0x10,0x40000000);usb.advance(1);CHECK(usb.ipc().arm_flags&interrupt);
+            usb.write32(base+0xc,0);CHECK(usb.read32(base+0xc)==0x40000000);
+            usb.write32(base+0xc,0x40000000);CHECK(usb.read32(base+0xc)==0);
+            usb.write32(base+0x18,0x123456ff);CHECK(usb.read32(base+0x18)==0x12345600);
+            usb.write32(base+8,1);CHECK(usb.read32(base+8)==1);
+            usb.advance(2429);CHECK(usb.read32(base+8)==1);
+            usb.advance(1);CHECK(usb.read32(base+8)==0);
+            CHECK(usb.read32(base+4)==0xc0 && usb.read32(base+0x10)==0 && usb.read32(base+0x18)==0);
+            CHECK(faults([&]{usb.write32(base+4,0x80);})); /* No silent DMA/USB service success. */
+            CHECK(faults([&]{usb.write32(base+8,2);}));
+            CHECK(faults([&]{usb.read32(base+0x48);})); /* Root hub device profile is separate. */
+            CHECK(faults([&]{usb.write16(base+0x14,0xffff);}));
+        }
+    }
+    {
         wiillr::Starlet hardware(mem1,mem2);
         hardware.write32(0x0d800014,3);hardware.write32(0x0d80003c,1);
         hardware.advance(383);CHECK(!(hardware.ipc().arm_flags&1));

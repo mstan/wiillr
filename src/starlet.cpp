@@ -41,6 +41,7 @@ Starlet::Starlet(std::span<uint8_t> mem1,std::span<uint8_t> mem2):mem1_(mem1),me
 void Starlet::advance(uint64_t arm_cycles) {
     const uint64_t old_timer=cycles_/128;
     cycles_+=arm_cycles;
+    for(unsigned i=0;i<ohci_.size();++i)if(ohci_[i].interrupt(cycles_))ipc_->arm_flags|=1u<<(5+i);
     const uint64_t ticks=cycles_/128-old_timer;
     const uint32_t distance=alarm_-uint32_t(old_timer);
     if(ticks>=(distance ? uint64_t(distance):0x100000000ull))ipc_->arm_flags|=1;
@@ -232,6 +233,8 @@ uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
     uint32_t ipc_value;
+    if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
+       ohci_[(bus_address-0x0d050000u)>>16].read(bus_address&0xffffu,cycles_,ipc_value))return ipc_value;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
        wii_ipc_read(ipc_,bus_address-0x0d800000u,&ipc_value))return ipc_value;
     /* HW_TIMER: free-running AHB/128 counter (243MHz /128). */
@@ -315,6 +318,8 @@ void Starlet::write16(uint32_t at,uint16_t v) {
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
+    if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
+       ohci_[(bus_address-0x0d050000u)>>16].write(bus_address&0xffffu,v,cycles_))return;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
        wii_ipc_write(ipc_,bus_address-0x0d800000u,v,ppc_origin_+cycles_*3))return;
     if(bus_address==0x0d800014u) {alarm_=v;return;}

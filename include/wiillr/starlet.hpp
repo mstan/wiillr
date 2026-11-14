@@ -5,6 +5,7 @@
 #include "wiillr/hollywood.h"
 #include "wiillr/ipc.h"
 #include "wiillr/seeprom.hpp"
+#include "wiillr/ohci_init.hpp"
 #include <array>
 #include <span>
 #include <cstdint>
@@ -89,6 +90,7 @@ private:
     std::array<uint32_t,8> gpio_{};
     uint32_t gpio_enable_=0;
     Seeprom seeprom_;
+    std::array<OhciInit,2> ohci_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
     uint32_t spare1_=0x1000; /* IOS entry: boot0 ROM is already unmapped. */
