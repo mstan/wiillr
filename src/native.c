@@ -25,7 +25,7 @@
 #if WIILLR_NATIVE_REGIONS
 #include "cpu/overlay_region.h"
 #include "cpu/native_boundary.h"
-#include "pi/pi.h"
+#include "cpu/fast_title.h"
 #ifndef WIILLR_NATIVE_EXTERNAL_REGIONS
 #include "overlay_regions.inc"
 #endif
