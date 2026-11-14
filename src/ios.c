@@ -17,6 +17,7 @@ typedef struct {u32 message;u64 ready_at;} IpcRequest;
 typedef struct IpcRequests {
     WiiIosNative* owner;struct IpcRequests* next;
     unsigned head,count;IpcRequest values[64];
+    WiiNetwork* network;
 } IpcRequests;
 /* Private provider state keeps caller-owned machine storage independent of
  * the queued transport. Each IOS instance retains its own request order. */
@@ -30,7 +31,15 @@ static IpcRequests* find_requests(const WiiIosNative* owner) {
 static void forget_requests(WiiIosNative* owner) {
     lock_requests();IpcRequests** at=&request_queues;
     while(*at && (*at)->owner!=owner)at=&(*at)->next;
-    if(*at){IpcRequests* q=*at;*at=q->next;free(q);}unlock_requests();
+    if(*at){IpcRequests* q=*at;*at=q->next;wii_network_destroy(q->network);free(q);}unlock_requests();
+}
+static bool network_ready(WiiIosNative* ios) {
+    if(ios->network)return true;
+    u8 mac[6]={0};if(ios->fs && !wii_fs_network_mac(ios->fs,mac))return false;
+    lock_requests();IpcRequests* q=find_requests(ios);
+    if(!q){q=calloc(1,sizeof *q);if(q){q->owner=ios;q->next=request_queues;request_queues=q;}}
+    if(q && !q->network)q->network=wii_network_create(mac);
+    ios->network=q?q->network:NULL;unlock_requests();return ios->network!=NULL;
 }
 bool wii_ios_native_request(WiiIosNative* owner,u32 message,u64 cycles) {
     if(!owner || cycles>UINT64_MAX-6000)return false;
@@ -215,6 +224,12 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==3 && ios->di)
         return di_ioctl(ios,cpu,request);
+    if((ios->command==6 || ios->command==7) && fd<24 && ios->descriptors[fd]==12) {
+        if(!network_ready(ios)){ios->result=-22;return 1;}
+        const int status=wii_network_submit(ios->network,cpu,ios->message,&ios->result);
+        if(!status)fprintf(stderr,"native IOS unsupported IP command=%u operation=%u\n",ios->command,read_be32(request+12));
+        return status;
+    }
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==9 && ios->bluetooth)
         return wii_bluetooth_submit(ios->bluetooth,ios->message)?2:0;
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==13 &&
@@ -261,16 +276,33 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
         if(ios->command==3 || ios->command==5 || ios->command==7){ios->result=-4;return 1;}
     }
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 &&
+       (read_be32(request+12)==1 || read_be32(request+12)==2)) {
+        ios->result=-4;const bool locking=read_be32(request+12)==1;
+        if(read_be32(request+16)!=(locking?0u:1u) || read_be32(request+20)!=1)return 1;
+        const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
+        if(!vectors || available<(locking?8u:16u))return 1;
+        u32 handle=0;
+        if(!locking){const u8* input=ios_memory(cpu,read_be32(vectors),&available);
+            if(read_be32(vectors+4)<4 || !input || available<read_be32(vectors+4))return 1;handle=read_be32(input);vectors+=8;}
+        const u32 output=read_be32(vectors),size=read_be32(vectors+4);
+        if(size<(locking?8u:4u) || !ios_memory(cpu,output,&available) || available<size)return 1;
+        s32 result=0;
+        if(locking){if(ios->ncd_lock)result=-4;else{ios->ncd_lock=fd+1;mem_write32_cia(cpu,output+4,ios->ncd_lock,cpu->pc);}}
+        else if(!handle || handle!=ios->ncd_lock)result=-3;else ios->ncd_lock=0;
+        mem_write32_cia(cpu,output,(u32)result,cpu->pc);ios->result=0;return 1;
+    }
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==7) {
-        // This development profile has no attached network interface. Report
-        // NCD's disconnected link, with a successful status query only.
         ios->result=-4;
         if(read_be32(request+16)!=0 || read_be32(request+20)!=1)return 1;
         const u8* vector=ios_memory(cpu,read_be32(request+24),&available);
         if(!vector || available<8 || read_be32(vector+4)<8)return 1;
         const u32 output=read_be32(vector),size=read_be32(vector+4);
         if(!ios_memory(cpu,output,&available) || available<size)return 1;
-        mem_write32_cia(cpu,output,0,cpu->pc);mem_write32_cia(cpu,output+4,2,cpu->pc); /* LINK_NONE */
+        u8 config[WIILLR_NETWORK_CONFIG_SIZE]={0};ios->result=ios->fs?wii_fs_network_config(ios->fs,config):0;if(ios->result)return 1;
+        const bool link=config[4] && network_ready(ios) && wii_network_link(ios->network);
+        const u32 status=config[4]==1?(link?5u:4u):config[4]==2?(link?3u:2u):2u;
+        mem_write32_cia(cpu,output,0,cpu->pc);mem_write32_cia(cpu,output+4,status,cpu->pc);
         ios->result=0;return 1;
     }
     if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==8 && ios->fs) {
@@ -285,22 +317,29 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         for(u32 n=0;n<6;n++)mem_write8_cia(cpu,mac_output+n,mac[n],cpu->pc);
         mem_write32_cia(cpu,output,0,cpu->pc);ios->result=0;return 1;
     }
-    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==5 && ios->fs) {
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 &&
+       (read_be32(request+12)==3 || read_be32(request+12)==5) && ios->fs) {
         ios->result=-4;
         if(read_be32(request+16)!=0 || read_be32(request+20)!=2)return 1;
         const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
-        if(!vectors || available<16 || read_be32(vectors+4)!=WIILLR_NETWORK_CONFIG_SIZE || read_be32(vectors+12)<32)return 1;
+        if(!vectors || available<16 || read_be32(vectors+4)!=WIILLR_NETWORK_CONFIG_SIZE ||
+           read_be32(vectors+12)<(read_be32(request+12)==3?8u:32u))return 1;
         const u32 output=read_be32(vectors),status=read_be32(vectors+8);
         if(!ios_memory(cpu,output,&available) || available<WIILLR_NETWORK_CONFIG_SIZE ||
            !ios_memory(cpu,status,&available) || available<read_be32(vectors+12))return 1;
-        u8 config[WIILLR_NETWORK_CONFIG_SIZE];ios->result=wii_fs_network_config(ios->fs,config);
+        if(read_be32(request+12)==5 || !ios->ncd_config_valid) {
+            ios->result=wii_fs_network_config(ios->fs,ios->ncd_config);if(ios->result)return 1;ios->ncd_config_valid=true;
+        }
+        ios->result=0;
         if(!ios->result) {
-            for(u32 n=0;n<sizeof config;n++)mem_write8_cia(cpu,output+n,config[n],cpu->pc);
+            for(u32 n=0;n<sizeof ios->ncd_config;n++)mem_write8_cia(cpu,output+n,ios->ncd_config[n],cpu->pc);
             mem_write32_cia(cpu,status,0,cpu->pc);
+            if(read_be32(request+12)==3)mem_write32_cia(cpu,status+4,0,cpu->pc);
         }
         return 1;
     }
-    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 && read_be32(request+12)==6 && ios->fs) {
+    if(ios->command==7 && fd<24 && ios->descriptors[fd]==10 &&
+       (read_be32(request+12)==4 || read_be32(request+12)==6) && ios->fs) {
         ios->result=-4;
         if(read_be32(request+16)!=1 || read_be32(request+20)!=1)return 1;
         const u8* vectors=ios_memory(cpu,read_be32(request+24),&available);
@@ -309,8 +348,8 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         const u8* config=ios_memory(cpu,address,&available);
         if(!config || available<WIILLR_NETWORK_CONFIG_SIZE ||
            !ios_memory(cpu,status,&available) || available<read_be32(vectors+12))return 1;
-        ios->result=wii_fs_network_config_write(ios->fs,config);
-        if(!ios->result)mem_write32_cia(cpu,status,0,cpu->pc);
+        ios->result=read_be32(request+12)==6?wii_fs_network_config_write(ios->fs,config):0;
+        if(!ios->result){memcpy(ios->ncd_config,config,sizeof ios->ncd_config);ios->ncd_config_valid=true;mem_write32_cia(cpu,status,0,cpu->pc);}
         return 1;
     }
     if(ios->command==6 && fd<24 && ios->descriptors[fd]==7 &&
@@ -811,6 +850,8 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         ios->result=-4;
         if(fd<24 && ios->descriptors[fd]) {
             if(ios->descriptors[fd]==9)wii_bluetooth_close(ios->bluetooth);
+            if(ios->descriptors[fd]==12)wii_network_close_device(ios->network,fd);
+            if(ios->descriptors[fd]==10 && ios->ncd_lock==fd+1)ios->ncd_lock=0;
             ios->result=ios->descriptors[fd]==5 ? wii_fs_close(ios->fs,ios->fs_handles[fd]):0;
             if(!ios->result)ios->descriptors[fd]=0;
         }
@@ -866,6 +907,10 @@ bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
         u32 message;s32 result;bool ready;
         if(!wii_bluetooth_poll(ios->bluetooth,&message,&result,&ready))return false;
         if(ready){reply(ios,ipc,cpu,message,7,result);return true;}
+    }
+    if(ios->network && !ipc->y) {
+        u32 message,command;s32 result;
+        if(wii_network_poll(ios->network,cpu,&message,&command,&result)){reply(ios,ipc,cpu,message,command,result);return true;}
     }
     if(ios->di_waiting && ios->di_wait_kind==2 && !(ios->di->dicvr&GCN_DI_CVR_CVR) && !ipc->y) {
         reply(ios,ipc,cpu,ios->di_message,6,4);ios->di_waiting=false;return true;

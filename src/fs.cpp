@@ -3,6 +3,7 @@
 #include "FS.h"
 #include "NWC24Identity.h"
 #include <fstream>
+#include "wiillr/network_profile.h"
 #include <cstdlib>
 #include <random>
 #include <sstream>
@@ -212,9 +213,10 @@ extern "C" int32_t wii_fs_network_config(WiiFs* s,uint8_t* data) {
       if(!file)return -117;
       const auto info=file->GetStatus();if(!info || info->size!=bytes.size())return -117;
       const auto got=file->Read(bytes.data(),bytes.size());if(!got || *got!=bytes.size())return -117;
-    }else {
-      // A new offline profile has no selected connection (IF_NONE). Never
-      // manufacture a successful connection test or replace existing settings.
+    }
+    if(wii_network_seed_config(bytes.data(),bytes.size())) {
+      // Provision only a missing/old empty generated default. Existing owner
+      // connections, including disabled profiles and credentials, stay exact.
       const nand::Modes modes{nand::Mode::ReadWrite,nand::Mode::ReadWrite,nand::Mode::ReadWrite};
       const auto created=s->backend.CreateFullPath(0,0,path,0,modes);if(created!=nand::ResultCode::Success)return result(created);
       const auto file=s->backend.CreateAndOpenFile(0,0,path,modes);

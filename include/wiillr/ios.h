@@ -7,6 +7,7 @@
 #include "wiillr/fs.h"
 #include "wiillr/bluetooth.h"
 #include "wiillr/hollywood.h"
+#include "wiillr/network.h"
 typedef struct {
     u8 descriptors[24],phase;
     u32 message,command;
@@ -43,6 +44,10 @@ typedef struct {
     bool sd_event_cancelled;
     WiiBluetooth* bluetooth;
     WiiHollywood* hollywood;
+    WiiNetwork* network; /* owned by the private IOS request queue */
+    u32 ncd_lock; /* nonzero wireless-driver lock handle */
+    u8 ncd_config[WIILLR_NETWORK_CONFIG_SIZE];
+    bool ncd_config_valid;
 } WiiIosNative;
 /* Experimental native service boundary. Only implemented operations may be
  * acknowledged. False stops discovery with the original request intact. */

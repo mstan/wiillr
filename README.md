@@ -36,6 +36,15 @@ authentication and key-storage flow. Existing controller pairings are reused.
 HOME's Wii Menu action returns to the launcher when the original Menu is not
 installed; an installed original Menu retains its normal launch route.
 
+Native IOS provisions an unconfigured network profile as Connection 1, with
+wireless name `wiillr` and automatic IP/DNS. It upgrades the former entirely
+empty generated default and preserves every nonempty existing configuration.
+Traffic uses host IPv4 sockets and the host resolver; it does not associate
+the computer with another wireless access point. The connection-test flag stays
+unset until the original software completes its test. TCP/UDP and asynchronous
+DNS have component coverage; original Menu connection-test success, wireless
+scanning, SSL and WiiConnect24 network services remain unqualified or unsupported.
+
 The legacy prepared-data package is also supported. Place
 `game.ini`, the graphics service and its runtime DLLs, the CMake-staged `assets`
 directory, DSP ROM/coefficient files and a prepared NAND template beside the
