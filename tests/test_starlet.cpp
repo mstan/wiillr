@@ -100,6 +100,68 @@ int main() {
         CHECK(exception.data_aborts()==1 && exception.coproc_read(15,0,6,0,0)==0x20000000);
     }
     {
+        wiillr::Starlet serial(mem1,mem2);
+        std::array<uint8_t,256> image;
+        for(unsigned i=0;i<image.size();++i)image[i]=uint8_t(i^0x5a);
+        const auto original=image;
+        CHECK(faults([&]{serial.load_seeprom(std::span<const uint8_t>(image).first(255));}));
+        serial.load_seeprom(image);
+        serial.write32(0x0d8000fc,0);
+        serial.write32(0x0d8000dc,0xffffff);
+        serial.write32(0x0d8000e4,0x1c00); /* CS, CLK and DI outputs; DO input. */
+        uint32_t pins=0;
+        auto output=[&](uint32_t value) {pins=value;serial.write32(0x0d8000e0,pins);};
+        auto select=[&](bool enabled) {output(enabled?0x400:0);};
+        auto send=[&](uint32_t value,unsigned count) {
+            for(unsigned i=count;i>0;--i) {
+                const auto low=0x400u|((value>>(i-1)&1u)?0x1000u:0);
+                output(low);output(low|0x800u);
+            }
+        };
+        auto receive=[&](unsigned count) {
+            uint32_t value=0;
+            for(unsigned i=0;i<count;++i) {
+                output(0x400);output(0xc00);
+                value=(value<<1)|((serial.read32(0x0d8000e8)>>13)&1);
+            }
+            return value;
+        };
+        auto command=[&](uint32_t value) {select(false);select(true);send(value,11);};
+        auto read=[&](unsigned address) {command(0x600|address);const auto value=receive(16);select(false);return value;};
+        for(unsigned i=0;i<128;++i)CHECK(read(i)==(uint32_t(image[2*i])<<8|image[2*i+1]));
+        command(0x6ff); /* Don't-care high address bit; sequential wrap. */
+        CHECK(!(serial.read32(0x0d8000e8)&0x2000)); /* Actual READ dummy zero. */
+        output(pins); /* Repeating a register value does not clock the chip. */
+        CHECK(receive(32)==0xa4a55a5bu);select(false);
+        auto program=[&](unsigned address,uint16_t value) {command(0x500|address);send(value,16);select(false);};
+        program(3,0x1234);serial.advance(wiillr::Seeprom::program_cycles);
+        CHECK(read(3)==0x5c5d); /* Power-on and EWDS protect programming. */
+        command(0x4c0);select(false); /* EWEN */
+        program(3,0x1234);select(true);
+        CHECK(!(serial.read32(0x0d8000e8)&0x2000));
+        CHECK(serial.seeprom_image()[6]==0x5c); /* No early store before completion. */
+        serial.advance(wiillr::Seeprom::program_cycles-1);
+        CHECK(!(serial.read32(0x0d8000e8)&0x2000));
+        serial.advance(1);CHECK(serial.read32(0x0d8000e8)&0x2000);select(false);
+        CHECK(read(3)==0x1234 && image==original);
+        command(0x700|3);select(false); /* ERASE word */
+        serial.advance(wiillr::Seeprom::program_cycles);CHECK(read(3)==0xffff);
+        command(0x400);select(false); /* EWDS */
+        program(3,0x5678);serial.advance(wiillr::Seeprom::program_cycles);CHECK(read(3)==0xffff);
+        command(0x4c0);select(false);
+        command(0x440);send(0xa55a,16);select(false); /* WRAL */
+        serial.advance(wiillr::Seeprom::program_cycles);CHECK(read(0)==0xa55a && read(127)==0xa55a);
+        command(0x480);select(false); /* ERAL */
+        serial.advance(wiillr::Seeprom::program_cycles);CHECK(read(0)==0xffff && read(127)==0xffff);
+        command(0x500|7);send(0xab,8);select(false); /* Incomplete write is cancelled. */
+        serial.advance(wiillr::Seeprom::program_cycles);CHECK(read(7)==0xffff);
+        CHECK(faults([&]{serial.read32(0x0d8000e8);})); /* No invented general board input. */
+        CHECK(faults([&]{serial.read32(0x0d8000f8);}));
+        serial.load_seeprom(original); /* Reattach resets write-enable and private state. */
+        CHECK(read(3)==0x5c5d);
+        program(3,0x9876);serial.advance(wiillr::Seeprom::program_cycles);CHECK(read(3)==0x5c5d);
+    }
+    {
         wiillr::Starlet hardware(mem1,mem2);
         hardware.write32(0x0d800014,3);hardware.write32(0x0d80003c,1);
         hardware.advance(383);CHECK(!(hardware.ipc().arm_flags&1));

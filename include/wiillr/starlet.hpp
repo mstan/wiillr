@@ -4,6 +4,7 @@
 #include "cpu_state.h"
 #include "wiillr/hollywood.h"
 #include "wiillr/ipc.h"
+#include "wiillr/seeprom.hpp"
 #include <array>
 #include <span>
 #include <cstdint>
@@ -17,6 +18,8 @@ public:
     Starlet(std::span<uint8_t> mem1, std::span<uint8_t> mem2);
     uint32_t load_ios(std::span<const uint8_t> binary);
     void load_otp(std::span<const uint8_t> bytes);
+    void load_seeprom(std::span<const uint8_t> bytes) {seeprom_.load(bytes);}
+    std::span<const uint8_t> seeprom_image() {return seeprom_.image(cycles_);}
     uint32_t execute(const armv4t::Instr& instruction);
     uint32_t step();
     uint64_t cycles() const {return cycles_;}
@@ -50,6 +53,7 @@ private:
     void check_alignment(uint32_t,uint32_t);
     uint32_t translate(uint32_t,bool writing);
     void exception(armv4t::Mode mode,uint32_t vector,uint32_t link);
+    uint32_t gpio_outputs() const {return gpio_[0]&gpio_[1]&gpio_enable_;}
     /* Starlet's high exception vectors are selected on entry (ARM926
      * VINITHI/SCTLR.V). The original IOS startup preserves that V bit. */
     uint32_t sctl_=0x000520f8u,ttbr_=0,dacr_=0,dfsr_=0,far_=0,fcse_=0;
@@ -84,6 +88,7 @@ private:
     std::array<uint32_t,3> dma_control_{}; /* NAND, AES, SHA idle controls */
     std::array<uint32_t,8> gpio_{};
     uint32_t gpio_enable_=0;
+    Seeprom seeprom_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
     uint32_t spare1_=0x1000; /* IOS entry: boot0 ROM is already unmapped. */

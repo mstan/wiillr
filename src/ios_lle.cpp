@@ -51,6 +51,11 @@ extern "C" bool wii_ios_lle_tick(WiiIosLle* context,uint64_t ppc_cycles) {
         return true;
     }catch(const std::exception& error) {context->error=error.what();return false;}
 }
+extern "C" bool wii_ios_lle_load_seeprom(WiiIosLle* context,const uint8_t* bytes,size_t size) {
+    if(!context || !bytes || size!=256 || context->instructions || !context->error.empty())return false;
+    try {context->machine.load_seeprom({bytes,size});return true;}
+    catch(const std::exception&) {return false;}
+}
 extern "C" WiiIosLleStatus wii_ios_lle_status(const WiiIosLle* context) {
     if(!context) {WiiIosLleStatus status{};status.stopped=true;return status;}
     const auto& m=context->machine;

@@ -27,6 +27,11 @@ int main(void) {
     cpu.cycles=300;
     machine.ios_lle=wii_ios_lle_create(&cpu,&machine.ipc,&machine.hollywood,image,sizeof image,NULL,0,cpu.cycles);
     CHECK(machine.ios_lle);
+    unsigned char seeprom[256]={0};
+    CHECK(!wii_ios_lle_load_seeprom(NULL,seeprom,sizeof seeprom));
+    CHECK(!wii_ios_lle_load_seeprom(machine.ios_lle,NULL,sizeof seeprom));
+    CHECK(!wii_ios_lle_load_seeprom(machine.ios_lle,seeprom,sizeof seeprom-1));
+    CHECK(wii_ios_lle_load_seeprom(machine.ios_lle,seeprom,sizeof seeprom));
     mem_write32(&cpu,0x90000400,0x12345678,0);
     mem_write32(&cpu,0x80000404,0xaabbccdd,0);
     cpu.reserve_addr=0xd0000404;cpu.reserve_valid=true;
@@ -51,6 +56,7 @@ int main(void) {
     CHECK(wii_ipc_ppc_interrupt(&machine.ipc));
     const WiiIosLleStatus status=wii_ios_lle_status(machine.ios_lle);
     CHECK(status.instructions>10 && status.arm_cycles>=4000 && status.arm_cycles<4004 && !status.stopped);
+    CHECK(!wii_ios_lle_load_seeprom(machine.ios_lle,seeprom,sizeof seeprom));
     CHECK(!wii_ios_lle_tick(machine.ios_lle,cpu.cycles-1));
     CHECK(strstr(wii_ios_lle_error(machine.ios_lle),"monotonic"));
     wii_ios_lle_destroy(machine.ios_lle);

@@ -260,7 +260,15 @@ uint32_t Starlet::read32(uint32_t at) {
     if(bus_address==0x0d8000dcu)return gpio_enable_;
     if(bus_address>=0x0d8000c0u && bus_address<=0x0d8000fcu && !(bus_address&3)) {
         const uint32_t index=((bus_address-0x0d8000c0u)/4)&7;
-        if(index==2 || index==6)unsupported("unattached GPIO input/straps",cpu.R[15],bus_address);
+        if(index==2) {
+            /* Only the exercised serial device is attached. Other board
+             * input/strap routes stay explicit, rather than inventing them. */
+            if(!seeprom_.loaded() || !(gpio_outputs()&Seeprom::cs))
+                unsupported("unattached GPIO input/straps",cpu.R[15],bus_address);
+            const uint32_t pins=gpio_outputs()|(seeprom_.input(cycles_)?Seeprom::miso:0);
+            return pins&(bus_address<0x0d8000e0u?gpio_[7]:0xffffffu);
+        }
+        if(index==6)unsupported("unattached GPIO input/straps",cpu.R[15],bus_address);
         const uint32_t mask=bus_address<0x0d8000e0u && index!=7 ? gpio_[7]:0xffffffu;
         return gpio_[index]&mask;
     }
@@ -357,7 +365,10 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     /* EHCI analogue PHY setup only. Controller commands/status and USB DMA
      * remain unsupported; these output controls never synthesize a device. */
     if(const int index=usb_phy_index(bus_address);index>=0) {usb_phy_[index]=v;return;}
-    if(bus_address==0x0d8000dcu) {gpio_enable_=v&0xffffffu;return;}
+    if(bus_address==0x0d8000dcu) {
+        const auto before=gpio_outputs();gpio_enable_=v&0xffffffu;
+        seeprom_.outputs(before,gpio_outputs(),cycles_);return;
+    }
     if(bus_address>=0x0d8000c0u && bus_address<=0x0d8000fcu && !(bus_address&3)) {
         const uint32_t index=((bus_address-0x0d8000c0u)/4)&7;
         if(index==2 || index==6)unsupported("read-only GPIO input/straps write",cpu.R[15],bus_address);
@@ -365,8 +376,10 @@ void Starlet::write32(uint32_t at,uint32_t v) {
          * Starlet window can read all pins, but only write its owned pins. */
         const uint32_t mask=index==7 ? 0xffffffu:
             (bus_address<0x0d8000e0u ? gpio_[7]:~gpio_[7])&0xffffffu;
+        const auto before=gpio_outputs();
         if(index==4)gpio_[index]&=~(v&mask); /* W1C interrupt latch */
         else gpio_[index]=(gpio_[index]&~mask)|(v&mask);
+        if(index==0 || index==1)seeprom_.outputs(before,gpio_outputs(),cycles_);
         return;
     }
     if(wii_hollywood_write(hollywood_,bus_address,v))return;

@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 int main(int argc,char** argv) {
-    if(argc!=3 && argc!=4) {std::fprintf(stderr,"usage: wiillr-starlet-discover ORIGINAL-IOS-CONTENT MAX-STEPS [ORIGINAL-128-BYTE-OTP]\n");return 2;}
+    if(argc<3 || argc>5) {std::fprintf(stderr,"usage: wiillr-starlet-discover ORIGINAL-IOS-CONTENT MAX-STEPS [ORIGINAL-128-BYTE-OTP [ORIGINAL-256-BYTE-SEEPROM]]\n");return 2;}
     uint64_t retired=0,cycles=0,swis=0,irqs=0,undefined=0;
     uint32_t pc=0,lr=0;
     try {
@@ -19,11 +19,17 @@ int main(int argc,char** argv) {
         std::vector<uint8_t> binary((std::istreambuf_iterator<char>(input)),{});
         std::vector<uint8_t> mem1(0x1800000),mem2(0x4000000);
         wiillr::Starlet machine(mem1,mem2);
-        if(argc==4) {
+        if(argc>=4) {
             std::ifstream otp_input(argv[3],std::ios::binary);
             if(!otp_input)throw std::runtime_error("Cannot open original OTP input");
             const std::vector<uint8_t> otp((std::istreambuf_iterator<char>(otp_input)),{});
             machine.load_otp(otp);
+        }
+        if(argc==5) {
+            std::ifstream seeprom_input(argv[4],std::ios::binary);
+            if(!seeprom_input)throw std::runtime_error("Cannot open original SEEPROM input");
+            const std::vector<uint8_t> seeprom((std::istreambuf_iterator<char>(seeprom_input)),{});
+            machine.load_seeprom(seeprom);
         }
         machine.load_ios(binary);
         while(retired<limit) {
