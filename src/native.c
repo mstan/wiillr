@@ -202,5 +202,7 @@ void wii_native_summary(void){
 #if WIILLR_NATIVE_CHAIN
     printf("{\"native_chaining\":1,\"chained_dispatches\":%llu,\"depth_limit\":%u}\n",
         (unsigned long long)chained_dispatches,DR_NATIVE_CHAIN_MAX_DEPTH);
+#else
+    printf("{\"native_chaining\":0,\"chained_dispatches\":0}\n");
 #endif
 }
