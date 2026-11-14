@@ -41,6 +41,7 @@ Starlet::Starlet(std::span<uint8_t> mem1,std::span<uint8_t> mem2):mem1_(mem1),me
 void Starlet::advance(uint64_t arm_cycles) {
     const uint64_t old_timer=cycles_/128;
     cycles_+=arm_cycles;
+    if(nand_.advance(cycles_,nand_bus()))ipc_->arm_flags|=2;
     for(unsigned i=0;i<ohci_.size();++i)if(ohci_[i].interrupt(cycles_))ipc_->arm_flags|=1u<<(5+i);
     const uint64_t ticks=cycles_/128-old_timer;
     const uint32_t distance=alarm_-uint32_t(old_timer);
@@ -233,6 +234,8 @@ uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
     uint32_t ipc_value;
+    if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
+       nand_.read(bus_address-0x0d010000u,ipc_value))return ipc_value;
     if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
        ohci_[(bus_address-0x0d050000u)>>16].read(bus_address&0xffffu,cycles_,ipc_value))return ipc_value;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
@@ -318,6 +321,8 @@ void Starlet::write16(uint32_t at,uint16_t v) {
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
+    if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
+       nand_.write(bus_address-0x0d010000u,v,cycles_,nand_bus()))return;
     if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
        ohci_[(bus_address-0x0d050000u)>>16].write(bus_address&0xffffu,v,cycles_))return;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
@@ -444,6 +449,14 @@ void Starlet::coproc_write(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uin
 }
 uint32_t Starlet::coproc_read(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uint32_t op2) {
     if(cpu.cpsr.mode==uint8_t(armv4t::Mode::User))unsupported("unprivileged coprocessor read",cpu.R[15],cp);
+    if(cp==15 && op==0 && crn==7 && (crm==10 || crm==14) && op2==3) {
+        /* ARM926 test-and-clean (optionally invalidate): there are no cached
+         * dirty lines on this synchronous bus. Prior CPU stores are already
+         * visible; this does not complete a pending peripheral DMA command. */
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if(crm==14)++instruction_epoch_;
+        return 1u<<30; /* Z=1: cleaning is complete. */
+    }
     if(cp==15 && op==0 && crn==5 && crm==0 && op2==1)return ifsr_;
     if(cp==15 && op==0 && crm==0 && op2==0) {
         switch(crn) {

@@ -28,6 +28,10 @@ WiiIosLle* wii_ios_lle_create(CPUState*,WiiIpc*,WiiHollywood*,const uint8_t* ios
  * Programming affects only this machine's private image. Invalid input or a
  * late attachment is rejected without altering the running context. */
 bool wii_ios_lle_load_seeprom(WiiIosLle*,const uint8_t*,size_t);
+/* Optional original raw 512MiB NAND+spare image, copied before execution.
+ * An optional BootMii footer is ignored here; OTP/SEEPROM attach separately.
+ * The caller's source bytes are never programmed or erased. */
+bool wii_ios_lle_load_nand(WiiIosLle*,const uint8_t*,size_t);
 bool wii_ios_lle_tick(WiiIosLle*,uint64_t ppc_cycles);
 WiiIosLleStatus wii_ios_lle_status(const WiiIosLle*);
 const char* wii_ios_lle_error(const WiiIosLle*);

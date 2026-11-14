@@ -6,6 +6,7 @@
 #include "wiillr/ipc.h"
 #include "wiillr/seeprom.hpp"
 #include "wiillr/ohci_init.hpp"
+#include "wiillr/nand_controller.hpp"
 #include <array>
 #include <span>
 #include <cstdint>
@@ -21,6 +22,7 @@ public:
     void load_otp(std::span<const uint8_t> bytes);
     void load_seeprom(std::span<const uint8_t> bytes) {seeprom_.load(bytes);}
     std::span<const uint8_t> seeprom_image() {return seeprom_.image(cycles_);}
+    void load_nand(std::vector<uint8_t> bytes) {nand_.load(std::move(bytes));}
     uint32_t execute(const armv4t::Instr& instruction);
     uint32_t step();
     uint64_t cycles() const {return cycles_;}
@@ -55,6 +57,15 @@ private:
     uint32_t translate(uint32_t,bool writing);
     void exception(armv4t::Mode mode,uint32_t vector,uint32_t link);
     uint32_t gpio_outputs() const {return gpio_[0]&gpio_[1]&gpio_enable_;}
+    NandController::Bus nand_bus() {
+        return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
+            auto& m=*static_cast<Starlet*>(user);
+            return address>=0xffff0000u?nullptr:m.physical(address,size);
+        },[](void* user,uint32_t address,uint32_t size) {
+            auto& m=*static_cast<Starlet*>(user);
+            if(m.store_observer_)m.store_observer_(m.store_user_,address,size);
+        }};
+    }
     /* Starlet's high exception vectors are selected on entry (ARM926
      * VINITHI/SCTLR.V). The original IOS startup preserves that V bit. */
     uint32_t sctl_=0x000520f8u,ttbr_=0,dacr_=0,dfsr_=0,far_=0,fcse_=0;
@@ -91,6 +102,7 @@ private:
     uint32_t gpio_enable_=0;
     Seeprom seeprom_;
     std::array<OhciInit,2> ohci_;
+    NandController nand_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
     uint32_t spare1_=0x1000; /* IOS entry: boot0 ROM is already unmapped. */

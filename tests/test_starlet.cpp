@@ -217,6 +217,40 @@ int main() {
         }
     }
     {
+        wiillr::Starlet flash(mem1,mem2);
+        std::vector<uint8_t> media(wiillr::NandController::page_size*128,0xff);
+        std::fill_n(media.data()+5*wiillr::NandController::page_size,0x800,0x5c);
+        flash.load_nand(media);
+        std::vector<std::pair<uint32_t,uint32_t>> stores;
+        flash.observe_stores([](void* user,uint32_t at,uint32_t size) {
+            static_cast<std::vector<std::pair<uint32_t,uint32_t>>*>(user)->emplace_back(at,size);
+        },&stores);
+        flash.write32(0x0d010008,0);flash.write32(0x0d01000c,5);
+        flash.write32(0x0d010000,0x9f000000);flash.advance(243);
+        flash.write32(0x0d010010,0x10001000);flash.write32(0x0d010014,0x10002000);
+        flash.write32(0x0d010000,0xc030b840);flash.advance(6074);CHECK(!(flash.ipc().arm_flags&2));
+        flash.advance(1);CHECK(flash.ipc().arm_flags&2);
+        CHECK(flash.read32(0x10001000)==0x5c5c5c5c && flash.read32(0x10002000)==0xffffffff);
+        CHECK(stores.size()==2 && stores[0]==std::make_pair(0x10001000u,0x800u) && stores[1]==std::make_pair(0x10002000u,0x50u));
+    }
+    {
+        wiillr::Starlet cache(mem1,mem2);
+        cache.write32(0x10000500,0x12345678);
+        for(uint32_t opcode:{0xee17ff7au,0xee17ff7eu}) {
+            cache.cpu.R[15]=0x100;
+            cache.cpu.cpsr.n=cache.cpu.cpsr.c=cache.cpu.cpsr.v=cache.cpu.cpsr.q=true;
+            cache.cpu.cpsr.z=false;
+            cache.execute(armv4t::ArmDecoder::decode(opcode,0x100));
+            CHECK(cache.cpu.R[15]==0x104 && cache.cpu.cpsr.z);
+            CHECK(!cache.cpu.cpsr.n && !cache.cpu.cpsr.c && !cache.cpu.cpsr.v && cache.cpu.cpsr.q);
+            CHECK(cache.cpu.cpsr.mode==uint8_t(armv4t::Mode::Supervisor) && cache.cpu.cpsr.i);
+            CHECK(cache.read32(0x10000500)==0x12345678);
+        }
+        CHECK(faults([&]{cache.coproc_read(15,0,7,9,3);}));
+        cache.cpu.cpsr.mode=uint8_t(armv4t::Mode::User);
+        CHECK(faults([&]{cache.coproc_read(15,0,7,10,3);}));
+    }
+    {
         wiillr::Starlet hardware(mem1,mem2);
         hardware.write32(0x0d800014,3);hardware.write32(0x0d80003c,1);
         hardware.advance(383);CHECK(!(hardware.ipc().arm_flags&1));

@@ -32,6 +32,9 @@ int main(void) {
     CHECK(!wii_ios_lle_load_seeprom(machine.ios_lle,NULL,sizeof seeprom));
     CHECK(!wii_ios_lle_load_seeprom(machine.ios_lle,seeprom,sizeof seeprom-1));
     CHECK(wii_ios_lle_load_seeprom(machine.ios_lle,seeprom,sizeof seeprom));
+    CHECK(!wii_ios_lle_load_nand(NULL,seeprom,sizeof seeprom));
+    CHECK(!wii_ios_lle_load_nand(machine.ios_lle,NULL,0x21000000u));
+    CHECK(!wii_ios_lle_load_nand(machine.ios_lle,seeprom,sizeof seeprom));
     mem_write32(&cpu,0x90000400,0x12345678,0);
     mem_write32(&cpu,0x80000404,0xaabbccdd,0);
     cpu.reserve_addr=0xd0000404;cpu.reserve_valid=true;

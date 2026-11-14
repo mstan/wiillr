@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 int main(int argc,char** argv) {
-    if(argc<3 || argc>5) {std::fprintf(stderr,"usage: wiillr-starlet-discover ORIGINAL-IOS-CONTENT MAX-STEPS [ORIGINAL-128-BYTE-OTP [ORIGINAL-256-BYTE-SEEPROM]]\n");return 2;}
+    if(argc<3 || argc>6) {std::fprintf(stderr,"usage: wiillr-starlet-discover ORIGINAL-IOS-CONTENT MAX-STEPS [ORIGINAL-128-BYTE-OTP [ORIGINAL-256-BYTE-SEEPROM [ORIGINAL-RAW-NAND]]]\n");return 2;}
     uint64_t retired=0,cycles=0,swis=0,irqs=0,undefined=0;
     uint32_t pc=0,lr=0;
     try {
@@ -25,11 +25,20 @@ int main(int argc,char** argv) {
             const std::vector<uint8_t> otp((std::istreambuf_iterator<char>(otp_input)),{});
             machine.load_otp(otp);
         }
-        if(argc==5) {
+        if(argc>=5) {
             std::ifstream seeprom_input(argv[4],std::ios::binary);
             if(!seeprom_input)throw std::runtime_error("Cannot open original SEEPROM input");
             const std::vector<uint8_t> seeprom((std::istreambuf_iterator<char>(seeprom_input)),{});
             machine.load_seeprom(seeprom);
+        }
+        if(argc==6) {
+            std::ifstream nand_input(argv[5],std::ios::binary|std::ios::ate);
+            if(!nand_input)throw std::runtime_error("Cannot open original raw NAND input");
+            const auto size=nand_input.tellg();
+            if(size!=0x21000000 && size!=0x21000400)throw std::runtime_error("Expected 512MiB raw NAND with optional BootMii footer");
+            std::vector<uint8_t> nand(0x21000000);nand_input.seekg(0);
+            if(!nand_input.read(reinterpret_cast<char*>(nand.data()),nand.size()))throw std::runtime_error("Truncated original raw NAND input");
+            machine.load_nand(std::move(nand));
         }
         machine.load_ios(binary);
         while(retired<limit) {

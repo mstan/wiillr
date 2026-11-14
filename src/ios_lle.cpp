@@ -9,6 +9,7 @@ extern "C" {
 #include <string>
 #include <cstdio>
 #include <memory>
+#include <vector>
 
 struct WiiIosLle {
     wiillr::Starlet machine;
@@ -54,6 +55,11 @@ extern "C" bool wii_ios_lle_tick(WiiIosLle* context,uint64_t ppc_cycles) {
 extern "C" bool wii_ios_lle_load_seeprom(WiiIosLle* context,const uint8_t* bytes,size_t size) {
     if(!context || !bytes || size!=256 || context->instructions || !context->error.empty())return false;
     try {context->machine.load_seeprom({bytes,size});return true;}
+    catch(const std::exception&) {return false;}
+}
+extern "C" bool wii_ios_lle_load_nand(WiiIosLle* context,const uint8_t* bytes,size_t size) {
+    if(!context || !bytes || (size!=0x21000000u && size!=0x21000400u) || context->instructions || !context->error.empty())return false;
+    try {context->machine.load_nand(std::vector<uint8_t>(bytes,bytes+0x21000000u));return true;}
     catch(const std::exception&) {return false;}
 }
 extern "C" WiiIosLleStatus wii_ios_lle_status(const WiiIosLle* context) {
