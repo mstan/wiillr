@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/fs.h"
+#include "wiillr/sha1.hpp"
 #include "FS.h"
 #include "NWC24Identity.h"
 #include <fstream>
@@ -580,7 +581,7 @@ extern "C" int32_t wii_es_title_content_open(WiiFs* s,uint64_t title,const uint8
 static bool content_handle(WiiFs* s,uint32_t handle){return handle<32 && (s->content_handles&(1u<<handle));}
 
 static std::array<uint8_t,20> content_sha1(const std::vector<uint8_t>& bytes) {
-  uint32_t h[]{0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
+  std::array<uint32_t,5> h{0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
   const size_t padded=(bytes.size()+9+63)&~size_t(63);
   for(size_t offset=0;offset<padded;offset+=64) {
     std::array<uint8_t,64> block{};
@@ -592,15 +593,7 @@ static std::array<uint8_t,20> content_sha1(const std::vector<uint8_t>& bytes) {
       uint64_t bits=uint64_t(bytes.size())*8;
       for(int n=63;n>=56;--n){block[n]=uint8_t(bits);bits>>=8;}
     }
-    uint32_t w[80];for(unsigned n=0;n<16;n++)w[n]=be32(block.data()+4*n);
-    for(unsigned n=16;n<80;n++)w[n]=std::rotl(w[n-3]^w[n-8]^w[n-14]^w[n-16],1);
-    uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4];
-    for(unsigned n=0;n<80;n++) {
-      const uint32_t f=n<20 ? (b&c)|(~b&d):n<40 ? b^c^d:n<60 ? (b&c)|(b&d)|(c&d):b^c^d;
-      const uint32_t k=n<20?0x5a827999:n<40?0x6ed9eba1:n<60?0x8f1bbcdc:0xca62c1d6;
-      const uint32_t t=std::rotl(a,5)+f+e+k+w[n];e=d;d=c;c=std::rotl(b,30);b=a;a=t;
-    }
-    h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;
+    wiillr::sha1_compress(h,block.data());
   }
   std::array<uint8_t,20> hash{};for(unsigned n=0;n<5;n++)put32(hash.data()+4*n,h[n]);return hash;
 }

@@ -7,6 +7,7 @@
 #include "wiillr/seeprom.hpp"
 #include "wiillr/ohci_init.hpp"
 #include "wiillr/nand_controller.hpp"
+#include "wiillr/sha1_engine.hpp"
 #include <array>
 #include <span>
 #include <cstdint>
@@ -67,6 +68,12 @@ private:
             if(m.store_observer_)m.store_observer_(m.store_user_,address,size);
         }};
     }
+    Sha1Engine::Bus sha_bus() {
+        return {this,[](void* user,uint32_t address,uint32_t size)->const uint8_t* {
+            auto& m=*static_cast<Starlet*>(user);
+            return address>=0xffff0000u?nullptr:m.physical(address,size);
+        }};
+    }
     /* Starlet's high exception vectors are selected on entry (ARM926
      * VINITHI/SCTLR.V). The original IOS startup preserves that V bit. */
     uint32_t sctl_=0x000520f8u,ttbr_=0,dacr_=0,dfsr_=0,far_=0,fcse_=0;
@@ -98,12 +105,13 @@ private:
     uint32_t usb_force_reset_=0;
     std::array<uint32_t,4> usb_phy_{};
     std::array<uint32_t,3> io_strength_{};
-    std::array<uint32_t,3> dma_control_{}; /* NAND, AES, SHA idle controls */
+    uint32_t aes_control_=0;
     std::array<uint32_t,8> gpio_{};
     uint32_t gpio_enable_=0;
     Seeprom seeprom_;
     std::array<OhciInit,2> ohci_;
     NandController nand_;
+    Sha1Engine sha_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
     uint32_t spare0_=0;

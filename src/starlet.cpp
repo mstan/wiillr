@@ -42,6 +42,7 @@ void Starlet::advance(uint64_t arm_cycles) {
     const uint64_t old_timer=cycles_/128;
     cycles_+=arm_cycles;
     if(nand_.advance(cycles_,nand_bus()))ipc_->arm_flags|=2;
+    if(sha_.advance(cycles_,sha_bus()))ipc_->arm_flags|=8;
     for(unsigned i=0;i<ohci_.size();++i)if(ohci_[i].interrupt(cycles_))ipc_->arm_flags|=1u<<(5+i);
     const uint64_t ticks=cycles_/128-old_timer;
     const uint32_t distance=alarm_-uint32_t(old_timer);
@@ -247,6 +248,8 @@ uint32_t Starlet::read32(uint32_t at) {
     uint32_t ipc_value;
     if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
        nand_.read(bus_address-0x0d010000u,ipc_value))return ipc_value;
+    if(bus_address>=0x0d030000u && bus_address<=0x0d030018u &&
+       sha_.read(bus_address-0x0d030000u,ipc_value))return ipc_value;
     if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
        ohci_[(bus_address-0x0d050000u)>>16].read(bus_address&0xffffu,cycles_,ipc_value))return ipc_value;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
@@ -264,8 +267,7 @@ uint32_t Starlet::read32(uint32_t at) {
         if(!otp_loaded_)throw std::runtime_error("Starlet original 128-byte OTP input is required for OTP data read");
         return be32(otp_.data()+(otp_command_&31u)*4);
     }
-    if(bus_address>=0x0d010000u && bus_address<=0x0d030000u && !(bus_address&0xffffu))
-        return dma_control_[(bus_address-0x0d010000u)/0x10000];
+    if(bus_address==0x0d020000u)return aes_control_;
     if(bus_address>=0x0d8001e0u && bus_address<=0x0d8001e8u && !(bus_address&3))
         return io_strength_[(bus_address-0x0d8001e0u)/4];
     if(bus_address==0x0d8001c4u)return vi_pll_;
@@ -335,6 +337,8 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     const auto bus_address=translate(at,true);
     if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
        nand_.write(bus_address-0x0d010000u,v,cycles_,nand_bus()))return;
+    if(bus_address>=0x0d030000u && bus_address<=0x0d030018u &&
+       sha_.write(bus_address-0x0d030000u,v,cycles_,sha_bus()))return;
     if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
        ohci_[(bus_address-0x0d050000u)>>16].write(bus_address&0xffffu,v,cycles_))return;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
@@ -354,12 +358,10 @@ void Starlet::write32(uint32_t at,uint32_t v) {
         if(!(v&0x08000000u))unsupported("IOP reset",cpu.R[15],v);
         resets_=v&0x7fffffffu;return;
     }
-    if(bus_address>=0x0d010000u && bus_address<=0x0d030000u && !(bus_address&0xffffu)) {
-        /* Original IOS clears the NAND/AES/SHA command words before setup.
-         * Idle/clear is meaningful without media or keys; starting a command
-         * still fails explicitly until that actual device is implemented. */
-        if(v)unsupported("unimplemented NAND/AES/SHA command/control",cpu.R[15],v);
-        dma_control_[(bus_address-0x0d010000u)/0x10000]=0;return;
+    if(bus_address==0x0d020000u) {
+        /* AES may be cleared; actual cipher commands remain unsupported. */
+        if(v)unsupported("unimplemented AES command/control",cpu.R[15],v);
+        aes_control_=0;return;
     }
     /* I/O pad drive-strength configuration; no data or completion bits. */
     if(bus_address>=0x0d8001e0u && bus_address<=0x0d8001e8u && !(bus_address&3)) {

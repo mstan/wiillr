@@ -278,6 +278,22 @@ int main() {
         drain.advance(1);CHECK(!(drain.read32(0x0d010000)&0x80000000) && (drain.ipc().arm_flags&2));
     }
     {
+        wiillr::Starlet hash(mem1,mem2);
+        const uint32_t seed[]={0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
+        const uint32_t expected[]={0xa9993e36,0x4706816a,0xba3e2571,0x7850c26c,0x9cd0d89d};
+        for(unsigned i=0;i<5;++i)hash.write32(0x0d030008+i*4,seed[i]);
+        std::fill_n(mem2.data()+0x1000,64,0);hash.write32(0x10001000,0x61626380);hash.write32(0x1000103c,24);
+        hash.write32(0x0d030004,0x10001000);hash.write32(0x0d80003c,8);hash.write32(0x0d030000,0xc0000000);
+        hash.advance(wiillr::Sha1Engine::block_cycles-1);
+        CHECK(hash.read32(0x0d030008)==seed[0] && !wii_ipc_arm_interrupt(&hash.ipc()));
+        hash.advance(1);CHECK(wii_ipc_arm_interrupt(&hash.ipc()));
+        for(unsigned i=0;i<5;++i)CHECK(hash.read32(0x0d030008+i*4)==expected[i]);
+        CHECK(hash.read32(0x0d030004)==0x10001040 && !(hash.read32(0x0d030000)&0x80000000));
+        hash.write32(0x0d800038,8);hash.advance(100);CHECK(!wii_ipc_arm_interrupt(&hash.ipc()));
+        CHECK(faults([&]{hash.write16(0x0d030008,0);}));
+        CHECK(faults([&]{hash.write32(0x0d03001c,0);}));
+    }
+    {
         wiillr::Starlet hardware(mem1,mem2);
         hardware.write32(0x0d800014,3);hardware.write32(0x0d80003c,1);
         hardware.advance(383);CHECK(!(hardware.ipc().arm_flags&1));
