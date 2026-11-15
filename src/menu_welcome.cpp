@@ -218,7 +218,7 @@ std::string digits(unsigned v,unsigned width){auto s=std::to_string(v);require(s
 std::string hex(uint32_t v){const char* d="0123456789ABCDEF";std::string s(8,'0');for(int i=7;i>=0;i--){s[size_t(i)]=d[v&15];v>>=4;}return s;}
 Bytes memo(uint32_t seconds,uint64_t id,uint32_t counter){
     constexpr char title[]="Welcome aboard!";
-    constexpr char body[]="Thanks for giving this Wii Menu a new home!\n\nMatthew \"Gamemaster\" Stanley put this little welcome mat here. May your pointer stay steady, your channels stay cheerful, and your adventures be excellent.\n\nHave fun!";
+    constexpr char body[]="wiillr brought to you by\nMatthew \"Gamemaster\" Stanley.";
     const size_t title_size=((sizeof title-1+4)*2)&~size_t(7),body_size=((sizeof body-1+4)*2)&~size_t(7);
     const size_t rbr=0x400,head=0x148,title_at=head,body_at=head+title_size;
     Bytes out(0x400+((head+title_size+body_size+31)&~size_t(31)));

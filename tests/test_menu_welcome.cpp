@@ -87,8 +87,8 @@ int main(int argc,char** argv){
     check(ticks==seconds*60750000,"Wii time ticks, independent of host date");
     check(rd32(record.data()+0x540)==crc(record.data()+0x400,0x140),"independent record CRC");
     check(text(record,0x400+rd32(record.data()+0x51c))=="Welcome aboard!","persisted title");
-    const auto body=text(record,0x400+rd32(record.data()+0x520));check(body.find("Matthew \"Gamemaster\" Stanley")!=body.npos,"requested credit");
-    check(body.find("Thanks")!=body.npos,"welcome thanks");
+    const auto body=text(record,0x400+rd32(record.data()+0x520));
+    check(body=="wiillr brought to you by\nMatthew \"Gamemaster\" Stanley.","exact two-line credit without forced word splits");
     auto flag=find(b,0,"WIILLR  WEL");check(flag && b[flag+11]==6,"hidden/system mod-owned state");
     auto saved=b;check(wii_menu_welcome_image(b.data(),b.size(),seconds+86400,id,true)==WII_MENU_WELCOME_PRESENT && b==saved,"restart/day change idempotence");
     b[mail]=0xe5;saved=b;check(wii_menu_welcome_image(b.data(),b.size(),seconds+86400,id,true)==WII_MENU_WELCOME_PRESENT && b==saved,"deleting welcome never resends it");
