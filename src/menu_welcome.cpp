@@ -65,7 +65,9 @@ public:
         require(data_begin<=n && fat_size/2>=2);
         clusters=std::min((n-data_begin)/cluster_size,fat_size/2-2);
         require(clusters>0 && !memcmp(p+32,p+32+fat_size,fat_size));
-        require(fat(0)>=0xfff8 && fat(1)>=0xfff8);
+        /* FAT[0] embeds the media byte, not a data-chain EOC. Nintendo VFF
+         * uses F0; fixed-media FAT16 may use F8..FF. FAT[1] remains reserved. */
+        require((fat(0)==0xfff0 || fat(0)>=0xfff8) && fat(1)>=0xfff8);
         owned.assign(clusters+2,false);
         validate_dir(0,0);
         /* Lost allocated chains are retained, never recycled. Their pointers
