@@ -16,7 +16,6 @@ static uint64_t title=0x100000002ull,ios=0x100000004ull;
 static unsigned views=1,ui_calls,pref_calls,settings_calls,init_calls;
 static unsigned mod_save_calls;
 static int mod_saved_resolution,mod_before_resolution;
-static int mod_saved_view,mod_before_view;
 static bool rejected,skip;
 static int ui_action,launch_status;
 static char directory[4096],pref_name[64],alternate[4096];
@@ -54,9 +53,7 @@ void launcher_settings_load(RecompLauncherCSettings* value,const RecompLauncherC
 void launcher_settings_save(const RecompLauncherCSettings* value,const RecompLauncherCSettings* before,
     const RecompLauncherCGameInfo* game){
     CHECK(game->has_supersampling && game->num_internal_resolutions==6);
-    CHECK(game->aspect_labels && game->num_aspect_labels==4);
     ++mod_save_calls;mod_saved_resolution=value->internal_resolution;mod_before_resolution=before->internal_resolution;
-    mod_saved_view=value->aspect_index;mod_before_view=before->aspect_index;
 }
 int recomp_launcher_run_window(const char* caption,RecompLauncherCSettings* value,const RecompLauncherCGameInfo* game,
     const char* assets,const char* initial,char* selected,size_t capacity){
