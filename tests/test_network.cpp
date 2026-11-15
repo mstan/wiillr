@@ -64,8 +64,16 @@ static std::vector<u8> words(std::initializer_list<u32> list){std::vector<u8> by
 static void address(u8* out,const sockaddr_in& in){out[0]=8;out[1]=2;std::memcpy(out+2,&in.sin_port,2);std::memcpy(out+4,&in.sin_addr,4);}
 int main(){
     std::array<u8,7004> profile{};CHECK(wii_network_seed_config(profile.data(),profile.size()));
-    CHECK(profile[4]==1 && profile[8]==0x86 && !(profile[8]&0x21) && profile[8+2021]==6 && !std::memcmp(profile.data()+8+1988,"wiillr",6));
+    CHECK(profile[4]==2 && profile[8]==0x87 && !(profile[8]&0x20));
+    CHECK(profile[8+26]==0x05 && profile[8+27]==0xdc && !profile[8+2021]);
+    for(unsigned n=0;n<32;++n)CHECK(!profile[8+1988+n]);
     const auto generated=profile;CHECK(!wii_network_seed_config(profile.data(),profile.size()) && profile==generated);
+    CHECK(wii_network_host_profile_selected(profile.data(),profile.size()));
+    /* Existing saved wireless profiles retain their original selection. */
+    profile.fill(0);profile[4]=1;profile[8]=0x86;
+    std::memcpy(profile.data()+8+1988,"wiillr",6);profile[8+2021]=6;
+    const auto wireless=profile;
+    CHECK(!wii_network_seed_config(profile.data(),profile.size()) && profile==wireless);
     CHECK(wii_network_host_profile_selected(profile.data(),profile.size()));
     profile[8+1988]='x';CHECK(!wii_network_host_profile_selected(profile.data(),profile.size()));
     profile[4]=2;profile[8]=0x87;CHECK(wii_network_host_profile_selected(profile.data(),profile.size()));

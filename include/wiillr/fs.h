@@ -3,6 +3,7 @@
 #define WIILLR_FS_H
 #include <stdint.h>
 #include <stdbool.h>
+#include "wiillr/menu_welcome.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,6 +22,13 @@ void wii_es_release_launch(WiiTitleLaunch*);
 WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid);
 void wii_fs_unmount(WiiFs*);
 bool wii_fs_boot_title(WiiFs*,uint64_t* title);
+/* Hidden local welcome mod: persistent backend switch (missing means enabled).
+ * Run delivery only on an exclusively owned, stopped copied Menu profile,
+ * before the original CDB mount. RTC is local Wii seconds since2000; persisted
+ * IPL.CB is applied here exactly once. Existing mail is never reformatted. */
+bool wii_fs_menu_welcome_enabled(WiiFs*,bool* enabled);
+bool wii_fs_menu_welcome_set_enabled(WiiFs*,bool enabled);
+WiiMenuWelcomeResult wii_fs_menu_welcome(WiiFs*,uint32_t rtc_seconds);
 uint32_t wii_fs_uid(WiiFs*);
 int32_t wii_es_set_uid(WiiFs*,uint32_t caller_uid,uint64_t title);
 /* Actual /title directories, including titles whose content is absent.

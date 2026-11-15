@@ -154,25 +154,33 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
 }
 #ifdef RECOMP_LAUNCHER
 static char package_error[512];
+static bool package_menu_request;
 static void close_package(void){wii_package_close(package);package=NULL;}
 static bool package_validate(const char* image,const char* nand,unsigned uid,unsigned gid) {
-    char selected[32768];return wii_launcher_start(image,nand,uid,gid,false,true,selected,sizeof selected)==0;
+    char selected[32768];return (package_menu_request?
+        wii_launcher_menu_start(image,nand,uid,gid,false,true,selected,sizeof selected,0):
+        wii_launcher_start(image,nand,uid,gid,false,true,selected,sizeof selected))==0;
 }
 static bool restart_launcher;
 static bool package_request(int argc,char** argv) {
     return argc==1 || (argc==2 && (!strcmp(argv[1],"--launcher") ||
-        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check")));
+        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check") ||
+        !strcmp(argv[1],"--menu-launcher") || !strcmp(argv[1],"--menu-launcher-settings") ||
+        !strcmp(argv[1],"--menu-launcher-check")));
 }
 #endif
 static int run(int argc, char** argv) {
-    bool launcher=false,launcher_force=false,launcher_check=false;
+    bool launcher=false,launcher_force=false,launcher_check=false,menu_launcher=false;
 #ifdef RECOMP_LAUNCHER
     if(package_request(argc,argv)) {
         const char* action=argc==1?"--launcher":argv[1];
-        const bool check=!strcmp(action,"--launcher-check");
+        const bool check=!strcmp(action,"--launcher-check") || !strcmp(action,"--menu-launcher-check");
+        const char* base=SDL_GetBasePath();const char* name=wii_package_name(base);
+        package_menu_request=!strcmp(name,"Wii Menu");
+        if(!strncmp(action,"--menu-launcher",15) && !package_menu_request)return 2;
         const char* user=getenv("WIILLR_USER_DIR");char* allocated=NULL;
-        if(!user || !*user){allocated=SDL_GetPrefPath("RetroPortingToolKit","Mega Man 9");user=allocated;}
-        package=wii_package_open(SDL_GetBasePath(),user,package_validate,package_error,sizeof package_error);
+        if(!user || !*user){allocated=SDL_GetPrefPath("RetroPortingToolKit",name);user=allocated;}
+        package=wii_package_open(base,user,package_validate,package_error,sizeof package_error);
         SDL_free(allocated);
         if(!package){fprintf(stderr,"launcher: %s\n",package_error);return 2;}
         atexit(close_package);
@@ -185,9 +193,12 @@ static int run(int argc, char** argv) {
         wii_package_arguments(package,argv[0],action,&argc,&argv);
     }
     if(argc>1 && (!strcmp(argv[1],"--launcher") ||
-        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check"))) {
-        launcher=true;launcher_force=!strcmp(argv[1],"--launcher-settings");
-        launcher_check=!strcmp(argv[1],"--launcher-check");
+        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check") ||
+        !strcmp(argv[1],"--menu-launcher") || !strcmp(argv[1],"--menu-launcher-settings") ||
+        !strcmp(argv[1],"--menu-launcher-check"))) {
+        menu_launcher=!strncmp(argv[1],"--menu-launcher",15);
+        launcher=true;launcher_force=!strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--menu-launcher-settings");
+        launcher_check=!strcmp(argv[1],"--launcher-check") || !strcmp(argv[1],"--menu-launcher-check");
         for(int i=1;i<argc;++i)argv[i]=argv[i+1];
         --argc;
     }
@@ -241,8 +252,11 @@ static int run(int argc, char** argv) {
         if(errno || !*argv[argc-2] || *end || uid>0xfffffffful)return 2;
         errno=0;unsigned long gid=strtoul(argv[argc-1],&end,10);
         if(errno || !*argv[argc-1] || *end || gid>0xfffful)return 2;
-        int action=wii_launcher_start(argv[1],argv[argc-3],(unsigned)uid,(unsigned)gid,
-            launcher_force,launcher_check,launcher_image,sizeof launcher_image);
+        int action=menu_launcher?
+            wii_launcher_menu_start(argv[1],argv[argc-3],(unsigned)uid,(unsigned)gid,
+                launcher_force,launcher_check,launcher_image,sizeof launcher_image,ios_profile):
+            wii_launcher_start(argv[1],argv[argc-3],(unsigned)uid,(unsigned)gid,
+                launcher_force,launcher_check,launcher_image,sizeof launcher_image);
         if(action || launcher_check)return action==1?0:action;
         argv[1]=launcher_image;
     }
@@ -259,7 +273,8 @@ static int run(int argc, char** argv) {
     size_t got = fread(image, 1, (size_t)length, input);
     fclose(input);
 #ifdef RECOMP_LAUNCHER
-    if(launcher && (got!=(size_t)length || !wii_launcher_verify(image,got))) {
+    if(launcher && (got!=(size_t)length ||
+       !(menu_launcher?wii_launcher_menu_verify(image,got):wii_launcher_verify(image,got)))) {
         fprintf(stderr,"launcher: boot content changed after selection\n");free(image);return 2;
     }
 #endif
@@ -283,6 +298,9 @@ static int run(int argc, char** argv) {
     WiiMachine machine;
     wii_machine_init(&machine, &cpu);
 #ifdef RECOMP_LAUNCHER
+    /* Actual Menu packages seed host-local time once at process startup.
+     * Direct CLI QA keeps its fixed RTC. Title handoffs preserve this state. */
+    if(package && wii_package_menu(package))gcn_exi_sync_rtc_from_host(&machine.exi,cpu.cycles);
     wii_host_session_bind(wii_package_standalone(package)?&machine.ios:NULL);
 #endif
     if(argc==8 || argc==10) {
@@ -299,6 +317,11 @@ static int run(int argc, char** argv) {
 #endif
     }
 #ifdef RECOMP_LAUNCHER
+    if(package && wii_package_menu(package) && machine.ios.fs) {
+        const uint32_t rtc=gcn_exi_rtc_latch_clock(&machine.exi,cpu.cycles,GCN_RTC_WII_CORE_CLOCK_HZ);
+        const WiiMenuWelcomeResult welcome=wii_fs_menu_welcome(machine.ios.fs,rtc);
+        printf("{\"menu_welcome_result\":%d,\"guest_started\":false}\n",(int)welcome);
+    }
     u64 session_title=0;
     if(!launcher && visible_window && !strcmp(visible_window,"1") && machine.ios.fs &&
        wii_fs_boot_title(machine.ios.fs,&session_title) && session_title==0x0000000100000002ull &&
