@@ -22,8 +22,7 @@ int main() {
         CHECK(faults([&]{board.read32(0x0d006000);}));CHECK(!board.attach_di({}));
         CHECK(board.attach_di(bus) && !board.attach_di(bus));
         board.write32(0x0d006000,0x10);CHECK(writes==1 && board.read32(0x0d006000)==0x10);
-        CHECK(faults([&]{board.read32(0x0d806000);}));CHECK(faults([&]{board.write32(0x0d806000,0);}));
-        for(uint32_t at:{0x0d006000u,0x0d006004u}) {
+        for(uint32_t at:{0x0d006000u,0x0d806004u}) {
             CHECK(faults([&]{board.read8(at);}));CHECK(faults([&]{board.read16(at);}));
             CHECK(faults([&]{board.write8(at,0);}));CHECK(faults([&]{board.write16(at,0);}));
         }
@@ -32,6 +31,16 @@ int main() {
         CHECK(faults([&]{board.write32(0x0d006004,8);}));CHECK(faults([&]{board.write32(0x0d00601c,1);}));
         CHECK(faults([&]{board.write32(0x0d00601c,8);}));CHECK(faults([&]{board.write32(0x0d006024,0);}));
         CHECK(faults([&]{board.write32(0x0d006028,0);}));CHECK(writes==1 && value==0x10);
+        CHECK(faults([&]{board.read32(0x0d806028);}));CHECK(faults([&]{board.write32(0x0d80601c,1);}));
+        CHECK(faults([&]{board.read32(0x0d816000);}));CHECK(faults([&]{board.write32(0x0d816000,0);}));
+        board.write32(0x0d806000,0x18);CHECK(writes==2 && board.read32(0x0d006000)==0x18);
+        /* Synthetic MMU section maps guest0d006000 to the physical DI port.
+         * Proves dispatch uses the translated bus address, not the guest VA. */
+        board.write32(0x4340,0x0d800c02);
+        board.coproc_write(15,0,2,0,0,0x4000);board.coproc_write(15,0,3,0,0,3);
+        board.coproc_write(15,0,1,0,0,0x520f9);
+        CHECK(board.read32(0x0d006000)==0x18);board.write32(0x0d006000,0x20);
+        CHECK(writes==3 && value==0x20 && faults([&]{board.write32(0x0d00601c,1);}));
         wiillr::Starlet late(mem1,mem2);late.advance(1);CHECK(!late.attach_di(bus));
     }
     {

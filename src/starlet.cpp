@@ -24,6 +24,12 @@ int usb_phy_index(uint32_t address) {
     default:return -1;
     }
 }
+uint32_t di_register_address(uint32_t address) {
+    /* Only the documented DI physical port; no general AHB alias rule.
+     * https://wiibrew.org/wiki/Hardware/Drive_Interface */
+    if(address>=0x0d806000u && address<0x0d806040u)return address-0x00800000u;
+    return address;
+}
 [[noreturn]] void unsupported(const char* operation,uint32_t pc,uint32_t address) {
     char message[128];
     std::snprintf(message,sizeof message,"Starlet unsupported %s pc=%08x address=%08x",operation,pc,address);
@@ -282,7 +288,7 @@ uint16_t Starlet::read16(uint32_t at) {
 uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
-    const auto di_address=bus_address;
+    const auto di_address=di_register_address(bus_address);
     if(di_address>=0x0d006000u && di_address<0x0d006040u) {
         if(!di_.user || (di_address&3) || di_address>0x0d006024u)
             unsupported("unbound/unsupported DI read32",cpu.R[15],bus_address);
@@ -386,7 +392,7 @@ void Starlet::write16(uint32_t at,uint16_t v) {
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
-    const auto di_address=bus_address;
+    const auto di_address=di_register_address(bus_address);
     if(di_address>=0x0d006000u && di_address<0x0d006040u) {
         const uint32_t offset=di_address-0x0d006000u;
         /* Status/cover use their shared W1C/mask semantics. Command and DMA
