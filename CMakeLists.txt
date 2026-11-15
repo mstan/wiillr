@@ -103,7 +103,7 @@ endif()
 if(NOT WIILLR_IOS MATCHES "^(none|native-development|original)$")
   message(FATAL_ERROR "Unknown IOS provider")
 endif()
-add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/dsp.c src/ios.c src/ave.c src/gx.c src/gx_output.c
+add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/dsp.c src/ios.c src/keyboard.c src/ave.c src/gx.c src/gx_output.c src/gx_session.c
   external/gc-wii-core/src/resident_memory.c
   src/control.cpp src/pacing.cpp
   external/gc-wii-core/src/host_audio.c
@@ -169,6 +169,13 @@ add_test(NAME wii_remote_host_layout COMMAND test_wii_remote_input)
 add_executable(test_wii_gx_input tests/test_gx_input.c)
 target_link_libraries(test_wii_gx_input PRIVATE wii_boot)
 add_test(NAME wii_gx_input_handoff COMMAND test_wii_gx_input)
+add_library(wii_gx_session_fixture SHARED tests/gx_session_fixture.c)
+target_include_directories(wii_gx_session_fixture PRIVATE external/gc-wii-core/include)
+add_executable(test_wii_gx_session tests/test_gx_session.c src/gx_session.c)
+target_include_directories(test_wii_gx_session PRIVATE include external/gc-wii-core/include external/gc-wii-core/dsp_lle/include)
+target_link_libraries(test_wii_gx_session PRIVATE ${CMAKE_DL_LIBS})
+add_dependencies(test_wii_gx_session wii_gx_session_fixture)
+add_test(NAME wii_gx_session_handoff COMMAND test_wii_gx_session "$<TARGET_FILE:wii_gx_session_fixture>")
 add_executable(test_wii_bluetooth_pairing tests/test_bluetooth_pairing.cpp)
 target_include_directories(test_wii_bluetooth_pairing PRIVATE third_party/dolphin-bluetooth)
 target_link_libraries(test_wii_bluetooth_pairing PRIVATE wii_bluetooth)
@@ -558,7 +565,7 @@ if(WIILLR_PPC_GENERATED_DIR)
     if(WIN32)
       set_property(TARGET wiillr-native PROPERTY WIN32_EXECUTABLE TRUE)
     endif()
-    add_executable(test_wii_launcher_input tests/test_launcher_input.c src/launcher_input.c
+    add_executable(test_wii_launcher_input tests/test_launcher_input.c src/launcher_input.c src/keyboard.c
       external/recomp-ui/src/common/launcher_input.c)
     target_include_directories(test_wii_launcher_input PRIVATE include
       external/gc-wii-core/include external/recomp-ui/src external/recomp-ui/src/common)
@@ -611,6 +618,9 @@ target_link_libraries(test_wii_audio_dma PRIVATE wii_boot)
 add_test(NAME wii_audio_dma COMMAND test_wii_audio_dma)
 add_executable(test_wii_ios tests/test_ios.c)
 target_link_libraries(test_wii_ios PRIVATE wii_boot)
+add_executable(test_wii_keyboard tests/test_keyboard.c)
+target_link_libraries(test_wii_keyboard PRIVATE wii_boot)
+add_test(NAME wii_usb_keyboard_contract COMMAND test_wii_keyboard)
 add_executable(test_wii_ios_lle tests/test_ios_lle.c)
 target_link_libraries(test_wii_ios_lle PRIVATE wii_boot wii_ios_lle)
 add_test(NAME wii_original_ios_bridge_romfree COMMAND test_wii_ios_lle)

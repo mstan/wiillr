@@ -19,6 +19,9 @@ typedef struct IpcRequests {
     WiiIosNative* owner;struct IpcRequests* next;
     unsigned head,count;IpcRequest values[64];
     WiiNetwork* network;
+    WiiKeyboardReport keyboard_report;
+    WiiKeyboard* keyboards[24];
+    bool keyboard_cancel[24];
 } IpcRequests;
 /* Private provider state keeps caller-owned machine storage independent of
  * the queued transport. Each IOS instance retains its own request order. */
@@ -32,7 +35,28 @@ static IpcRequests* find_requests(const WiiIosNative* owner) {
 static void forget_requests(WiiIosNative* owner) {
     lock_requests();IpcRequests** at=&request_queues;
     while(*at && (*at)->owner!=owner)at=&(*at)->next;
-    if(*at){IpcRequests* q=*at;*at=q->next;wii_network_destroy(q->network);free(q);}unlock_requests();
+    if(*at){IpcRequests* q=*at;*at=q->next;wii_network_destroy(q->network);for(unsigned n=0;n<24;n++)free(q->keyboards[n]);free(q);}unlock_requests();
+}
+static IpcRequests* keyboard_requests(WiiIosNative* ios) {
+    IpcRequests* q=find_requests(ios);
+    if(!q){q=calloc(1,sizeof *q);if(q){q->owner=ios;q->next=request_queues;request_queues=q;}}
+    return q;
+}
+static int keyboard_flush(IpcRequests* q) {
+    int result=1;
+    for(unsigned n=0;n<24;n++)if(q->keyboards[n] && !q->keyboard_cancel[n]) {
+        WiiKeyboard* keyboard=q->keyboards[n];
+        if(keyboard->head>=32 || keyboard->count>32)return -1;
+        if(!wii_keyboard_update(keyboard,&q->keyboard_report))result=0;
+    }
+    return result;
+}
+int wii_ios_native_keyboard_input(WiiIosNative* ios,const WiiKeyboardReport* report) {
+    if(!ios || !report)return -1;
+    lock_requests();IpcRequests* q=keyboard_requests(ios);
+    int result=-1;
+    if(q){q->keyboard_report=*report;result=keyboard_flush(q);}
+    unlock_requests();return result;
 }
 static bool network_ready(WiiIosNative* ios) {
     if(ios->network)return true;
@@ -208,6 +232,13 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         if(device!=14 && read_be32(request+16)>3) {ios->result=-4;return true;}
         ios->result=-5;
         for(u32 n=0;n<24;n++)if(!ios->descriptors[n]) {
+            if(device==11) {
+                lock_requests();IpcRequests* q=keyboard_requests(ios);
+                if(!q || q->keyboard_cancel[n]){unlock_requests();ios->result=-22;return true;}
+                free(q->keyboards[n]);q->keyboards[n]=calloc(1,sizeof *q->keyboards[n]);
+                if(!q->keyboards[n]){unlock_requests();ios->result=-22;return true;}
+                wii_keyboard_update(q->keyboards[n],&q->keyboard_report);unlock_requests();
+            }
             if(device==14) {
                 if(!network_ready(ios)){ios->result=-22;return true;}
                 const s32 opened=wii_network_wireless_open(ios->network,n,read_be32(request+16));
@@ -273,10 +304,18 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         return 0;
     }
     if(fd<24 && ios->descriptors[fd]==11) {
+        if(ios->command==4) {
+            /* The known five-byte LED-off command affects only this virtual
+             * keyboard; never change the host's physical keyboard LEDs. */
+            const u8* command=ios_memory(cpu,read_be32(request+12),&available);
+            ios->result=-4;
+            if(read_be32(request+16)!=5 || !command || available<5)return 1;
+            if(memcmp(command,(const u8[5]){0,0,0,0,0x80},5))return 0;
+            ios->result=0;return 1;
+        }
         if(ios->command==6) {
-            // The keyboard bus exists without an attached USB keyboard.
-            // A valid event read waits for a real connection/event; no empty
-            // event or successful completion may be fabricated.
+            /* Reads block until this descriptor's next real connection or
+             * full HID report; no empty successful event is fabricated. */
             ios->result=-4;
             const u32 output=read_be32(request+24),size=read_be32(request+28);
             if(size<16 || !ios_memory(cpu,output,&available) || available<size)return 1;
@@ -857,7 +896,12 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
     }
     if(ios->command==2) {
-        if(fd<24 && ios->keyboard_messages[fd])return false; /* cancellation not implemented */
+        if(fd<24 && ios->descriptors[fd]==11) {
+            lock_requests();IpcRequests* q=find_requests(ios);
+            if(q){if(ios->keyboard_messages[fd])q->keyboard_cancel[fd]=true;
+                else{free(q->keyboards[fd]);q->keyboards[fd]=NULL;}}
+            unlock_requests();
+        }
         if(ios->event_waiting && fd==ios->event_fd)return false;
         if(ios->di_waiting && fd==ios->di_fd)return false;
         if(ios->sd_event_message && fd==ios->sd_event_fd)return false;
@@ -929,6 +973,30 @@ bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
     if(ios->network && !ipc->y) {
         u32 message,command;s32 result;
         if(wii_network_poll(ios->network,cpu,&message,&command,&result)){reply(ios,ipc,cpu,message,command,result);return true;}
+    }
+    if(!ipc->y)for(u32 fd=0;fd<24;fd++)if(ios->keyboard_messages[fd]) {
+        u8 event[16];bool ready=false,cancelled=false;
+        lock_requests();IpcRequests* q=find_requests(ios);
+        const int state=q?keyboard_flush(q):1;
+        if(state<0){unlock_requests();return false;}
+        if(q && q->keyboard_cancel[fd]) {cancelled=ready=true;q->keyboard_cancel[fd]=false;free(q->keyboards[fd]);q->keyboards[fd]=NULL;}
+        else if(q && q->keyboards[fd]) {
+            ready=wii_keyboard_pop(q->keyboards[fd],event);
+            if(ready && keyboard_flush(q)<0){unlock_requests();return false;}
+        }
+        unlock_requests();
+        if(ready) {
+            const u32 message=ios->keyboard_messages[fd];u32 available;
+            const u8* request=ios_memory(cpu,message,&available);
+            if(!request || available<32)return false;
+            const u32 output=read_be32(request+24),size=read_be32(request+28);
+            s32 result=cancelled?-4:0;
+            if(!cancelled) {
+                if(size<16 || !ios_memory(cpu,output,&available) || available<size)result=-4;
+                else for(unsigned n=0;n<16;n++)mem_write8_cia(cpu,output+n,event[n],cpu->pc);
+            }
+            ios->keyboard_messages[fd]=0;reply(ios,ipc,cpu,message,6,result);return true;
+        }
     }
     if(ios->di_waiting && ios->di_wait_kind==2 && !(ios->di->dicvr&GCN_DI_CVR_CVR) && !ipc->y) {
         reply(ios,ipc,cpu,ios->di_message,6,4);ios->di_waiting=false;return true;

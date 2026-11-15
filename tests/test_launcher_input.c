@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/launcher_input.h"
+#include "wiillr/keyboard.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +11,11 @@ int main(void) {
     bool keys[SDL_SCANCODE_COUNT]={0};WiiLauncherInput input={.keys=keys,.key_count=SDL_SCANCODE_COUNT};
     s.player_src[0]=1;keys[SDL_SCANCODE_X]=true;keys[SDL_SCANCODE_RIGHT]=true;
     CHECK(wii_launcher_input_map(&s,&input).buttons==0x102);
+    wii_keyboard_host_begin(true);wii_keyboard_host_keys(keys,SDL_SCANCODE_COUNT,true);
+    CHECK(!wii_launcher_input_map(&s,&input).buttons);
+    s.player_src[0]=2;input.buttons=1u<<SDL_GAMEPAD_BUTTON_SOUTH;
+    CHECK(wii_launcher_input_map(&s,&input).buttons==0x100); /* gamepad remains independent */
+    wii_keyboard_host_reset();s.player_src[0]=1;input.buttons=0;
     s.player_key_bind[0][5]=SDL_SCANCODE_F;
     CHECK(!(wii_launcher_input_map(&s,&input).buttons&0x100));
     keys[SDL_SCANCODE_F]=true;CHECK(wii_launcher_input_map(&s,&input).buttons&0x100);

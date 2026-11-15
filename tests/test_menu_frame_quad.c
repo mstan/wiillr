@@ -102,6 +102,13 @@ int main(void) {
     frontier_order=0;CHECK(frontier() && frontier_order==2 && frontier_completions==1);
     frontier_order=0;frontier_drains=false;
     CHECK(!frontier() && frontier_order==1 && frontier_completions==1);
+    /* Camera getters are shared with other overlays; only the original
+     * keyboard draw wrapper marks text entry for the completed frame. */
+    state.keyboard_visible=false;state.keyboard=false;state.active=state.projection_ready=true;
+    keyboard_frame_begin();CHECK(keyboard_begin(&cpu));state.keyboard_drawn=true;
+    keyboard_frame_end();CHECK(state.keyboard_visible);
+    keyboard_frame_begin();keyboard_frame_end();CHECK(!state.keyboard_visible); /* Back/non-keyboard frame */
+    state.keyboard_visible=true;state.mesh=0;wii_menu_frame_stop();CHECK(!state.owner && !state.keyboard_visible); /* title retirement */
     /* The real original Menu mode controls display aspect without changing
      * the physical viewport, RAM, or an existing service's legacy contract. */
     const u32 object=0x80002000,mode_data=0x80002100;
@@ -119,5 +126,5 @@ int main(void) {
     put(&cpu,object+0x10,1);display_ready=false;
     CHECK(!set_viewport(&cpu,object) && display_calls==3 && !state.display_aspect);
     display_ready=true;CHECK(set_viewport(&cpu,object) && display_calls==4 && state.display_aspect==1);
-    cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard lines, Menu completion ordering and display mode\n",cases);return 0;
+    cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard lifecycle, Menu completion and display mode\n",cases);return 0;
 }

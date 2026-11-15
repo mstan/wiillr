@@ -4,6 +4,7 @@
 #include "wiillr/remote_input.h"
 #include "wiillr/fs.h"
 #include "wiillr/gx_output.h"
+#include "wiillr/keyboard.h"
 #include "wiillr/mm9_dlc.h"
 #include "wiillr/mm9_mods.h"
 #include "memory/memory.h"
@@ -230,14 +231,35 @@ bool wii_gx_tick(WiiGx* g) {
     GcnllrNativeGxStatus status={0};g->api->status(&status);
     g->quit=status.quit!=0;
     if(g->quit)return !status.failed;
+    const bool live_input=g->visible && !g->scripted_input;
+#if WIILLR_IOS_NATIVE
+    const bool native_keyboard=true;
+    if(!live_input) {
+        const WiiKeyboardReport disconnected={0};
+        if(wii_ios_native_keyboard_input(&g->machine->ios,&disconnected)<0)return false;
+        wii_keyboard_host_reset();
+    }
+#else
+    const bool native_keyboard=false; /* Original IOS keeps its own USB bus. */
+#endif
     /* Setup owns input until review explicitly hands it to the player. The
      * startup journal remains in the environment after its events finish. */
-    if(g->visible && !g->scripted_input && g->machine->ios.bluetooth &&
+    if(live_input && (native_keyboard || g->machine->ios.bluetooth) &&
        (!g->input_sent || g->input_field!=g->machine->fields)) {
         g->input_field=g->machine->fields;
         WiiBluetoothInput next=g->input;next.buttons=0;
         GcnllrPad pad=status.pad;
+        bool typing=false;
+#if WIILLR_IOS_NATIVE && WIILLR_MENU_PICTURES
+        typing=wii_menu_frame_keyboard_visible(g);
+#endif
+        wii_keyboard_host_begin(typing);
         if(g->host_input)g->host_input(g->host_input_user,&pad);
+        WiiKeyboardReport keyboard;
+        wii_keyboard_host_end(native_keyboard && !g->host_input_capture,&keyboard);
+#if WIILLR_IOS_NATIVE
+        if(wii_ios_native_keyboard_input(&g->machine->ios,&keyboard)<0)return false;
+#endif
         if(g->host_input_capture)status.pointer.valid=false;
         next.buttons=wii_remote_buttons(&pad,g->title==0x0001000157523945ull);
         int x=(int)next.pointer_x-((int)pad.substick_x-128)/16;
@@ -256,17 +278,18 @@ bool wii_gx_tick(WiiGx* g) {
         if(status.pointer.valid && (status.pointer.buttons&4))next.buttons|=0x8000;
         next.pairing=(pad.buttons&0x20)!=0;
         const bool sync=next.pairing && !g->input.pairing;
-        if(!g->input_sent || next.buttons!=g->input.buttons || next.pairing!=g->input.pairing ||
+        if(g->machine->ios.bluetooth && (!g->input_sent || next.buttons!=g->input.buttons || next.pairing!=g->input.pairing ||
            next.pointer_x!=g->input.pointer_x || next.pointer_y!=g->input.pointer_y ||
-           next.pointing!=g->input.pointing) {
+           next.pointing!=g->input.pointing)) {
             if(!wii_bluetooth_set_input(g->machine->ios.bluetooth,&next))return false;
             g->input=next;g->input_sent=true;
         }
-        if(sync && !wii_bluetooth_press_sync(g->machine->ios.bluetooth))return false;
+        if(sync && g->machine->ios.bluetooth && !wii_bluetooth_press_sync(g->machine->ios.bluetooth))return false;
     }
     return !status.failed;
 }
 void wii_gx_stop(WiiGx* g) {
+    wii_keyboard_host_reset();
     wii_mm9_dlc_bind(NULL);
     wii_mm9_mods_bind(NULL);
     if(g->host_input_stop)g->host_input_stop(g->host_input_user);

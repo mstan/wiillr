@@ -23,6 +23,7 @@ static struct {
     WiiMenuView view,keyboard_view;float model[12],keyboard_model[12];bool active,bad,projection_ready,keyboard;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
     bool transform_verified,transform_sampled;u64 transforms,transform_declines;
+    bool keyboard_drawn,keyboard_visible;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -80,6 +81,8 @@ static bool keyboard_begin(CPUState* cpu) {
     state.keyboard_view=state.view;memcpy(state.keyboard_model,state.model,sizeof state.model);
     state.keyboard=true;return true;
 }
+static void keyboard_frame_begin(void){state.keyboard_drawn=false;}
+static void keyboard_frame_end(void){state.keyboard_visible=state.keyboard_drawn;}
 static bool overlay_scissor(CPUState* cpu) {
     const u32 x=cpu->gpr[3],y=cpu->gpr[4],width=cpu->gpr[5],height=cpu->gpr[6];
     if(x>1705 || y>1705 || !width || !height || width>1706-x || height>1706-y)return false;
@@ -335,6 +338,9 @@ int wii_menu_frame_current_model(CPUState* cpu,float output[12]) {
     if(!state.active || !state.projection_ready || !output)return -1;
     memcpy(output,state.model,sizeof state.model);return 1;
 }
+bool wii_menu_frame_keyboard_visible(const WiiGx* gx) {
+    return WIILLR_MENU_FRAME_MODE && state.owner==gx && state.keyboard_visible;
+}
 bool wii_menu_frame_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcWiiNativeFrameApi* frame) {
     if(!WIILLR_MENU_FRAME_MODE)return true;
     if(state.owner || !gx || !render || !frame || render->abi!=GC_WII_NATIVE_RENDER_ABI || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
@@ -389,7 +395,7 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     } else if(address==0x8133de74) {
         if(!identity(cpu,address,4,UINT64_C(0x381876d7414e6544)) || !set_viewport(cpu,cpu->gpr[3]))return stop(cpu,"frame begin identity/mode",false);
         if(!frontier())return stop(cpu,"earlier graphics completion",true);GcnllrNativeGxStatus s;state.owner->api->status(&s);state.fifo_start=s.fifo_bytes;
-        state.active=true;++state.begins;
+        keyboard_frame_begin();state.active=true;++state.begins;
     } else if(address==0x8133de78) {
         if(!identity(cpu,address,0x98,UINT64_C(0x60f33f6b5eb35553)))return stop(cpu,"frame copy identity",false);
         if(!frontier())return stop(cpu,"frame copy ordering",true);const int copied=copy_frame(cpu,cpu->gpr[3]);
@@ -399,7 +405,7 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         if(!wii_gx_output_complete(state.owner,state.frame))return stop(cpu,"frame completion",true);
         if(state.active){GcnllrNativeGxStatus s;state.owner->api->status(&s);const u64 n=s.fifo_bytes-state.fifo_start;state.fifo_bytes+=n;
             if(n || state.owner->machine->gp.count || gcn_cp_fifo_rw_distance(&state.owner->machine->cp))return stop(cpu,"unowned graphics in frame",false);}
-        state.active=false;++state.completions;cpu->pc=0x8133df28;++cpu->cycles;return 1;
+        keyboard_frame_end();state.active=false;++state.completions;cpu->pc=0x8133df28;++cpu->cycles;return 1;
     } else if(address==0x81334c7c) {
         if(!identity(cpu,0x81334b28,0x3e4,UINT64_C(0x79ec3ff84f08995c)) || !set_viewport(cpu,word(cpu,SYSTEM_FRAMEWORK)))return stop(cpu,"scene viewport identity/mode",false);
         cpu->gpr[27]=word(cpu,state.object);cpu->pc=0x81334cd4;++cpu->cycles;return 1;
@@ -438,6 +444,7 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         cpu->pc=address+4;++cpu->cycles;return 1;
     } else if(address==0x81355b68) {
         if(!identity(cpu,address,0x40,UINT64_C(0xecafffa52519c96c)) || !keyboard_begin(cpu))return stop(cpu,"keyboard view boundary",false);
+        state.keyboard_drawn=true;
         return 0; /* The original keyboard logic and draw traversal still run. */
     } else if(address==0x81547fa8 && state.active) {
         if(!identity(cpu,address,0x68,UINT64_C(0xaaddfcf055d47d0d)) || !overlay_scissor(cpu))return stop(cpu,"overlay clip state",false);

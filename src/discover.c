@@ -7,6 +7,7 @@
 #include "wiillr/boot.h"
 #include "wiillr/gx.h"
 #include "wiillr/gx_output.h"
+#include "wiillr/gx_session.h"
 #include "wiillr/control.h"
 #include "wiillr/host_session.h"
 #ifdef RECOMP_LAUNCHER
@@ -88,10 +89,14 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     const u64 gather_rejected=m->gx_cpu_gather_rejected;
     const u64 utc=m->ios.kd_utc,utc_cycles=m->ios.kd_utc_cycles;
     const bool utc_set=m->ios.kd_utc_set;
+    const GcnRtc rtc=m->exi.rtc;
+    const bool scripted_input=gx->scripted_input;
     void (*sink)(void*,const u8*,u32)=m->dsp.output_sink;
     void* sink_user=m->dsp.output_user;const u32 rate=m->dsp.output_rate;
     const bool dsp=m->dsp.engine!=NULL;
     if(gx->api && !gx->api->drain()){wii_es_release_launch(&launch);return false;}
+    WiiGxHandoff handoff={0};
+    if(wii_gx_handoff_begin(gx,library,&handoff)<0) {wii_es_release_launch(&launch);return false;}
     GcnllrNativeGxStatus graphics={0};if(gx->api)gx->api->status(&graphics);
     GcnDspEngineStats sound={0};if(dsp)sound=gcn_dsp_engine_stats(m->dsp.engine);
     printf("{\"native_title_retire\":1,\"cycles\":%llu,\"gx_fifo_bytes\":%llu,"
@@ -102,13 +107,14 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
         (unsigned long long)sound.interpreter_instructions,(unsigned long long)sound.misses,sound.failed);
     /* The old title never receives a success reply: ES_Launch bootstraps PPC.
      * Retire all old GPU ownership before replacing RAM, descriptors or DSP. */
-    wii_gx_stop(gx);if(cpu->halted){wii_es_release_launch(&launch);return false;}
+    wii_gx_stop(gx);if(cpu->halted){wii_gx_handoff_end(&handoff,false);wii_es_release_launch(&launch);return false;}
     wii_dsp_stop(&m->dsp);wii_ios_native_destroy(&m->ios);wii_fs_unmount(m->ios.fs);
     cpu_reset(cpu);cpu->cycles=cycles;cpu->timebase=timebase;cpu->spr[287]=PPC_BROADWAY_PVR;
     u32 entry;
     bool ok=wii_native_ios_boot_memory(cpu,(u32)launch.ios) &&
         wii_dol_load(cpu,launch.image,launch.size,&entry);
     wii_machine_init(m,cpu);
+    m->exi.rtc=rtc;
 #ifdef RECOMP_LAUNCHER
     wii_host_session_bind(wii_package_standalone(package)?&m->ios:NULL);
 #endif
@@ -119,7 +125,12 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     m->ios.operations=operations;m->ios.kd_utc=utc;m->ios.kd_utc_cycles=utc_cycles;m->ios.kd_utc_set=utc_set;
     m->ios.validate_launch=validate_launch;m->ios.launch_user=cpu;
     m->ios.fs=wii_fs_mount(profile,launch.uid,launch.gid);ok=ok && m->ios.fs;
-    if(ok && library)ok=wii_gx_start(gx,m,cpu,library,data,cache);
+    if(ok && library) {
+        ok=wii_gx_start(gx,m,cpu,library,data,cache);
+        /* The setup journal may remain in the environment after review has
+         * handed controls to the player. A title change keeps that owner. */
+        if(ok)gx->scripted_input=scripted_input;
+    }
 #ifdef RECOMP_LAUNCHER
     if(ok && library)ok=wii_launcher_window(gx);
 #endif
@@ -129,6 +140,13 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     if(ok)wii_native_install();
 #endif
     if(ok)cpu->pc=entry;
+    if(handoff.library) {
+        const u64 next_window=handoff.api->window_identity();
+        printf("{\"native_title_window\":1,\"before\":%llu,\"after\":%llu,\"same\":%s}\n",
+            (unsigned long long)handoff.window_identity,(unsigned long long)next_window,
+            next_window==handoff.window_identity?"true":"false");
+    }
+    if(!wii_gx_handoff_end(&handoff,ok))ok=false;
     printf("{\"native_title_bootstrap\":\"%016llx\",\"ios\":%u,\"cycles\":%llu,\"success\":%s}\n",
         (unsigned long long)launch.title,(u32)launch.ios,(unsigned long long)cycles,ok?"true":"false");
     fflush(stdout);
