@@ -23,7 +23,7 @@ static struct {
     WiiMenuView view,keyboard_view;float model[12],keyboard_model[12];bool active,bad,projection_ready,keyboard;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
     bool transform_verified,transform_sampled;u64 transforms,transform_declines;
-    bool keyboard_drawn,keyboard_visible;
+    bool keyboard_drawn,keyboard_visible;u64 keyboard_draws;
     bool sdk_verified,sdk_initializing;u32 sdk_fifo,sdk_size,sdk_thread;
     struct {u32 word,remaining;u8 command,header;} sdk_setup;
     u64 sdk_init_writes,sdk_texture_writes;
@@ -83,9 +83,20 @@ static int stop(CPUState* cpu,const char* why,bool backend) {
  * overlays, including the Sensor Bar calibration screen. */
 static bool keyboard_begin(CPUState* cpu) {
     (void)cpu;
-    if(state.keyboard || !state.active || !state.projection_ready)return false;
+    if(state.keyboard || !state.active || !state.projection_ready || !state.render || !state.render->status)return false;
+    GcWiiNativeRenderStatus status={0};state.render->status(&status);state.keyboard_draws=status.draws;
     state.keyboard_view=state.view;memcpy(state.keyboard_model,state.model,sizeof state.model);
     state.keyboard=true;return true;
+}
+static bool keyboard_end(void) {
+    if(!state.keyboard || !state.render || !state.render->status)return false;
+    /* The original wrapper runs even while its keyboard is hidden. This
+     * service counter advances synchronously only after a successful typed
+     * draw (including GUI/text), never on deferred GPU completion. */
+    GcWiiNativeRenderStatus status={0};state.render->status(&status);
+    if(status.draws>state.keyboard_draws)state.keyboard_drawn=true;
+    state.view=state.keyboard_view;memcpy(state.model,state.keyboard_model,sizeof state.model);state.keyboard=false;
+    return true;
 }
 static void keyboard_frame_begin(void){state.keyboard_drawn=false;}
 static void keyboard_frame_end(void){state.keyboard_visible=state.keyboard_drawn;}
@@ -465,7 +476,6 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         cpu->pc=address+4;++cpu->cycles;return 1;
     } else if(address==0x81355b68) {
         if(!identity(cpu,address,0x40,UINT64_C(0xecafffa52519c96c)) || !keyboard_begin(cpu))return stop(cpu,"keyboard view boundary",false);
-        state.keyboard_drawn=true;
         return 0; /* The original keyboard logic and draw traversal still run. */
     } else if(address==0x81547fa8 && state.active) {
         if(!identity(cpu,address,0x68,UINT64_C(0xaaddfcf055d47d0d)) || !overlay_scissor(cpu))return stop(cpu,"overlay clip state",false);
@@ -495,8 +505,7 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         if(!identity(cpu,0x81355b68,0x40,UINT64_C(0xecafffa52519c96c)))return stop(cpu,"keyboard drawing restore identity",false);
         /* The original virtual keyboard draw already completed. Restore its
          * enclosing graphics contract before the original epilogue returns. */
-        if(!state.keyboard)return stop(cpu,"keyboard view restoration scope",false);
-        state.view=state.keyboard_view;memcpy(state.model,state.keyboard_model,sizeof state.model);state.keyboard=false;
+        if(!keyboard_end())return stop(cpu,"keyboard view restoration scope",false);
         /* The original wrapper explicitly restores ZMode(1,Always,1), even
          * when the preceding native pane/utility draw had disabled depth. */
         cpu->gpr[3]=1;cpu->gpr[4]=7;cpu->gpr[5]=1;

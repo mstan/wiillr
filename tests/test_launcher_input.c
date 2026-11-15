@@ -60,6 +60,15 @@ int main(void) {
     /* Real SDL virtual controllers, no video subsystem, window or picker. */
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
     CHECK(SDL_Init(SDL_INIT_GAMEPAD));
+    /* System key state exists even without enumerated physical keyboards or
+     * a focused video window. The virtual USB device remains attached while
+     * unfocused and sends a neutral report rather than a disconnect. */
+    CHECK(!SDL_HasKeyboard() && !SDL_GetKeyboardFocus());
+    wii_keyboard_host_begin(false);
+    GcnllrPad presence_pad;wii_launcher_input_poll(&s,&presence_pad);
+    WiiKeyboardReport keyboard;wii_keyboard_host_end(true,&keyboard);
+    CHECK(keyboard.connected && !keyboard.modifiers);
+    CHECK(!memcmp(keyboard.keys,(unsigned char[6]){0},6));
     SDL_VirtualJoystickDesc desc;SDL_INIT_INTERFACE(&desc);
     desc.type=SDL_JOYSTICK_TYPE_GAMEPAD;desc.naxes=6;desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
     desc.axis_mask=63;desc.button_mask=(1u<<SDL_GAMEPAD_BUTTON_COUNT)-1;

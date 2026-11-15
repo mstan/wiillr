@@ -157,13 +157,18 @@ static SDL_Gamepad* selected_gamepad(const RecompLauncherCSettings* s) {
 void wii_launcher_input_poll(void* user,GcnllrPad* pad) {
     const RecompLauncherCSettings* s=user;
     WiiLauncherInput input={0};
+    int keyboard_count=0;
+    const bool* keyboard_keys=SDL_GetKeyboardState(&keyboard_count);
     SDL_Window* focus=SDL_GetKeyboardFocus();
     if(focus && (!strcmp(SDL_GetWindowTitle(focus),"Mega Man 9") ||
                  !strcmp(SDL_GetWindowTitle(focus),"Wii Menu"))) {
-        input.keys=SDL_GetKeyboardState(&input.key_count);
+        input.keys=keyboard_keys;input.key_count=keyboard_count;
         if(SDL_GetMouseFocus()==focus)input.mouse=SDL_GetMouseState(NULL,NULL);
     }
-    wii_keyboard_host_keys(input.keys,input.key_count,SDL_HasKeyboard());
+    /* This virtual USB keyboard uses the system key stream, independently of
+     * SDL's physical-device list. Losing window focus releases keys without
+     * unplugging the emulated device or disabling a usable key source. */
+    wii_keyboard_host_keys(input.keys,input.key_count,keyboard_keys && keyboard_count>0);
     if(s->player_src[0]==2) {
         SDL_Gamepad* gamepad=selected_gamepad(s);
         if(gamepad) {

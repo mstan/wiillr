@@ -12,6 +12,7 @@
 static GcWiiNativeVertex captured[4];
 static GcWiiNativeDraw draw;
 static unsigned submitted;
+static bool submit_failed;
 static unsigned frontier_order,frontier_completions;
 static bool frontier_drains=true;
 static unsigned display_calls,display_numerator,display_denominator;
@@ -33,7 +34,8 @@ static u64 create(const GcWiiNativeMesh* mesh) {
     memcpy(captured,mesh->vertices,sizeof captured);return 1;
 }
 static int destroy(u64 handle){(void)handle;return 1;}
-static int submit(const GcWiiNativeDraw* value){draw=*value;++submitted;return 1;}
+static int submit(const GcWiiNativeDraw* value){if(submit_failed)return 0;draw=*value;++submitted;return 1;}
+static void render_status(GcWiiNativeRenderStatus* out){memset(out,0,sizeof *out);out->draws=submitted;}
 static void put(CPUState* cpu,u32 address,u32 value) {
     u32 available;u8* p=gcn_mem_resolve(cpu,address,&available);
     if(!p || available<4)abort();
@@ -42,7 +44,7 @@ static void put(CPUState* cpu,u32 address,u32 value) {
 static void put_float(CPUState* cpu,u32 address,float value){u32 bits;memcpy(&bits,&value,4);put(cpu,address,bits);}
 int main(void) {
     CPUState cpu;CHECK(cpu_init(&cpu));
-    const GcWiiNativeRenderApi api={.abi=GC_WII_NATIVE_RENDER_ABI,.create_mesh=create,.destroy_mesh=destroy,.draw=submit};
+    const GcWiiNativeRenderApi api={.abi=GC_WII_NATIVE_RENDER_ABI,.create_mesh=create,.destroy_mesh=destroy,.draw=submit,.status=render_status};
     const u32 rect=0x80001000,texture=0x80001100;
     put_float(&cpu,rect,0);put_float(&cpu,rect+4,0);put_float(&cpu,rect+8,640);put_float(&cpu,rect+12,456);
     /* 4x4 RGBA8 texture with a simple clamp/nearest descriptor. */
@@ -108,11 +110,33 @@ int main(void) {
     frontier_order=0;CHECK(frontier() && frontier_order==2 && frontier_completions==1);
     frontier_order=0;frontier_drains=false;
     CHECK(!frontier() && frontier_order==1 && frontier_completions==1);
-    /* Camera getters are shared with other overlays; only the original
-     * keyboard draw wrapper marks text entry for the completed frame. */
+    /* The original wrapper also runs on the Menu grid with a hidden keyboard.
+     * Only successful submissions inside its scope may latch text entry. */
     state.keyboard_visible=false;state.keyboard=false;state.active=state.projection_ready=true;
-    keyboard_frame_begin();CHECK(keyboard_begin(&cpu));state.keyboard_drawn=true;
-    keyboard_frame_end();CHECK(state.keyboard_visible);
+    state.render=&api;state.bad=false;
+    cpu.gpr[3]=rect;cpu.gpr[4]=0x80001201;put(&cpu,cpu.gpr[4],0xffffffff);
+    keyboard_frame_begin();CHECK(utility_quad(&cpu,0x81362d3c)==1); /* ordinary Menu draw before wrapper */
+    const WiiMenuView enclosing_view=state.view;float enclosing_model[12];memcpy(enclosing_model,state.model,sizeof enclosing_model);
+    CHECK(keyboard_begin(&cpu));state.view.x=17;state.model[3]=19;
+    CHECK(keyboard_end() && !state.keyboard && !memcmp(&state.view,&enclosing_view,sizeof enclosing_view) &&
+        !memcmp(state.model,enclosing_model,sizeof enclosing_model));
+    CHECK(utility_quad(&cpu,0x81362d3c)==1); /* unrelated draw after hidden wrapper */
+    keyboard_frame_end();CHECK(!state.keyboard_visible);
+    keyboard_frame_begin();CHECK(keyboard_begin(&cpu));
+    CHECK(utility_quad(&cpu,0x81362d3c)==1);CHECK(keyboard_end());
+    CHECK(!state.keyboard_visible); /* publication waits for the completed frame */
+    keyboard_frame_end();CHECK(state.keyboard_visible); /* actual OSK primitive */
+    keyboard_frame_begin();CHECK(keyboard_begin(&cpu));
+    const u64 own_quads=state.quads;CHECK(api.draw(&draw)==1 && state.quads==own_quads);
+    CHECK(keyboard_end());keyboard_frame_end();CHECK(state.keyboard_visible); /* GUI/text uses same provider count */
+    keyboard_frame_begin();CHECK(keyboard_begin(&cpu));
+    cpu.gpr[3]=6;cpu.gpr[4]=0x80001201;cpu.fpr[1]=cpu.fpr[3]=10;cpu.fpr[2]=cpu.fpr[4]=20;cpu.fpr[5]=0;
+    CHECK(keyboard_line(&cpu)==1);CHECK(keyboard_end());
+    keyboard_frame_end();CHECK(!state.keyboard_visible); /* no submitted quad */
+    keyboard_frame_begin();CHECK(keyboard_begin(&cpu));
+    cpu.gpr[3]=rect;cpu.gpr[4]=0x80001201;submit_failed=true;
+    CHECK(utility_quad(&cpu,0x81362d3c)==-1);submit_failed=false;CHECK(keyboard_end());
+    keyboard_frame_end();CHECK(!state.keyboard_visible); /* rejected backend draw */
     keyboard_frame_begin();keyboard_frame_end();CHECK(!state.keyboard_visible); /* Back/non-keyboard frame */
     state.keyboard_visible=true;state.mesh=0;wii_menu_frame_stop();CHECK(!state.owner && !state.keyboard_visible); /* title retirement */
     /* The real original Menu mode controls display aspect without changing
