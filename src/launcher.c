@@ -227,8 +227,10 @@ int wii_launcher_menu_package(WiiPackage* package,bool force,bool check_only) {
         menu_identity(&info);
     } else {
         (void)wii_package_refresh(package,&info,error,sizeof error);
+        SDL_PathInfo path_info;
+        const bool existing=SDL_GetPathInfo(wii_package_nand(package),&path_info);
         snprintf(menu_system_status,sizeof menu_system_status,"%s",
-            *error?error:"System files have not been imported.");
+            existing && *error?error:"System files have not been imported.");
     }
     if(check_only)return ready?0:2;
     if(!wii_launcher_menu_session(image))return 2;

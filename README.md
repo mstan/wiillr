@@ -66,12 +66,13 @@ authentication and key-storage flow. Existing controller pairings are reused.
 HOME's Wii Menu action returns to the launcher when the original Menu is not
 installed; an installed original Menu retains its normal launch route.
 
-Native IOS provisions an unconfigured network profile as Connection 1, with
-wireless name `wiillr` and automatic IP/DNS. It upgrades the former entirely
-empty generated default and preserves every nonempty existing configuration.
-Traffic uses host IPv4 sockets and the host resolver. When a host IPv4 interface
-is available, the virtual wireless driver advertises only the logical `wiillr`
-access point; it does not scan the computer's radio or expose its credentials.
+Native IOS provisions an unconfigured network profile as wired Connection 1,
+with automatic IP/DNS. It upgrades the former empty generated default; newly
+created Menu profiles also upgrade the exact former generated Wi-Fi template.
+Other saved connections are preserved. Traffic uses host IPv4 sockets and the
+host resolver. The optional virtual wireless driver advertises only the logical
+`wiillr` access point when host IPv4 is available; it does not scan the computer's
+radio or expose its credentials.
 An existing external SSID is preserved and is not reported as associated with
 that virtual access point. The connection-test flag stays unset until original
 software completes its test. TCP/UDP, asynchronous DNS and virtual scan packets
