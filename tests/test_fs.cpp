@@ -223,13 +223,13 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,buffer+32,0x11223344,0);mem_write32_cia(&cpu,buffer+36,0xabcdef01,0);
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer+32,0));
-  CHECK(cpu.mem2[0x2004]==1 && cpu.mem2[0x2008]==0x86 && !std::memcmp(cpu.mem2+0x2008+1988,"wiillr",6) &&
-        cpu.mem2[0x2008+2021]==6 && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
+  CHECK(cpu.mem2[0x2004]==2 && cpu.mem2[0x2008]==0x87 && !cpu.mem2[0x2008+2021] &&
+        !(cpu.mem2[0x2008]&0x20) && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
   // Upgrade only the old byte-exact empty generated profile, never a partly
   // configured, disabled or unselected owner connection.
   std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> legacy_empty{};
   std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(legacy_empty.data()),legacy_empty.size());
-  CHECK(!wii_fs_network_config(nand,legacy_empty.data()) && legacy_empty[4]==1 && legacy_empty[8]==0x86);
+  CHECK(!wii_fs_network_config(nand,legacy_empty.data()) && legacy_empty[4]==2 && legacy_empty[8]==0x87);
   std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> network{};network[4]=1;network.back()=0x5a;
   std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(network.data()),network.size());
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);

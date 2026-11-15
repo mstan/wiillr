@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <wiillr/package.h>
+#include <wiillr/menu_profile.h>
+#include <wiillr/network_profile.h>
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -16,11 +18,23 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 namespace fs=std::filesystem;
 struct WiiPackage {
     std::string boot,nand,rom,coef,graphics,data,cache,log,uid,gid,ios;
-    bool standalone{};
+    bool standalone{},menu{};
+#ifdef _WIN32
+    HANDLE menu_lock=INVALID_HANDLE_VALUE;
+    ~WiiPackage(){if(menu_lock!=INVALID_HANDLE_VALUE)CloseHandle(menu_lock);}
+#else
+    int menu_lock=-1;
+    ~WiiPackage(){if(menu_lock>=0)close(menu_lock);}
+#endif
     std::array<std::string,18> values;
     std::array<char*,19> argv{};
 };
@@ -71,7 +85,8 @@ std::map<std::string,std::string> read_config(const fs::path& path) {
         need(result.contains(key),"Incomplete package launch description");
     need(result.contains("Nand")!=result.contains("Import"),"Select installed data or WAD import in game.ini");
     if(result.contains("Import"))need(result.at("Import")=="wad","Unsupported game import format");
-    need(result.size()==8,"Unknown package launch setting");return result;
+    if(result.contains("Name"))need(result.at("Name")=="Wii Menu" || result.at("Name")=="Mega Man 9","Unsupported package name");
+    need(result.size()==8+(result.contains("Name")?1:0),"Unknown package launch setting");return result;
 }
 fs::path relative(const std::string& text) {
     fs::path path(text);need(!path.empty() && !path.has_root_path(),"Package paths must be relative");
@@ -91,6 +106,26 @@ unsigned number(const std::string& text,unsigned maximum) {
 bool marked(const fs::path& root) {
     std::ifstream file(root/".wiillr-nand-profile");std::string line;std::getline(file,line);
     return file && trim(line)=="wiillr-copied-nand-v1";
+}
+void lock_menu_profile(WiiPackage& package,const fs::path& user) {
+    const auto path=user/".wiillr-menu-profile.lock";
+    need(!linked(path),"Linked Wii Menu profile lease files are unsupported");
+#ifdef _WIN32
+    package.menu_lock=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,
+        OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+    need(package.menu_lock!=INVALID_HANDLE_VALUE,"The Wii Menu profile is already in use or cannot be locked");
+    BY_HANDLE_FILE_INFORMATION info{};
+    need(GetFileInformationByHandle(package.menu_lock,&info) &&
+        !(info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)) &&
+        !info.nFileSizeHigh && !info.nFileSizeLow,"Unsupported Wii Menu profile lease file");
+#else
+    package.menu_lock=open(path.c_str(),O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK,0600);
+    need(package.menu_lock>=0,"The Wii Menu profile is already in use or cannot be locked");
+    struct stat info{};
+    need(fstat(package.menu_lock,&info)==0 && S_ISREG(info.st_mode) && info.st_size==0,
+        "Unsupported Wii Menu profile lease file");
+    need(flock(package.menu_lock,LOCK_EX|LOCK_NB)==0,"The Wii Menu profile is already in use");
+#endif
 }
 struct Created {
     std::vector<fs::path> paths;bool committed{};
@@ -173,7 +208,7 @@ unsigned profile_uid(const fs::path& root) {
     need(file.eof() && file.gcount()==0 && matches==1,"Invalid local game identity");return uid;
 }
 void seed_profile(const fs::path& source,const fs::path& destination,const fs::path& boot,
-                  unsigned uid,unsigned gid,WiiPackageValidate validate) {
+                  unsigned uid,unsigned gid,WiiPackageValidate validate,bool menu) {
     need(fs::is_directory(source) && marked(source),"The package needs its prepared game data");
     if(fs::exists(destination)) {
         need(fs::is_directory(destination) && !linked(destination) && marked(destination),"Existing game profile is invalid; no files were replaced");
@@ -205,6 +240,22 @@ void seed_profile(const fs::path& source,const fs::path& destination,const fs::p
             need(!input.bad() && !output.fail(),"Could not finish copying the game data");
         }
     }
+    if(menu) {
+        const auto path=staging/"shared2/sys/SYSCONF";
+        need(fs::is_regular_file(path) && fs::file_size(path)==16384,"Prepared Wii Menu settings are missing or unsupported");
+        std::array<uint8_t,16384> config{};
+        {std::ifstream f(path,std::ios::binary);f.read(reinterpret_cast<char*>(config.data()),config.size());need(bool(f),"Cannot read prepared Wii Menu settings");}
+        need(wii_menu_profile_seed(config.data(),config.size()),"Prepared Wii Menu calendar/display settings are unsupported");
+        {std::ofstream f(path,std::ios::binary);f.write(reinterpret_cast<const char*>(config.data()),config.size());f.close();need(!f.fail(),"Cannot seed new Wii Menu settings");}
+        const auto network=staging/"shared2/sys/net/02/config.dat";
+        if(fs::is_regular_file(network) && fs::file_size(network)==7004) {
+            std::array<uint8_t,7004> bytes{};
+            {std::ifstream f(network,std::ios::binary);f.read(reinterpret_cast<char*>(bytes.data()),bytes.size());need(bool(f),"Cannot read prepared network settings");}
+            if(wii_network_seed_fresh_menu_config(bytes.data(),bytes.size())) {
+                std::ofstream f(network,std::ios::binary);f.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());f.close();need(!f.fail(),"Cannot seed new wired settings");
+            }
+        }
+    }
     // The installed-title validator may initialize these IOS metadata paths.
     // They belong to this new staging tree, not an existing user profile.
     created.paths.push_back(staging/"tmp");created.paths.push_back(staging/"fst.bin");
@@ -222,10 +273,13 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
         need(base_text && *base_text && user_text && *user_text,"Missing package or user directory");
         const auto base=fs::canonical(base_text);const auto config=read_config(base/"game.ini");
         auto package=std::make_unique<WiiPackage>();
+        package->menu=config.contains("Name") && config.at("Name")=="Wii Menu";
         const auto uid=number(config.at("Uid"),0xffffffffu),gid=number(config.at("Gid"),0xffffu);
         package->uid=std::to_string(uid);package->gid=std::to_string(gid);
-        need(number(config.at("Ios"),80)==37,"This package requires the supported Mega Man 9 IOS profile");package->ios="37";
+        const auto ios=number(config.at("Ios"),80);
+        need(package->menu?(ios==4 || ios==80):ios==37,"Unsupported package IOS profile");package->ios=std::to_string(ios);
         const bool importing=config.contains("Import");
+        need(!package->menu || !importing,"The Wii Menu package requires its prepared console data");
         package->standalone=importing;
         const auto boot=relative(config.at("Boot"));
         const auto source=importing?fs::path{}:resource(base,config.at("Nand"));
@@ -245,8 +299,12 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
             need(!within(target,origin) && !within(origin,target),"Packaged game data cannot be the writable profile");
         }
         fs::create_directories(user);
+        // Before any destination validation or metadata write, hold this
+        // Menu-package profile through UI, execution and title handoffs.
+        // The OS releases it on close/crash; a harmless empty file may remain.
+        if(package->menu)lock_menu_profile(*package,user);
         if(importing){fresh_profile(profile);package->uid=std::to_string(profile_uid(profile));}
-        else seed_profile(source,profile,boot,uid,gid,validate);
+        else seed_profile(source,profile,boot,uid,gid,validate,package->menu);
         const auto image=profile/boot;
         if(fs::exists(image))need(fs::is_regular_file(resource(profile,config.at("Boot"))),"The installed game boot file is invalid");
         else need(importing,"The installed game boot file is missing");
@@ -258,10 +316,24 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
 }
 extern "C" void wii_package_close(WiiPackage* package){delete package;}
 extern "C" void wii_package_arguments(WiiPackage* p,const char* executable,const char* action,int* argc,char*** argv) {
-    p->values={executable,action,p->boot,"62985600000000","","0",p->rom,p->coef,p->nand,p->uid,p->gid,
+    std::string selected_action=action;
+    if(p->menu) {
+        if(selected_action=="--launcher")selected_action="--menu-launcher";
+        else if(selected_action=="--launcher-settings")selected_action="--menu-launcher-settings";
+        else if(selected_action=="--launcher-check")selected_action="--menu-launcher-check";
+    }
+    p->values={executable,selected_action,p->boot,"62985600000000","","0",p->rom,p->coef,p->nand,p->uid,p->gid,
         "--gx",p->graphics,p->data,p->cache,"--ios-profile",p->ios,""};
     for(unsigned n=0;n<17;++n)p->argv[n]=p->values[n].data();p->argv[17]=nullptr;
     *argc=17;*argv=p->argv.data();
 }
 extern "C" const char* wii_package_log(WiiPackage* p){return p->log.c_str();}
 extern "C" bool wii_package_standalone(WiiPackage* p){return p && p->standalone;}
+extern "C" bool wii_package_menu(WiiPackage* p){return p && p->menu;}
+extern "C" const char* wii_package_name(const char* base) {
+    if(!base || !*base)return "Mega Man 9";
+    try {
+        const auto config=read_config(fs::path(base)/"game.ini");
+        return config.contains("Name") && config.at("Name")=="Wii Menu"?"Wii Menu":"Mega Man 9";
+    }catch(const std::exception&){return "Mega Man 9";}
+}

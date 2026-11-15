@@ -31,6 +31,8 @@ static char dlc_path[32768],dlc_status[128];
 static const char* const dlc_patterns[]={"*.wad"};
 static bool settings_key_held,input_release;
 static unsigned char menu_sha256[1][32];
+static unsigned char menu_boot_sha256[32];
+static bool menu_boot_verified;
 static const char* const view_labels[]={"Original 4:3","16:9","21:9","Fit to screen"};
 static const char* const resolution_labels[]={"Original (1x)","2x","3x","4x","8x","16x"};
 static const int resolution_values[]={1,960,1440,1920,3840,7680};
@@ -198,6 +200,64 @@ static bool installed_valid(const char* image,const char* nand,unsigned uid,unsi
     if(fs)wii_fs_unmount(fs);
     return valid && verify_file(image);
 }
+static bool installed_menu_valid(const char* image,const char* nand,unsigned uid,unsigned gid,unsigned ios_profile) {
+    menu_boot_verified=false;
+    if(!image || !nand || gid>0xffffu)return false;
+    WiiFs* fs=wii_fs_mount(nand,uid,(uint16_t)gid);
+    uint64_t title=0;uint32_t count=0;unsigned char view[0xd8];
+    WiiTitleLaunch launch={0};int32_t status=-1;
+    bool valid=fs && wii_fs_boot_title(fs,&title) && title==0x0000000100000002ull &&
+        wii_es_ticket_views(fs,title,view,1,&count)==0 && count==1 &&
+        wii_es_prepare_launch(fs,title,view,&launch,&status) && status==0 &&
+        launch.title==title && launch.uid==uid && launch.gid==gid &&
+        (launch.ios==0x100000004ull || launch.ios==0x100000050ull) &&
+        (!ios_profile || launch.ios==(0x100000000ull|ios_profile)) &&
+        launch.image && launch.size>=0x100 && launch.size<=0x5800000;
+    if(valid) {
+        FILE* file=fopen(image,"rb");valid=false;
+        if(file) {
+            if(!fseek(file,0,SEEK_END) && ftell(file)==(long)launch.size && !fseek(file,0,SEEK_SET)) {
+                unsigned char part[16384];size_t offset=0;valid=true;
+                while(offset<launch.size) {
+                    const size_t remaining=launch.size-offset,n=remaining<sizeof part?remaining:sizeof part;
+                    if(fread(part,1,n,file)!=n || memcmp(part,launch.image+offset,n)){valid=false;break;}
+                    offset+=n;
+                }
+                valid=valid && fgetc(file)==EOF && !ferror(file);
+            }
+            fclose(file);
+        }
+        if(valid){recompui_sha256_compute(launch.image,launch.size,menu_boot_sha256);menu_boot_verified=true;}
+    }
+    wii_es_release_launch(&launch);if(fs)wii_fs_unmount(fs);return valid;
+}
+bool wii_launcher_menu_verify(const void* image,size_t size) {
+    if(!menu_boot_verified || !image || !size)return false;
+    unsigned char hash[32];recompui_sha256_compute(image,size,hash);
+    return !memcmp(hash,menu_boot_sha256,sizeof hash);
+}
+int wii_launcher_menu_start(const char* image,const char* nand,unsigned uid,unsigned gid,
+    bool force,bool check_only,char* selected,size_t capacity,unsigned ios_profile) {
+    if(!selected || !image || strlen(image)>=capacity ||
+       !installed_menu_valid(image,nand,uid,gid,ios_profile)) {
+        fprintf(stderr,"launcher: the installed Wii Menu title, content or IOS profile could not be verified\n");return 2;
+    }
+    strcpy(selected,image);
+    if(check_only){puts("{\"launcher_title_verified\":true,\"window_opened\":false}");return 0;}
+    if(!wii_launcher_menu_session(image))return 2;
+    int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
+    if(force || !settings.skip_launcher)
+        action=recomp_launcher_run_window("Wii Menu",&settings,&game_info,NULL,image,selected,capacity);
+    if(action==RECOMP_LAUNCHER_RESULT_QUIT)return 1;
+    if(action!=RECOMP_LAUNCHER_RESULT_LAUNCH || !installed_menu_valid(selected,nand,uid,gid,ios_profile) ||
+       strlen(selected)>=sizeof boot_image)return 2;
+    strcpy(boot_image,selected);
+    char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
+    if(!set_env("WIILLR_WINDOW","1") || !set_env("GCN_WINDOW","1") ||
+       !set_env("WIILLR_WINDOW_TITLE","Wii Menu") || !set_env("GCN_AUDIO_VOLUME",volume))return 2;
+    if(!getenv("GCN_AUDIO") && !set_env("GCN_AUDIO","1"))return 2;
+    wii_launcher_input_reset();active=true;return 0;
+}
 static int import_base(const char* path,char* out,size_t capacity,char* error,size_t error_capacity) {
     WiiWadBaseInstallResult result={0};
     if(!wii_wad_install_base(path,dlc.key,dlc.nand,0x0001000157523945ull,&result,error,error_capacity))return 0;
@@ -360,10 +420,10 @@ static void session_input(void* user,GcnllrPad* pad) {
 
 bool wii_launcher_window(WiiGx* gx) {
     if(!active)return true;
+    static SDL_WindowID applied_window;
     static int applied_scale,applied_fullscreen,applied_view;
     const bool mm9=gx->title==0x0001000157523945ull;
     const bool menu=gx->title==0x0000000100000002ull;
-    const int view=mm9 && view_supported()?settings.aspect_index:0;
     /* The shared raster target also renders Wii Menu. Retain the selected
      * resolution across HOME/Start while its original layout stays unchanged. */
     const unsigned raster_scale=(mm9 || menu) && view_supported() && settings.internal_resolution>1?
@@ -373,10 +433,20 @@ bool wii_launcher_window(WiiGx* gx) {
     } else if(raster_scale!=1) {
         fprintf(stderr,"launcher: this graphics service does not support internal resolution\n");return false;
     }
-    const bool resize=gx->host_input!=session_input || applied_scale!=settings.window_scale ||
-        applied_fullscreen!=settings.fullscreen || applied_view!=view;
+    int count=0;SDL_Window** windows=SDL_GetWindows(&count);
+    SDL_Window* window=NULL;
+    for(int i=0;windows && i<count;++i)
+        if(!strcmp(SDL_GetWindowTitle(windows[i]),game_caption(gx))){window=windows[i];break;}
+    SDL_free(windows);
+    if(!window)return false;
+    const SDL_WindowID window_id=SDL_GetWindowID(window);
+    if(!window_id)return false;
+    /* Title handoffs rebind controls on the retained physical window. Only a
+     * new window or an explicit settings edit may replace its geometry. */
+    const bool resize=applied_window!=window_id || applied_scale!=settings.window_scale ||
+        applied_fullscreen!=settings.fullscreen || applied_view!=settings.aspect_index;
 #if WIILLR_MM9_RENDERER
-    if(mm9 && view_supported() && !wii_mm9_renderer_set_view(gx,(WiiMm9View)view))return false;
+    if(mm9 && view_supported() && !wii_mm9_renderer_set_view(gx,(WiiMm9View)settings.aspect_index))return false;
 #endif
     gx->host_input_user=gx;gx->host_input=session_input;
     gx->host_settings=mm9 || menu?session_settings:NULL;
@@ -391,26 +461,22 @@ bool wii_launcher_window(WiiGx* gx) {
     /* Audio/input edits and Resume preserve a manually resized Fit window. */
     if(!resize)return true;
     const int width=640*settings.window_scale;
-    const int height=view==2?2*((width*9/21+1)/2):
-        view?2*((width*9/16+1)/2):480*settings.window_scale;
-    int count=0;SDL_Window** windows=SDL_GetWindows(&count);
+    const int height=settings.aspect_index==2?2*((width*9/21+1)/2):
+        settings.aspect_index?2*((width*9/16+1)/2):480*settings.window_scale;
     bool ok=false;
-    for(int i=0;windows && i<count;++i) {
-        SDL_Window* window=windows[i];
-        if(strcmp(SDL_GetWindowTitle(window),game_caption(gx)))continue;
-        if(settings.fullscreen==2) {
-            SDL_DisplayMode mode;
-            if(!SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window),
-                width,height,0,false,&mode) ||
-               !SDL_SetWindowFullscreenMode(window,&mode))break;
-        } else if(!SDL_SetWindowFullscreenMode(window,NULL))break;
+    if(settings.fullscreen==2) {
+        SDL_DisplayMode mode;
+        if(SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(window),
+            width,height,0,false,&mode) && SDL_SetWindowFullscreenMode(window,&mode))
+            ok=true;
+    } else ok=SDL_SetWindowFullscreenMode(window,NULL);
+    if(ok) {
         ok=SDL_SetWindowSize(window,width,height) &&
             SDL_SetWindowFullscreen(window,settings.fullscreen!=0);
-        break;
     }
-    SDL_free(windows);
     if(ok) {
-        applied_scale=settings.window_scale;applied_fullscreen=settings.fullscreen;applied_view=view;
+        applied_window=window_id;applied_scale=settings.window_scale;
+        applied_fullscreen=settings.fullscreen;applied_view=settings.aspect_index;
     }
     if(!ok)fprintf(stderr,"launcher: unable to apply game window settings: %s\n",SDL_GetError());
     return ok;

@@ -4,6 +4,7 @@
 #include "NWC24Identity.h"
 #include <fstream>
 #include "wiillr/network_profile.h"
+#include "wiillr/menu_profile.h"
 #include <cstdlib>
 #include <random>
 #include <sstream>
@@ -100,6 +101,23 @@ static bool profile_write(WiiFs* s,const char* name,const uint8_t* data,uint32_t
     fs::rename(temporary,path);return true;
 #endif
   }catch(...){return false;}
+}
+static constexpr char menu_mod_settings[]="wiillr-menu-mods-v1\nwelcome-letter=1\n";
+extern "C" bool wii_fs_menu_welcome_enabled(WiiFs* s,bool* enabled) {
+  if(!s || !enabled)return false;
+  uint8_t data[sizeof menu_mod_settings];uint32_t size=0;
+  if(!profile_read(s,".wiillr-menu-mods",data,sizeof data,&size))return false;
+  if(!size){std::error_code error;if(fs::exists(s->root/".wiillr-menu-mods",error) || error)return false;*enabled=true;return true;}
+  constexpr size_t flag=sizeof menu_mod_settings-3;
+  if(size!=sizeof menu_mod_settings-1 || (data[flag]!='0' && data[flag]!='1'))return false;
+  auto expected=std::to_array(menu_mod_settings);expected[flag]=char(data[flag]);
+  if(std::memcmp(data,expected.data(),size))return false;
+  *enabled=data[flag]=='1';return true;
+}
+extern "C" bool wii_fs_menu_welcome_set_enabled(WiiFs* s,bool enabled) {
+  bool prior;if(!wii_fs_menu_welcome_enabled(s,&prior))return false;
+  auto data=std::to_array(menu_mod_settings);data[sizeof menu_mod_settings-3]=enabled?'1':'0';
+  return profile_write(s,".wiillr-menu-mods",reinterpret_cast<const uint8_t*>(data.data()),data.size()-1);
 }
 extern "C" bool wii_fs_bt_read(void* user,uint8_t* data,uint32_t capacity,uint32_t* size) {
   return profile_read(static_cast<WiiFs*>(user),".wiillr-bluetooth",data,capacity,size);
@@ -605,6 +623,32 @@ static std::array<uint8_t,20> content_sha1(const std::vector<uint8_t>& bytes) {
     h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;
   }
   std::array<uint8_t,20> hash{};for(unsigned n=0;n<5;n++)put32(hash.data()+4*n,h[n]);return hash;
+}
+extern "C" WiiMenuWelcomeResult wii_fs_menu_welcome(WiiFs* s,uint32_t rtc_seconds) {
+  try {
+    bool enabled;if(!wii_fs_menu_welcome_enabled(s,&enabled))return WII_MENU_WELCOME_INVALID;
+    if(!enabled)return WII_MENU_WELCOME_DISABLED;
+    uint64_t title=0;if(!wii_fs_boot_title(s,&title) || title!=0x100000002ull)return WII_MENU_WELCOME_INVALID;
+    check_path(s,"/title/00000001/00000002/data/cdb.vff");
+    if(!fs::exists(s->root/"title/00000001/00000002/data/cdb.vff"))return WII_MENU_WELCOME_NOT_READY;
+    check_path(s,"/shared2/sys/SYSCONF");const auto settings=s->root/"shared2/sys/SYSCONF";
+    if(!fs::is_regular_file(settings) || fs::file_size(settings)!=16384)return WII_MENU_WELCOME_INVALID;
+    std::array<uint8_t,16384> config{};
+    {std::ifstream f(settings,std::ios::binary);f.read(reinterpret_cast<char*>(config.data()),config.size());if(!f)return WII_MENU_WELCOME_IO_ERROR;}
+    uint32_t local_seconds;if(!wii_menu_profile_local_seconds(config.data(),config.size(),rtc_seconds,&local_seconds))return WII_MENU_WELCOME_INVALID;
+    check_path(s,"/title/00000001/00000002/data/nocopy/cdbwiiid.dat");
+    const auto identity=s->root/"title/00000001/00000002/data/nocopy/cdbwiiid.dat";
+    std::array<uint8_t,8> id{};
+    if(fs::exists(identity)) {
+      if(!fs::is_regular_file(identity) || fs::file_size(identity)!=40)return WII_MENU_WELCOME_INVALID;
+      std::ifstream f(identity,std::ios::binary);f.read(reinterpret_cast<char*>(id.data()),id.size());if(!f)return WII_MENU_WELCOME_IO_ERROR;
+    } else {
+      std::vector<uint8_t> input(9);if(!wii_fs_network_mac(s,input.data()))return WII_MENU_WELCOME_IO_ERROR;
+      input[6]=0x75;input[7]=0x79;input[8]=0x79;const auto hash=content_sha1(input);std::copy_n(hash.begin(),id.size(),id.begin());
+    }
+    const uint64_t wii_id=uint64_t(be32(id.data()))<<32|be32(id.data()+4);
+    return wii_menu_welcome(s->root.string().c_str(),local_seconds,wii_id,true);
+  }catch(const std::exception&){return WII_MENU_WELCOME_IO_ERROR;}
 }
 extern "C" bool wii_es_verify_content(WiiFs* s,uint64_t title,uint32_t index) {
   try {
