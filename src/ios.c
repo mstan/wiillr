@@ -950,7 +950,8 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
         }
         if(ios->event_waiting && fd==ios->event_fd)return false;
         if(ios->di_waiting && fd==ios->di_fd)return false;
-        if(ios->sd_event_message && fd==ios->sd_event_fd)return false;
+        /* Closing a descriptor does not unregister its SD card event. The
+         * original request completes on a transition or EVENT_UNREGISTER. */
         ios->result=-4;
         if(fd<24 && ios->descriptors[fd]) {
             if(ios->descriptors[fd]==9)wii_bluetooth_close(ios->bluetooth);

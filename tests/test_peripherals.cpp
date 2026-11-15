@@ -63,6 +63,16 @@ int main(int argc,char** argv){try{
  WiiPeripheralsConfig bad=c;const std::string missing=(dir/"missing.img").string();bad.sd.image_path=missing.c_str();CHECK(!wii_ios_native_configure_peripherals(&f.ios,&bad,error,sizeof error));CHECK(wii_ios_native_get_peripherals(&f.ios,&current) && current.sd.image_path==retained);
  bad=c;bad.usb[1].image_path=sdpath.c_str();CHECK(!wii_ios_native_configure_peripherals(&f.ios,&bad,error,sizeof error));CHECK(!f.sd(sd,17,7*512,1,0x40000));
  c.sd.read_only=true;CHECK(wii_ios_native_configure_peripherals(&f.ios,&c,error,sizeof error));CHECK(f.ioctl(sd,0x0b,0,0,0x19000,4) && f.word(0x19000)==0x10005);CHECK(f.sd(sd,24,8*512,1,0x40000)==-13);CHECK(sector(sdfile,8)==empty);c.sd.read_only=false;CHECK(wii_ios_native_configure_peripherals(&f.ios,&c,error,sizeof error));
+ /* Closing an SD descriptor does not unregister its asynchronous card
+  * event. The old request remains pending across descriptor reuse and is
+  * replied exactly once for the actual card removal, not for close/open. */
+ f.sd_request(0x40,2);CHECK(!f.ioctl(sd,7,0x18000,36,0,0));const u32 closed_sd_event=f.last;
+ CHECK(f.start(2,sd,0,0,0,0,0) && !f.result());CHECK(f.open("/dev/sdio/slot0")==sd);
+ CHECK(wii_ios_native_configure_peripherals(&f.ios,&c,error,sizeof error));f.cpu.cycles+=6000;CHECK(wii_ios_native_tick(&f.ios,&f.ipc,&f.cpu) && !f.ipc.y);
+ CHECK(wii_ios_native_eject_peripheral(&f.ios,2,error,sizeof error));CHECK(f.poll(closed_sd_event)==2);
+ f.cpu.cycles+=6000;CHECK(wii_ios_native_tick(&f.ios,&f.ipc,&f.cpu) && !f.ipc.y);
+ CHECK(f.ioctl(sd,0x0b,0,0,0x19000,4) && !f.result() && !f.word(0x19000));
+ CHECK(wii_ios_native_configure_peripherals(&f.ios,&c,error,sizeof error));
  /* USB enumeration is derived from configured ports, with an actual bulk
   * disk and sector count. Full CBW/data/CSW writes persist and read back. */
  const s32 host=f.open("/dev/usb/oh0"),disk=f.open("/dev/usb/oh0/1209/5741");CHECK(host>=0 && disk>=0);f.cpu.ram[0x21000]=8;f.cpu.ram[0x21020]=8;f.vector(0,0x21000,1);f.vector(1,0x21020,1);f.vector(2,0x21100,1);f.vector(3,0x21200,64);CHECK(f.ioctlv(host,12,2,2) && !f.result());CHECK(f.cpu.ram[0x21100]==1 && f.word(0x21200)==2 && f.word(0x21204)==0x12095741);
