@@ -4,6 +4,7 @@
 #include <bit>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 namespace {
@@ -72,6 +73,13 @@ int main(){try {
     fixture(false,3,3,3);stages=mem+108;stage(stages,0,{15,15,15,8},{7,7,7,4});stage(stages+16,1,{15,0,8,15},{7,0,4,7});stage(stages+32,2,{15,15,15,0},{7,7,7,0});
     ram[(stages&0x1fffffff)+8]=0x78;
     check(!wii_menu_picture_prepare(memory,pane,info,&view,&picture,error,sizeof error),"Invalid alpha selector is not generalized");
+    fixture(false,2,2,0);
+    const uint32_t transformed=(2u<<28)|(1u<<24)|(2u<<20);
+    p32(mat+0x4c,transformed);p32(mat+0x50,transformed);
+    p32(mem+84,(1u<<24)|(4u<<16)|(30u<<8));p32(mem+88,(1u<<24)|(5u<<16)|(60u<<8));
+    pf(mem+64,std::numeric_limits<float>::max());pf(mem+68,0);pf(mem+72,0);
+    pf(mem+76,-std::numeric_limits<float>::max());pf(mem+80,1);
+    check(!wii_menu_picture_prepare(memory,pane,info,&view,&picture,error,sizeof error),"Overflowed generated UV matrix rejects before submission");
 #endif
     std::cout<<"native complete GUI material contract PASS\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

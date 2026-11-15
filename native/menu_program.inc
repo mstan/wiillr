@@ -90,6 +90,7 @@ void program_material(const Reader& r,uint32_t pane,const QuadInput* quad,const 
         else need(angle==0,"GUI non-quarter-turn rotation needs qualification");
         const auto x=r.f32(transform+12),y=r.f32(transform+16);m[0][0]=cs*x;m[0][1]=-sn*y;m[1][0]=sn*x;m[1][1]=cs*y;
         m[0][2]=r.f32(transform)+.5f-.5f*(m[0][0]+m[0][1]);m[1][2]=r.f32(transform+4)+.5f-.5f*(m[1][0]+m[1][1]);
+        for(const auto& row:m)for(float value:row)need(std::isfinite(value),"Nonfinite generated GUI texture transform");
     }
     out.needs_program=1;out.needs_gui=0;out.draw.material.texture=num.textures?p.textures[0]:GcWiiNativeTexture{};p.draw=out.draw;
 }
