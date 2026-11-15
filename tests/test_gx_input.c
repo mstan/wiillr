@@ -53,6 +53,7 @@ static int title_handoff_input(bool scripted) {
     static CPUState cpu;static WiiMachine machine;WiiGx gx={0};
     CHECK(cpu_init(&cpu) && cpu_alloc_mem2(&cpu,WII_MEM2_SIZE));
     cpu.cycles=65536;cpu.timebase=1234;wii_machine_init(&machine,&cpu);
+    machine.exi.rtc=(GcnRtc){.counter=0x12345678,.anchor_cycles=12345,.running=scripted?1:0};
     CHECK(fixture_gx_start(&gx,&machine,&cpu,"synthetic-gx",NULL,NULL));
     gx.scripted_input=scripted;gx.input_sent=true;pointer_active=true;
     u8* image=calloc(1,0x120);CHECK(image);
@@ -65,6 +66,8 @@ static int title_handoff_input(bool scripted) {
     CHECK(bootstrap_launch(&cpu,&machine,&gx,"synthetic-profile","synthetic-gx",NULL,NULL,NULL,NULL));
     CHECK(starts==old_starts+1 && stops==old_stops+1 && mounts==old_mounts+1);
     CHECK(cpu.pc==0x3400 && cpu.cycles==65536 && cpu.timebase==1234 && cpu.ram[0x3400]==0xa5);
+    CHECK(machine.exi.rtc.counter==0x12345678 && machine.exi.rtc.anchor_cycles==12345 &&
+        machine.exi.rtc.running==(scripted?1:0));
     CHECK(!machine.ios.launch_pending && !machine.ios.launch.image);
     CHECK(gx.scripted_input==scripted && !gx.input_sent);
     cpu.cycles+=16384;CHECK(wii_gx_tick(&gx));

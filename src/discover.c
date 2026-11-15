@@ -88,6 +88,7 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     const u64 gather_rejected=m->gx_cpu_gather_rejected;
     const u64 utc=m->ios.kd_utc,utc_cycles=m->ios.kd_utc_cycles;
     const bool utc_set=m->ios.kd_utc_set;
+    const GcnRtc rtc=m->exi.rtc;
     const bool scripted_input=gx->scripted_input;
     void (*sink)(void*,const u8*,u32)=m->dsp.output_sink;
     void* sink_user=m->dsp.output_user;const u32 rate=m->dsp.output_rate;
@@ -110,6 +111,7 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     bool ok=wii_native_ios_boot_memory(cpu,(u32)launch.ios) &&
         wii_dol_load(cpu,launch.image,launch.size,&entry);
     wii_machine_init(m,cpu);
+    m->exi.rtc=rtc;
 #ifdef RECOMP_LAUNCHER
     wii_host_session_bind(wii_package_standalone(package)?&m->ios:NULL);
 #endif
