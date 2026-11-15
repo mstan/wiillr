@@ -2,6 +2,7 @@
 #include <wiillr/package.h>
 #include <wiillr/menu_profile.h>
 #include "menu_profile_fixture.h"
+#include "nand_setup_fixture.h"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -19,8 +20,10 @@ static bool validate(const char* image,const char* nand,unsigned uid,unsigned gi
     if(reject) {write(fs::path(nand)/"fst.bin","temporary metadata");fs::create_directories(fs::path(nand)/"tmp");return false;}
     return uid==4107 && gid==12344 && read(image)=="supported boot";
 }
-static bool validate_menu(const char* image,const char*,unsigned uid,unsigned gid) {
-    ++validations;return uid==0 && gid==1 && read(image)=="supported Menu boot";
+static bool validate_menu(const char* image,const char* nand,unsigned uid,unsigned gid) {
+    ++validations;
+    if(reject){write(fs::path(nand)/"fst.bin","new-copy-only metadata");return false;}
+    return uid==4096 && gid==1 && fs::file_size(image)==260 && fs::path(nand).parent_path().filename()=="nand-imports";
 }
 static std::string config() {
     return "[Game]\nNand=seed/nand\nBoot=title/game/content/boot.app\nGraphics=gpu.bin\nDspRom=system/rom.bin\nDspCoef=system/coef.bin\nUid=4107\nGid=12344\nIos=37\n";
@@ -124,78 +127,36 @@ int main(int argc,char** argv) {
         require(!p && !fs::exists(fresh/"nand"),"LLE package cannot silently select resource-free HLE");
 #endif
         const auto menu=root.path/"Wii Menu package",menu_user=root.path/"Wii Menu player";
-        const std::string menu_config="[Game]\nName=Wii Menu\nNand=seed/nand\nBoot=title/00000001/00000002/content/00000000.app\nGraphics=gpu.bin\nDspRom=system/rom.bin\nDspCoef=system/coef.bin\nUid=0\nGid=1\nIos=4\n";
-        write(menu/"game.ini",menu_config);write(menu/"seed/nand/.wiillr-nand-profile","wiillr-copied-nand-v1\n");
-        write(menu/"seed/nand/title/00000001/00000002/content/00000000.app","supported Menu boot");
-        write(menu/"seed/nand/title/00000001/00000002/data/board", "synthetic Board data");
-        const auto source_sc=menu_profile_fixture();write(menu/"seed/nand/shared2/sys/SYSCONF",source_sc);
-        std::string source_network(7004,'\0');source_network[4]=1;source_network[8]=char(0x86);
-        source_network[34]=5;source_network[35]=char(0xdc);source_network.replace(1996,6,"wiillr");source_network[2029]=6;
-        write(menu/"seed/nand/shared2/sys/net/02/config.dat",source_network);
-        write(menu/"gpu.bin","library");write(menu/"system/rom.bin",std::string(8192,'R'));write(menu/"system/coef.bin",std::string(4096,'C'));
+        const std::string menu_config="[Game]\nName=Wii Menu\nNand=seed/nand\nBoot=title/00000001/00000002/content/00000098.app\nGraphics=gpu.bin\nDspRom=system/rom.bin\nDspCoef=system/coef.bin\nUid=4096\nGid=1\nIos=80\n";
+        write(menu/"game.ini",menu_config);write(menu/"gpu.bin","library");write(menu/"system/rom.bin",std::string(8192,'R'));write(menu/"system/coef.bin",std::string(4096,'C'));
         p=wii_package_open(menu.string().c_str(),menu_user.string().c_str(),validate_menu,error,sizeof error);require(p,error);
-        require(wii_package_menu(p) && !wii_package_standalone(p) &&
-            std::string(wii_package_name(menu.string().c_str()))=="Wii Menu","dedicated Menu package identity and prepared NAND mode");
-        auto expected_sc=source_sc;expected_sc[21]=1;expected_sc.replace(29,4,4,'\0');
-        require(read(menu_user/"nand/shared2/sys/SYSCONF")==expected_sc && read(menu/"seed/nand/shared2/sys/SYSCONF")==source_sc,
-            "only new copied Menu AR/CB values change; unknown entries/padding/source stay exact");
-        std::string expected_network(7004,'\0');expected_network[4]=2;expected_network[8]=char(0x87);expected_network[34]=5;expected_network[35]=char(0xdc);
-        require(read(menu_user/"nand/shared2/sys/net/02/config.dat")==expected_network &&
-            read(menu/"seed/nand/shared2/sys/net/02/config.dat")==source_network,"exact former generated Wi-Fi seed converts to wired on new copy only");
-        for(const auto* action:{"--launcher","--launcher-settings","--launcher-check"}) {
-            wii_package_arguments(p,"Wii Menu.exe",action,&count,&values);
-            const std::string wanted=std::string("--menu")+std::string(action+1);
-            require(count==17 && !values[count] && std::string(values[1])==wanted && std::string(values[16])=="4" &&
-                std::string(values[9])=="0" && std::string(values[10])=="1","Menu startup/settings/check action uses Menu identity");
+        require(wii_package_menu(p) && !wii_package_ready(p) && !fs::exists(menu_user/"nand"),"clean package reaches setup without system NAND");
+        wii_package_arguments(p,"Wii Menu.exe","--launcher",&count,&values);require(count==0 && !values,"pending setup cannot launch");
+        require(!wii_package_open(menu.string().c_str(),menu_user.string().c_str(),nullptr,error,sizeof error),"setup holds lifetime profile lease");
+        const auto console=root.path/"original console";nand_fixture::folder(console);WiiNandSetupInfo info{};
+        require(wii_package_import_system(p,console.string().c_str(),nullptr,&info,error,sizeof error),error);
+        require(wii_package_ready(p) && info.uid==4096 && info.ios_profile==80,"import binds validated installed identity");
+        const auto first=fs::path(wii_package_nand(p));require(first.parent_path()==menu_user/"nand-imports" && read(first/"shared2/sys/SYSCONF")==menu_profile_fixture(),"managed copy preserves console settings");
+        write(first/"title/00000001/00000002/data/native-save","first player progress");write(menu_user/"config.ini","explicit launcher settings");const auto selection=read(menu_user/".wiillr-active-nand");
+        reject=true;require(!wii_package_import_system(p,console.string().c_str(),nullptr,&info,error,sizeof error) && info.status==WII_NAND_SETUP_INVALID,"installed-title callback refusal blocks activation");reject=false;
+        require(wii_package_ready(p) && fs::path(wii_package_nand(p))==first && read(menu_user/".wiillr-active-nand")==selection,"callback failure preserves old system selection");
+        const auto unsupported=root.path/"unsupported source";nand_fixture::folder(unsupported);auto t=nand_fixture::files().at("title/00000001/00000002/content/title.tmd");nand_fixture::put(t,0x1dc,1,2);nand_fixture::write(unsupported/"title/00000001/00000002/content/title.tmd",t);
+        require(!wii_package_import_system(p,unsupported.string().c_str(),nullptr,&info,error,sizeof error) && info.status==WII_NAND_SETUP_UNSUPPORTED,"unsupported system refuses");
+        require(wii_package_ready(p) && fs::path(wii_package_nand(p))==first && read(menu_user/".wiillr-active-nand")==selection,"failed import preserves prior active profile");
+        require(wii_package_import_system(p,console.string().c_str(),nullptr,&info,error,sizeof error),error);const auto second=fs::path(wii_package_nand(p));
+        require(first!=second && read(first/"title/00000001/00000002/data/native-save")=="first player progress","second import never replaces or merges progress");
+        for(const char* action:{"--launcher","--launcher-settings","--launcher-check"}){wii_package_arguments(p,"Wii Menu.exe",action,&count,&values);require(count==17 && !values[count] && std::string(values[1])==std::string("--menu")+std::string(action+1) && std::string(values[16])=="80" && fs::path(values[2])==second/"title/00000001/00000002/content/00000000.app","actual installed boot path and Menu action");}
+        wii_package_close(p);p=wii_package_open(menu.string().c_str(),menu_user.string().c_str(),nullptr,error,sizeof error);require(p,error);
+        require(wii_package_ready(p) && fs::path(wii_package_nand(p))==second && read(menu_user/"config.ini")=="explicit launcher settings","active selection persists");
+        fs::remove(menu_user/".wiillr-active-nand");fs::create_directory(menu_user/".wiillr-active-nand");
+        require(!wii_package_import_system(p,console.string().c_str(),nullptr,&info,error,sizeof error) && fs::path(wii_package_nand(p))==second && wii_package_ready(p),"selection publication failure preserves old active boot");wii_package_close(p);
+        for(auto bad:{std::string(menu_config).replace(menu_config.find("Name=Wii Menu"),13,"Name=Unknown"),std::string(menu_config).replace(menu_config.find("Ios=80"),6,"Ios=37"),std::string(menu_config).replace(menu_config.find("Nand=seed/nand"),14,"Import=wad")}) {
+            write(menu/"game.ini",bad);p=wii_package_open(menu.string().c_str(),(root.path/"invalid Menu profile").string().c_str(),nullptr,error,sizeof error);
+            require(!p && !fs::exists(root.path/"invalid Menu profile/nand"),"invalid package identity refuses before system creation");
         }
-        const unsigned before_blocked=validations;
-        auto* blocked=wii_package_open(menu.string().c_str(),menu_user.string().c_str(),validate_menu,error,sizeof error);
-        require(!blocked && validations==before_blocked &&
-            read(menu_user/"nand/shared2/sys/SYSCONF")==expected_sc &&
-            read(menu_user/"nand/title/00000001/00000002/data/board")=="synthetic Board data",
-            "second Menu package open refuses before profile validation or writes");
-        wii_package_close(p);
-        p=wii_package_open(menu.string().c_str(),menu_user.string().c_str(),validate_menu,error,sizeof error);
-        require(p && fs::file_size(menu_user/".wiillr-menu-profile.lock")==0,"closing first package releases its profile lease");wii_package_close(p);
-        write(menu_user/"config.ini","explicit Menu settings");
-        write(menu_user/"nand/shared2/sys/SYSCONF",source_sc);
-        auto custom_network=source_network;custom_network[100]=9;write(menu_user/"nand/shared2/sys/net/02/config.dat",custom_network);
-        write(menu_user/"nand/title/00000001/00000002/data/board","player Board data");
-        auto menu80=menu_config;menu80.replace(menu80.find("Ios=4"),5,"Ios=80");write(menu/"game.ini",menu80);
-        p=wii_package_open(menu.string().c_str(),menu_user.string().c_str(),validate_menu,error,sizeof error);require(p,error);
-        wii_package_arguments(p,"Wii Menu.exe","--menu-launcher-check",&count,&values);
-        require(std::string(values[1])=="--menu-launcher-check" && std::string(values[16])=="80" &&
-            read(menu_user/"config.ini")=="explicit Menu settings" &&
-            read(menu_user/"nand/shared2/sys/SYSCONF")==source_sc &&
-            read(menu_user/"nand/shared2/sys/net/02/config.dat")==custom_network &&
-            read(menu_user/"nand/title/00000001/00000002/data/board")=="player Board data",
-            "IOS80 package retains existing Menu settings and Board data");wii_package_close(p);
-        for(auto bad:{std::string(menu_config).replace(menu_config.find("Name=Wii Menu"),13,"Name=Unknown"),
-                      std::string(menu_config).replace(menu_config.find("Ios=4"),5,"Ios=37"),
-                      std::string(menu_config).replace(menu_config.find("Nand=seed/nand"),14,"Import=wad")}) {
-            write(menu/"game.ini",bad);p=wii_package_open(menu.string().c_str(),(root.path/"invalid Menu profile").string().c_str(),validate_menu,error,sizeof error);
-            require(!p && !fs::exists(root.path/"invalid Menu profile/nand"),"unknown names/unsupported Menu IOS/WAD import refuse before profile creation");
-        }
-        write(menu/"game.ini",menu_config);write(menu/"seed/nand/shared2/sys/net/02/config.dat",custom_network);
-        const auto custom_user=root.path/"custom Menu seed";
-        p=wii_package_open(menu.string().c_str(),custom_user.string().c_str(),validate_menu,error,sizeof error);require(p,error);wii_package_close(p);
-        require(read(custom_user/"nand/shared2/sys/net/02/config.dat")==custom_network,"custom template connection is preserved on fresh copy");
-        auto invalid_sc=source_sc;invalid_sc[22]=0x65;const auto before_sc=invalid_sc;
-        require(!wii_menu_profile_seed(reinterpret_cast<uint8_t*>(invalid_sc.data()),invalid_sc.size()) && invalid_sc==before_sc,"wrong CB type refuses without mutation");
-        write(menu/"seed/nand/shared2/sys/SYSCONF",invalid_sc);
-        const auto unsupported_user=root.path/"unsupported Menu seed";
-        p=wii_package_open(menu.string().c_str(),unsupported_user.string().c_str(),validate_menu,error,sizeof error);
-        require(!p && !fs::exists(unsupported_user/"nand"),"unsupported settings never publish a partial Menu profile");
-        const auto linked_user=root.path/"linked Menu lease";fs::create_directory(linked_user);
-        write(menu/"seed/nand/shared2/sys/SYSCONF",source_sc);
-        const auto lease_target=root.path/"unrelated lease content";write(lease_target,"");
+        write(menu/"game.ini",menu_config);const auto linked_user=root.path/"linked Menu lease",lease_target=root.path/"unrelated lease";fs::create_directory(linked_user);write(lease_target,"");
         std::error_code link_error;fs::create_symlink(lease_target,linked_user/".wiillr-menu-profile.lock",link_error);
-        if(!link_error) {
-            p=wii_package_open(menu.string().c_str(),linked_user.string().c_str(),validate_menu,error,sizeof error);
-            require(!p && !fs::exists(linked_user/"nand") && fs::file_size(lease_target)==0 &&
-                std::string(error).find("Linked")!=std::string::npos,"linked lease refuses without following or changing it");
-            fs::remove(linked_user/".wiillr-menu-profile.lock");
-        }
+        if(!link_error){p=wii_package_open(menu.string().c_str(),linked_user.string().c_str(),nullptr,error,sizeof error);require(!p && !fs::exists(linked_user/"nand") && fs::file_size(lease_target)==0,"linked lease refuses without following it");fs::remove(linked_user/".wiillr-menu-profile.lock");}
         std::cout<<"Package import, relocation, validation, persistence and no-dump contracts passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

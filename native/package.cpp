@@ -26,8 +26,9 @@
 #endif
 namespace fs=std::filesystem;
 struct WiiPackage {
-    std::string boot,nand,rom,coef,graphics,data,cache,log,uid,gid,ios;
-    bool standalone{},menu{};
+    std::string boot,nand,rom,coef,graphics,data,cache,log,uid,gid,ios,user;
+    bool standalone{},menu{},ready{};
+    WiiPackageValidate validate{};
 #ifdef _WIN32
     HANDLE menu_lock=INVALID_HANDLE_VALUE;
     ~WiiPackage(){if(menu_lock!=INVALID_HANDLE_VALUE)CloseHandle(menu_lock);}
@@ -89,10 +90,40 @@ std::map<std::string,std::string> read_config(const fs::path& path) {
     need(result.size()==8+(result.contains("Name")?1:0),"Unknown package launch setting");return result;
 }
 fs::path relative(const std::string& text) {
-    fs::path path(text);need(!path.empty() && !path.has_root_path(),"Package paths must be relative");
+    fs::path path=fs::u8path(text);need(!path.empty() && !path.has_root_path(),"Package paths must be relative");
     for(const auto& part:path)need(part!=".." && part!=".","Invalid package path component");
     return path;
 }
+std::string utf8(const fs::path& path) {const auto text=path.generic_u8string();return {text.begin(),text.end()};}
+fs::path active_profile(const fs::path& user) {
+    const auto selection=user/".wiillr-active-nand";
+    if(!fs::exists(selection))return user/"nand";
+    need(!linked(selection) && fs::is_regular_file(selection) && fs::file_size(selection)<512,"Invalid active system profile selection");
+    std::ifstream input(selection,std::ios::binary);std::string magic,name,extra;
+    need(bool(std::getline(input,magic)) && magic=="wiillr-active-nand-v1" && bool(std::getline(input,name)) && !std::getline(input,extra),"Invalid active system profile selection");
+    const auto child=relative(name);need(child.begin()->generic_string()=="nand-imports","Unsupported active system profile");
+    auto path=user;for(const auto& part:child){path/=part;need(!linked(path),"Linked active system profile is unsupported");}
+    need(fs::is_directory(path),"The selected system profile is missing");return path;
+}
+void select_profile(const fs::path& user,const fs::path& profile) {
+    const auto selection=user/".wiillr-active-nand",temporary=user/(".wiillr-active-nand-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    need(!linked(selection) && !fs::exists(temporary),"The system profile selection cannot be saved");
+    const auto text="wiillr-active-nand-v1\n"+utf8(profile.lexically_relative(user))+"\n";
+    try {
+        {std::ofstream out(temporary,std::ios::binary);out.write(text.data(),text.size());out.close();need(!out.fail(),"Cannot save the system profile selection");}
+#ifdef _WIN32
+        need(MoveFileExW(temporary.c_str(),selection.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0,"Cannot publish the system profile selection");
+#else
+        fs::rename(temporary,selection);
+#endif
+    }catch(...){std::error_code ignored;fs::remove(temporary,ignored);throw;}
+}
+struct SystemBinding {
+    std::string nand,boot,uid,gid,ios;
+    SystemBinding(const fs::path& root,const WiiNandSetupInfo& info):nand(utf8(root)),boot(utf8(root/fs::u8path(info.boot_relative))),uid(std::to_string(info.uid)),gid(std::to_string(info.gid)),ios(std::to_string(info.ios_profile)){}
+    void apply(WiiPackage& p) noexcept {p.nand.swap(nand);p.boot.swap(boot);p.uid.swap(uid);p.gid.swap(gid);p.ios.swap(ios);p.ready=true;}
+};
+void bind_system(WiiPackage& p,const fs::path& root,const WiiNandSetupInfo& info){SystemBinding(root,info).apply(p);}
 fs::path resource(const fs::path& base,const std::string& text) {
     fs::path path=base;
     for(const auto& part:relative(text)) {path/=part;need(!linked(path),"Linked package resources are unsupported");}
@@ -271,7 +302,7 @@ void seed_profile(const fs::path& source,const fs::path& destination,const fs::p
 extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_text,WiiPackageValidate validate,char* error,size_t capacity) {
     try {
         need(base_text && *base_text && user_text && *user_text,"Missing package or user directory");
-        const auto base=fs::canonical(base_text);const auto config=read_config(base/"game.ini");
+        const auto base=fs::canonical(fs::u8path(base_text));const auto config=read_config(base/"game.ini");
         auto package=std::make_unique<WiiPackage>();
         package->menu=config.contains("Name") && config.at("Name")=="Wii Menu";
         const auto uid=number(config.at("Uid"),0xffffffffu),gid=number(config.at("Gid"),0xffffu);
@@ -282,8 +313,12 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
         need(!package->menu || !importing,"The Wii Menu package requires its prepared console data");
         package->standalone=importing;
         const auto boot=relative(config.at("Boot"));
-        const auto source=importing?fs::path{}:resource(base,config.at("Nand"));
-        if(!importing)need(fs::is_directory(source) && marked(source) && fs::is_regular_file(resource(source,config.at("Boot"))),"The package needs its prepared game data");
+        fs::path source;
+        if(!importing) {
+            source=base/relative(config.at("Nand"));
+            if(!package->menu || fs::exists(source))source=resource(base,config.at("Nand"));
+            if(!package->menu)need(fs::is_directory(source) && marked(source) && fs::is_regular_file(resource(source,config.at("Boot"))),"The package needs its prepared game data");
+        }
         const bool hle=config.at("DspRom")=="hle" && config.at("DspCoef")=="hle";
         need(!hle || WIILLR_PACKAGE_DSP_HLE,"This build requires original DSP files");
         const auto rom=hle?fs::path{}:resource(base,config.at("DspRom")),coef=hle?fs::path{}:resource(base,config.at("DspCoef"));
@@ -291,11 +326,11 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
         need(fs::is_regular_file(graphics) && fs::file_size(graphics)>0 &&
              (hle || (fs::is_regular_file(rom) && fs::file_size(rom)==8192 &&
              fs::is_regular_file(coef) && fs::file_size(coef)==4096)),"Incomplete graphics or audio files in the package");
-        const auto user=fs::absolute(user_text).lexically_normal();
-        const auto profile=user/"nand";
-        if(!importing) {
+        const auto user=fs::absolute(fs::u8path(user_text)).lexically_normal();
+        for(auto p=user;;p=p.parent_path()){need(!linked(p),"Linked user storage is unsupported");if(p==p.root_path())break;}
+        if(!importing && fs::exists(source)) {
             need(!within(fs::weakly_canonical(user),fs::canonical(source)),"User storage cannot be inside the packaged game data");
-            const auto target=fs::weakly_canonical(profile),origin=fs::canonical(source);
+            const auto target=fs::weakly_canonical(user/"nand"),origin=fs::canonical(source);
             need(!within(target,origin) && !within(origin,target),"Packaged game data cannot be the writable profile");
         }
         fs::create_directories(user);
@@ -303,19 +338,36 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
         // Menu-package profile through UI, execution and title handoffs.
         // The OS releases it on close/crash; a harmless empty file may remain.
         if(package->menu)lock_menu_profile(*package,user);
+        const auto profile=package->menu?active_profile(user):user/"nand";
+        package->user=utf8(user);package->validate=validate;
+        package->nand=utf8(profile);package->rom=hle?"@hle":utf8(rom);package->coef=hle?"@hle":utf8(coef);
+        package->graphics=utf8(graphics);package->data=utf8(user/"data");package->cache=utf8(user/"cache");package->log=utf8(user/"game.log");
+        fs::create_directories(user/"data");fs::create_directories(user/"cache");
+        if(package->menu) {
+            // Original console data is never required in a distributed archive.
+            // An optional prepared seed uses the same complete importer as setup,
+            // with no SYSCONF/network rewrite or merge into an existing profile.
+            WiiNandSetupInfo info{};char detail[1024]{};
+            if(!fs::exists(profile) && fs::is_directory(source)) {
+                const auto input=utf8(source),output=utf8(profile);
+                wii_nand_setup_import(input.c_str(),nullptr,output.c_str(),&info,detail,sizeof detail);
+            }
+            wii_package_refresh(package.get(),&info,detail,sizeof detail);
+            if(error && capacity)*error=0;return package.release();
+        }
         if(importing){fresh_profile(profile);package->uid=std::to_string(profile_uid(profile));}
         else seed_profile(source,profile,boot,uid,gid,validate,package->menu);
         const auto image=profile/boot;
         if(fs::exists(image))need(fs::is_regular_file(resource(profile,config.at("Boot"))),"The installed game boot file is invalid");
         else need(importing,"The installed game boot file is missing");
-        fs::create_directories(user/"data");fs::create_directories(user/"cache");
-        package->boot=image.string();package->nand=profile.string();package->rom=hle?"@hle":rom.string();package->coef=hle?"@hle":coef.string();
-        package->graphics=graphics.string();package->data=(user/"data").string();package->cache=(user/"cache").string();package->log=(user/"game.log").string();
+        package->boot=utf8(image);package->ready=fs::is_regular_file(image);
         if(error && capacity)*error=0;return package.release();
     } catch(const std::exception& e) {if(error && capacity)std::snprintf(error,capacity,"%s",e.what());return nullptr;}
 }
 extern "C" void wii_package_close(WiiPackage* package){delete package;}
 extern "C" void wii_package_arguments(WiiPackage* p,const char* executable,const char* action,int* argc,char*** argv) {
+    if(!argc || !argv)return;
+    *argc=0;*argv=nullptr;if(!p || (p->menu && !p->ready))return;
     std::string selected_action=action;
     if(p->menu) {
         if(selected_action=="--launcher")selected_action="--menu-launcher";
@@ -326,6 +378,40 @@ extern "C" void wii_package_arguments(WiiPackage* p,const char* executable,const
         "--gx",p->graphics,p->data,p->cache,"--ios-profile",p->ios,""};
     for(unsigned n=0;n<17;++n)p->argv[n]=p->values[n].data();p->argv[17]=nullptr;
     *argc=17;*argv=p->argv.data();
+}
+extern "C" bool wii_package_ready(const WiiPackage* p){return p && p->ready;}
+extern "C" const char* wii_package_nand(const WiiPackage* p){return p?p->nand.c_str():"";}
+extern "C" bool wii_package_refresh(WiiPackage* p,WiiNandSetupInfo* info,char* error,size_t capacity) {
+    WiiNandSetupInfo out{};
+    try {
+    if(!p || !p->menu){out.status=WII_NAND_SETUP_INVALID;if(error && capacity)std::snprintf(error,capacity,"System setup requires a Wii Menu package");if(info)*info=out;return false;}
+    const auto status=wii_nand_setup_inspect(p->nand.c_str(),nullptr,&out,error,capacity);
+    if(info)*info=out;
+    if(status!=WII_NAND_SETUP_READY){p->ready=false;return false;}
+    if(!marked(fs::u8path(p->nand))) {
+        p->ready=false;out.ready=false;out.status=WII_NAND_SETUP_INVALID;
+        std::snprintf(out.details,sizeof out.details,"Import this system into a managed profile before launching");
+        if(error && capacity)std::snprintf(error,capacity,"%s",out.details);if(info)*info=out;return false;
+    }
+    bind_system(*p,fs::u8path(p->nand),out);return true;
+    }catch(const std::exception& e){if(p)p->ready=false;out.ready=false;out.status=WII_NAND_SETUP_IO_ERROR;std::snprintf(out.details,sizeof out.details,"%s",e.what());if(info)*info=out;if(error && capacity)std::snprintf(error,capacity,"%s",e.what());return false;}
+}
+extern "C" bool wii_package_import_system(WiiPackage* p,const char* source,const char* keys,WiiNandSetupInfo* info,char* error,size_t capacity) {
+    WiiNandSetupInfo out{};
+    try {
+        need(p && p->menu,"System setup requires a Wii Menu package");
+        const auto user=fs::u8path(p->user),imports=user/"nand-imports";
+        need(!linked(imports),"Linked system profile storage is unsupported");fs::create_directories(imports);
+        const auto target=imports/("import-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto destination=utf8(target);
+        if(wii_nand_setup_import(source,keys,destination.c_str(),&out,error,capacity)!=WII_NAND_SETUP_READY){if(info)*info=out;return false;}
+        if(p->validate) {
+            const auto image=utf8(target/fs::u8path(out.boot_relative));out.status=WII_NAND_SETUP_INVALID;
+            need(p->validate(image.c_str(),destination.c_str(),out.uid,out.gid),"Imported system did not pass the installed-title checks; the previous system remains selected");
+        }
+        SystemBinding binding(target,out);out.status=WII_NAND_SETUP_IO_ERROR;
+        select_profile(user,target);out.status=WII_NAND_SETUP_READY;binding.apply(*p);if(info)*info=out;return true;
+    }catch(const std::exception& e){out.ready=false;if(out.status==WII_NAND_SETUP_READY)out.status=WII_NAND_SETUP_IO_ERROR;std::snprintf(out.details,sizeof out.details,"%s",e.what());if(info)*info=out;if(error && capacity)std::snprintf(error,capacity,"%s",e.what());return false;}
 }
 extern "C" const char* wii_package_log(WiiPackage* p){return p->log.c_str();}
 extern "C" bool wii_package_standalone(WiiPackage* p){return p && p->standalone;}

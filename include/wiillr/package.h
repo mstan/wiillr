@@ -3,6 +3,7 @@
 #define WIILLR_PACKAGE_H
 #include <stddef.h>
 #include <stdbool.h>
+#include "wiillr/nand_setup.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -17,6 +18,15 @@ WiiPackage* wii_package_open(const char* base,const char* user,WiiPackageValidat
 /* Package identity is independent of the installed game's mutable settings. */
 const char* wii_package_name(const char* base);
 bool wii_package_menu(WiiPackage*);
+/* A clean Menu package is openable before system import. Pending packages
+ * cannot yield guest arguments. Refresh validates without changing settings. */
+bool wii_package_ready(const WiiPackage*);
+const char* wii_package_nand(const WiiPackage*);
+bool wii_package_refresh(WiiPackage*,WiiNandSetupInfo*,char* error,size_t capacity);
+/* Always imports to a new managed profile, then atomically selects it. Existing
+ * NAND, native progress and the previous selection survive any failure. */
+bool wii_package_import_system(WiiPackage*,const char* source,const char* keys,
+    WiiNandSetupInfo*,char* error,size_t capacity);
 void wii_package_close(WiiPackage*);
 void wii_package_arguments(WiiPackage*,const char* executable,const char* action,int* argc,char*** argv);
 const char* wii_package_log(WiiPackage*);
