@@ -203,7 +203,8 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     WII_MMIO_CASE(EXI)
     if (physical >= 0x0d006800u && physical + width <= 0x0d006800u + GCN_EXI_REGISTER_BYTES &&
         width == 4 && !(address & 3)) {
-        gcn_exi_write(&m->exi, cpu, GCN_EXI_BASE + physical - 0x0d006800u, (u32)value, width);
+        gcn_exi_write_clock(&m->exi, cpu, GCN_EXI_BASE + physical - 0x0d006800u,
+                            (u32)value, width, GCN_RTC_WII_CORE_CLOCK_HZ);
         return;
     }
     WII_MMIO_CASE(AI)
