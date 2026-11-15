@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 namespace {
@@ -19,8 +20,46 @@ uint64_t create(const GcWiiNativeMesh* m){require(m && m->vertex_count==4 && m->
 int destroy(uint64_t h){require(h>0,"Final-screen mesh identity");++destroyed;return 1;}
 int draw(const GcWiiNativeDraw* d){last=*d;if(fail)return 0;++draws;return 1;}
 void status(GcWiiNativeRenderStatus*){}
+void view_projection_contract() {
+    GcWiiNativeDraw camera{};
+    camera.model_view[0]=camera.model_view[5]=camera.model_view[10]=1;
+    camera.projection[5]=1.f/240;camera.projection[10]=-0.001f;
+    camera.projection[11]=-1;camera.projection[15]=1;
+    camera.x=12;camera.width=640;camera.height=480;camera.far_depth=1;
+    camera.clip_x=3;camera.clip_width=637;camera.clip_height=480;
+    camera.material.flags=GC_WII_NATIVE_BLEND;
+    const auto original=camera;
+    for(const float guest_half:{320.f,416.f}) {
+        require(wii_mm9_screen_view_projection(&camera,320,-guest_half,guest_half,0),
+                "Original guest camera is admitted");
+        require(camera.projection[0]==1/guest_half && camera.projection[3]==0,
+                "Original view retains the guest 4:3 or anamorphic-wide camera");
+        require(wii_mm9_screen_view_projection(&camera,320,-guest_half,guest_half,1),
+                "Enhanced native camera is admitted for either Wii aspect");
+        // The real final-screen rectangle spans [-320,320]. Its transformed
+        // edges must meet the presentation ABI's 256-pixel center and margins.
+        require(camera.projection[0]*-320+camera.projection[3]==-1 &&
+                camera.projection[0]*320+camera.projection[3]==1,
+                "Enhanced center and margins meet under both guest Wii aspect modes");
+        auto untouched=camera;untouched.projection[0]=untouched.projection[3]=0;
+        require(!std::memcmp(&untouched,&original,sizeof original),
+                "Host view preserves vertical/depth projection, pose, viewport, clip and material");
+    }
+    const auto valid=camera;
+    for(const float invalid:{0.f,-1.f,std::numeric_limits<float>::infinity(),
+                             std::numeric_limits<float>::quiet_NaN()})
+        require(!wii_mm9_screen_view_projection(&camera,invalid,-416,416,1) &&
+                !std::memcmp(&camera,&valid,sizeof valid),"Invalid original width is atomic");
+    require(!wii_mm9_screen_view_projection(&camera,320,416,-416,1) &&
+            !std::memcmp(&camera,&valid,sizeof valid),"Reversed guest camera is atomic");
+    require(!wii_mm9_screen_view_projection(&camera,320,-416,
+            std::numeric_limits<float>::infinity(),1) &&
+            !std::memcmp(&camera,&valid,sizeof valid),"Nonfinite guest camera is atomic");
+    require(!wii_mm9_screen_view_projection(nullptr,320,-416,416,1),"Missing camera is rejected");
+}
 }
 int main(){try {
+    view_projection_contract();
     p32(object,0x100);p32(object+8,(4u<<20)|(239u<<10)|255);p32(object+12,0x39b2c0>>5);
     p16(object+0x20,10);p16(object+0x22,20);p16(object+0x24,641);p16(object+0x26,481);pf(object+0x2c,1);pf(object+0x34,1);ram[(object&0x1fffffff)+0x38]=3;
     GcWiiNativeDraw camera{};camera.projection[0]=camera.projection[5]=camera.projection[10]=camera.projection[15]=1;camera.model_view[0]=camera.model_view[5]=camera.model_view[10]=1;

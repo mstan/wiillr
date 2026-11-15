@@ -54,6 +54,16 @@ WiiMm9Screen prepare(const Reader& r,uint32_t object,uint32_t level,const GcWiiN
     return out;
 }
 }
+extern "C" int wii_mm9_screen_view_projection(GcWiiNativeDraw* camera,
+    float original_half_width,float guest_left,float guest_right,int enhanced_view) {
+    if(!camera || !std::isfinite(original_half_width) || !(original_half_width>0) ||
+       !std::isfinite(guest_left) || !std::isfinite(guest_right) || !(guest_right>guest_left))return 0;
+    const float left=enhanced_view?-original_half_width:guest_left;
+    const float right=enhanced_view?original_half_width:guest_right;
+    const float scale=2/(right-left),offset=-(right+left)/(right-left);
+    if(!std::isfinite(scale) || !std::isfinite(offset) || !(scale>0))return 0;
+    camera->projection[0]=scale;camera->projection[3]=offset;return 1;
+}
 extern "C" int wii_mm9_screen_prepare(WiiMm9Memory memory,uint32_t object,uint32_t level,const GcWiiNativeDraw* camera,WiiMm9Screen* output,char* error,uint32_t size) {
     if(!memory.read || !camera || !output){message(error,size,"Missing MM9 screen input");return 0;}
     try{const auto screen=prepare({memory},object,level,*camera);*output=screen;message(error,size,"");return 1;}catch(const std::exception& e){message(error,size,e.what());return 0;}
