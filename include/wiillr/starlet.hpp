@@ -54,7 +54,9 @@ public:
     void coproc_cdp(uint32_t,uint32_t,uint32_t,uint32_t,uint32_t) override;
     armv4t::CPUState cpu{};
 private:
-    uint8_t* physical(uint32_t,uint32_t);
+    uint8_t* physical(uint32_t,uint32_t,uint32_t* canonical=nullptr,bool* sram=nullptr);
+    uint8_t* dma_physical(uint32_t,uint32_t,uint32_t sram_permission);
+    void stored(uint32_t,uint32_t);
     void check_alignment(uint32_t,uint32_t);
     uint32_t translate(uint32_t,bool writing);
     void exception(armv4t::Mode mode,uint32_t vector,uint32_t link);
@@ -63,20 +65,28 @@ private:
     NandController::Bus nand_bus() {
         return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
             auto& m=*static_cast<Starlet*>(user);
-            return address>=0xffff0000u?nullptr:m.physical(address,size);
+            return m.dma_physical(address,size,4); /* FLAEN */
         },[](void* user,uint32_t address,uint32_t size) {
             auto& m=*static_cast<Starlet*>(user);
-            if(m.store_observer_)m.store_observer_(m.store_user_,address,size);
+            m.stored(address,size);
         }};
     }
     Sha1Engine::Bus sha_bus() {
         return {this,[](void* user,uint32_t address,uint32_t size)->const uint8_t* {
             auto& m=*static_cast<Starlet*>(user);
-            return address>=0xffff0000u?nullptr:m.physical(address,size);
+            return m.dma_physical(address,size,2); /* SHAEN */
         }};
     }
-    AesEngine::Bus aes_bus() {const auto b=nand_bus();return {b.user,b.map,b.stored};}
-    OhciInit::Bus ohci_bus() {const auto b=nand_bus();return {b.user,b.map,b.stored};}
+    AesEngine::Bus aes_bus() {
+        const auto b=nand_bus();return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
+            return static_cast<Starlet*>(user)->dma_physical(address,size,1); /* AESEN */
+        },b.stored};
+    }
+    OhciInit::Bus ohci_bus() {
+        const auto b=nand_bus();return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
+            return static_cast<Starlet*>(user)->dma_physical(address,size,0); /* USB remains RAM-only. */
+        },b.stored};
+    }
     /* Starlet's high exception vectors are selected on entry (ARM926
      * VINITHI/SCTLR.V). The original IOS startup preserves that V bit. */
     uint32_t sctl_=0x000520f8u,ttbr_=0,dacr_=0,dfsr_=0,far_=0,fcse_=0;
@@ -96,6 +106,10 @@ private:
     uint32_t alarm_=0;
     uint32_t debug_irq_enable_=0;
     uint32_t ahb_protection_=0;
+    /* Selected IOS-entry profile, NOT power-on state: HW1.1, BOOT0 off,
+     * SM1, AES/SHA/NAND SRAM visible, PPC/USB SRAM disabled. The qualified
+     * ARM view uses the BOOT0-disabled/SM-set map in WiiBrew Main Memory. */
+    uint32_t sram_visibility_=0x27;
     uint32_t otp_command_=0;
     std::array<uint8_t,128> otp_{};
     bool otp_loaded_=false;
@@ -122,7 +136,10 @@ private:
     WiiHollywood owned_hollywood_{};
     WiiHollywood* hollywood_=&owned_hollywood_;
     uint16_t protect_enabled_=0,protect_start_=0,protect_end_=0;
+    uint16_t register_protection_=0;
+    bool register_protection_known_=false; /* No invented reset readback. */
     std::span<uint8_t> mem1_,mem2_;
     std::array<uint8_t,0x10000> sram_{};
+    std::array<uint8_t,0x8000> sram_b_{};
 };
 }

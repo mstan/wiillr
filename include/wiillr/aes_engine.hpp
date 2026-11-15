@@ -53,8 +53,12 @@ public:
         if(source_end>0x100000000ull || destination_end>0x100000000ull || !bus.map)
             throw std::runtime_error("Starlet AES DMA outside physical RAM");
         const auto* input=bus.map(bus.user,source_,size);
-        if(!input || !bus.map(bus.user,destination_,size))throw std::runtime_error("Starlet AES DMA outside physical RAM");
-        if(source_!=destination_ && uint64_t(source_)<destination_end && uint64_t(destination_)<source_end)
+        auto* output=bus.map(bus.user,destination_,size);
+        if(!input || !output)throw std::runtime_error("Starlet AES DMA outside physical RAM");
+        /* Distinct bus aliases can name the same SRAM bytes. Admit exact
+         * in-place operation, but detect partial overlap by actual backing. */
+        const auto source_pointer=reinterpret_cast<uintptr_t>(input),destination_pointer=reinterpret_cast<uintptr_t>(output);
+        if(input!=output && (source_pointer>destination_pointer?source_pointer-destination_pointer:destination_pointer-source_pointer)<size)
             throw std::runtime_error("Starlet unsupported partially overlapping AES DMA");
         if(cycles>std::numeric_limits<uint64_t>::max()-blocks*block_cycles)
             throw std::runtime_error("Starlet AES completion cycle overflow");

@@ -12,6 +12,79 @@ static bool faults(auto&& operation) {
 int main() {
     std::vector<uint8_t> mem1(0x1800000),mem2(0x4000000);
     {
+        /* Selected IOS-entry profile: BOOT0 disabled, SM1, independent A64/B32.
+         * This is not a claimed power-on register value or boot0 image. */
+        wiillr::Starlet sram(mem1,mem2);std::vector<std::pair<uint32_t,uint32_t>> stores;
+        sram.observe_stores([](void* p,uint32_t at,uint32_t size){static_cast<std::vector<std::pair<uint32_t,uint32_t>>*>(p)->emplace_back(at,size);},&stores);
+        CHECK(sram.read32(0x0d800060)==0x27);
+        sram.write32(0x0d418888,0x11223344);sram.write32(0xfff01234,0xaabbccdd);
+        CHECK(stores.size()==2 && stores[0]==std::make_pair(0xffff8888u,4u) && stores[1]==std::make_pair(0xfffe1234u,4u));
+        for(unsigned i=0;i<8;++i) {
+            CHECK(sram.read32(0xfff00000u+i*0x20000u+0x18888)==0x11223344);
+            CHECK(sram.read32(0xfff00000u+i*0x20000u+0x1234)==0xaabbccdd);
+        }
+        CHECK(sram.read32(0x0d401234)==0xaabbccdd && sram.read32(0xffff1234)==0);
+        sram.write8(0xfffe7fff,0x6d);CHECK(sram.read8(0x0d407fff)==0x6d);
+        stores.clear();
+        for(uint32_t hole:{0x0d408000u,0x0d40fffcu,0xfffe8000u,0xfffefffcu,0xfff08000u}) {
+            CHECK(faults([&]{sram.read32(hole);}));CHECK(faults([&]{sram.write32(hole,0);}));
+        }
+        CHECK(faults([&]{sram.write16(0xffffffff,0);}));CHECK(stores.empty());
+        const auto resets=sram.read32(0x0d800194);
+        sram.write32(0x0d800060,0x2f);CHECK(sram.read32(0x0d800060)==0x2f && sram.read32(0xffff8888)==0x11223344);
+        sram.write32(0x0d800060,0x27);CHECK(sram.read32(0x0d800060)==0x27);
+        for(uint32_t unsupported:{0x7u,0x26u,0x25u,0x23u,0x37u,0xa7u})CHECK(faults([&]{sram.write32(0x0d800060,unsupported);}));
+        CHECK(sram.read32(0x0d800060)==0x27 && faults([&]{sram.write32(0x0d800194,resets|0x30);}));
+        CHECK(sram.read32(0x0d800194)==resets && faults([&]{sram.read16(0x0d8b4202);}));
+        sram.write16(0x0d8b4202,1);CHECK(sram.read16(0x0d8b4202)==1);
+        sram.write16(0x0d8b4202,0);CHECK(sram.read16(0x0d8b4202)==0);
+        CHECK(faults([&]{sram.write16(0x0d8b4202,2);}));CHECK(sram.read16(0x0d8b4202)==0);
+        CHECK(faults([&]{sram.write32(0x0d8b4200,1);}));CHECK(faults([&]{sram.read32(0x0d8b4200);}));
+        CHECK(faults([&]{sram.write8(0x0d8b4202,1);}));CHECK(faults([&]{sram.read8(0x0d8b4202);}));
+        CHECK(faults([&]{sram.write16(0x0d800060,0);}));CHECK(faults([&]{sram.read16(0x0d800060);}));
+        CHECK(stores.empty() && !sram.ipc().arm_flags && !sram.ipc().ppc_flags && !sram.ipc().x && !sram.ipc().y);
+    }
+    {
+        wiillr::Starlet dma(mem1,mem2);std::vector<std::pair<uint32_t,uint32_t>> stores;
+        dma.observe_stores([](void* p,uint32_t at,uint32_t size){static_cast<std::vector<std::pair<uint32_t,uint32_t>>*>(p)->emplace_back(at,size);},&stores);
+        for(uint32_t word:{0x00010203u,0x04050607u,0x08090a0bu,0x0c0d0e0fu})dma.write32(0x0d02000c,word);
+        for(unsigned i=0;i<4;++i){dma.write32(0x0d020010,0);dma.write32(0x0d411000+i*4,0x00112233u+i*0x44444444u);}
+        stores.clear();dma.write32(0x0d020004,0xfff11000);dma.write32(0x0d020008,0x0d411010);
+        CHECK(faults([&]{dma.write32(0x0d020000,0xd0000003);}));CHECK(stores.empty() && dma.read32(0xffff1000)==0x00112233);
+        dma.write32(0x0d020008,0x0d411000);dma.write32(0x0d020000,0xd0000000);dma.advance(wiillr::AesEngine::block_cycles);
+        CHECK(dma.read32(0xffff1000)==0x69c4e0d8 && dma.read32(0xfff1100c)==0x70b4c55a);
+        CHECK(stores.size()==1 && stores[0]==std::make_pair(0xffff1000u,16u)); // Exact in-place, different aliases.
+        dma.write32(0x0d800038,4);
+        for(unsigned i=0;i<4;++i)dma.write32(0xffff1000+i*4,0x00112233u+i*0x44444444u);
+        dma.write32(0x0d020004,0x0d411000);dma.write32(0x0d020008,0xfff02000);stores.clear();
+        dma.write32(0x0d020000,0xd0000000);dma.advance(wiillr::AesEngine::block_cycles);
+        CHECK(dma.read32(0x0d402000)==0x69c4e0d8 && stores.size()==1 && stores[0]==std::make_pair(0xfffe2000u,16u));
+        dma.write32(0x0d800038,4);dma.write32(0x0d020004,0xfffe7ff0);dma.write32(0x0d020008,0xffff2000);stores.clear();
+        CHECK(faults([&]{dma.write32(0x0d020000,0xc0000001);}));CHECK(stores.empty() && !(dma.ipc().arm_flags&4));
+        dma.write32(0x0d020004,0xffff1000);dma.write32(0x0d020008,0xfffe7ff0);
+        CHECK(faults([&]{dma.write32(0x0d020000,0xc0000001);}));CHECK(stores.empty());
+        const uint32_t seed[]={0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
+        for(unsigned i=0;i<16;++i)dma.write32(0xfffe0400+i*4,0);
+        dma.write32(0xfffe0400,0x61626380);dma.write32(0xfffe043c,24);
+        for(unsigned i=0;i<5;++i)dma.write32(0x0d030008+i*4,seed[i]);
+        dma.write32(0x0d030004,0x0d400400);dma.write32(0x0d030000,0xc0000000);dma.advance(wiillr::Sha1Engine::block_cycles);
+        CHECK(dma.read32(0x0d030008)==0xa9993e36 && dma.read32(0x0d030018)==0x9cd0d89d);
+        dma.write32(0x0d800038,8);dma.write32(0x0d030004,0xfffe7fc0);stores.clear();
+        CHECK(faults([&]{dma.write32(0x0d030000,0xc0000001);}));CHECK(stores.empty() && !(dma.ipc().arm_flags&8));
+        std::vector<uint8_t> media(wiillr::NandController::page_size*64,0xff);std::fill_n(media.begin()+5*wiillr::NandController::page_size,0x800,0x5c);dma.load_nand(std::move(media));
+        dma.write32(0x0d010008,0);dma.write32(0x0d01000c,5);dma.write32(0x0d010000,0x9f000000);dma.advance(243);
+        dma.write32(0x0d010010,0xfff01000);dma.write32(0x0d010014,0x0d402000);stores.clear();
+        dma.write32(0x0d010000,0xc030b840);dma.advance(6075);
+        CHECK(dma.read32(0xfffe1000)==0x5c5c5c5c && dma.read32(0xfffe2000)==0xffffffff);
+        CHECK(stores.size()==2 && stores[0]==std::make_pair(0xfffe1000u,0x800u) && stores[1]==std::make_pair(0xfffe2000u,0x50u));
+        dma.write32(0x0d800038,2);dma.write32(0x0d010008,0);dma.write32(0x0d010000,0x9f000000);dma.advance(243);
+        dma.write32(0x0d010010,0xfffe7c00);stores.clear();dma.write32(0x0d010000,0xc030b840);
+        CHECK(faults([&]{dma.advance(6075);}));CHECK(stores.empty() && !(dma.ipc().arm_flags&2)); // Validate the entire output at DMA completion.
+        dma.write32(0x0d010000,0x80ff0000);dma.advance(24300); // Discard the stopped read before another device check.
+        dma.write32(0x0d050018,0x0d400000);CHECK(faults([&]{dma.write32(0x0d050004,0x80);}));
+        CHECK(dma.read32(0x0d050004)==0 && stores.empty() && !(dma.ipc().arm_flags&0x20)); // USB did not inherit NAND SRAM admission.
+    }
+    {
         /* Public FIPS197 C.1 data, CBC IV zero. Real AES DMA publishes through
          * the same PPC invalidation observer before Hollywood IRQ2. */
         wiillr::Starlet aes(mem1,mem2);unsigned stores=0;
@@ -381,6 +454,20 @@ int main() {
     put32(16+68,9);
     CHECK(faults([&]{machine.load_ios(binary);}));
     CHECK(machine.fetch32(0xffff0000)==0xe1a00000);
+    /* ELF entry/segments may name aliases of the same backing. Full BSS
+     * publication is canonical, and a later invalid segment mutates neither. */
+    std::vector<std::pair<uint32_t,uint32_t>> loaded;
+    machine.observe_stores([](void* p,uint32_t at,uint32_t size){static_cast<std::vector<std::pair<uint32_t,uint32_t>>*>(p)->emplace_back(at,size);},&loaded);
+    put32(16+68,4);put32(16+24,0xffff0000);put32(16+60,0xffff0000);put32(16+64,0x0d410000);
+    CHECK(machine.load_ios(binary)==0xffff0000 && machine.fetch32(0xffff0000)==0xe1a00000);
+    CHECK(loaded.size()==1 && loaded[0]==std::make_pair(0xffff0000u,8u));
+    loaded.clear();put32(16+24,0xfffe0000);put32(16+60,0xfffe0000);put32(16+64,0x0d400000);put32(16+72,16);
+    machine.write32(0xfffe0004,0xffffffff);loaded.clear();CHECK(machine.load_ios(binary)==0xfffe0000);
+    CHECK(machine.read32(0x0d400000)==0xe1a00000 && machine.read32(0xfff00004)==0 && loaded.size()==1 && loaded[0]==std::make_pair(0xfffe0000u,16u));
+    binary.resize(16+120);put32(8,120);put16(16+44,2);put32(16+56,116);put32(16+84,1);put32(16+88,120);
+    put32(16+92,0xfffe7ffc);put32(16+96,0xfffe7ffc);put32(16+100,0);put32(16+104,8);put32(16+108,6);put32(16+112,4);put32(16+116,0xe3a00001);
+    loaded.clear();CHECK(faults([&]{machine.load_ios(binary);}));CHECK(machine.read32(0xfffe0000)==0xe1a00000 && loaded.empty());
+    machine.observe_stores(nullptr,nullptr);
     CHECK(machine.read32(0x0d800214)==0x11);
     machine.write32(0x0d8b0008,0x8000);
     CHECK(machine.read32(0x0d8b0008)==0x8000);

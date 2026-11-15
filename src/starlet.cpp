@@ -119,13 +119,40 @@ uint32_t Starlet::execute(const armv4t::Instr& instruction) {
     }
     return cost;
 }
-uint8_t* Starlet::physical(uint32_t address,uint32_t size) {
+uint8_t* Starlet::physical(uint32_t address,uint32_t size,uint32_t* canonical,bool* sram) {
+    if(canonical)*canonical=address;
+    if(sram)*sram=false;
     if(address<=mem1_.size() && size<=mem1_.size()-address)return mem1_.data()+address;
     if(address>=0x10000000u && address-0x10000000u<=mem2_.size() &&
        size<=mem2_.size()-(address-0x10000000u))return mem2_.data()+address-0x10000000u;
-    if(address>=0xffff0000u && uint64_t(address)+size<=0x100000000ull)
-        return sram_.data()+(address-0xffff0000u);
+    /* BOOT0-disabled/SM1 mapping: B32K, hole32K, A64K per128K window.
+     * https://wiibrew.org/wiki/Hardware/Main_Memory
+     * Neither holes nor an extent crossing a bank/mirror boundary is RAM. */
+    uint32_t offset;
+    if(address>=0x0d400000u && address<0x0d420000u)offset=address-0x0d400000u;
+    else if(address>=0xfff00000u && uint64_t(address)+size<=0x100000000ull)offset=address&0x1ffffu;
+    else return nullptr;
+    if(offset<0x8000u && size<=0x8000u-offset) {
+        if(canonical)*canonical=0xfffe0000u+offset;
+        if(sram)*sram=true;
+        return sram_b_.data()+offset;
+    }
+    if(offset>=0x10000u && size<=0x20000u-offset) {
+        if(canonical)*canonical=0xffff0000u+offset-0x10000u;
+        if(sram)*sram=true;
+        return sram_.data()+offset-0x10000u;
+    }
     return nullptr;
+}
+uint8_t* Starlet::dma_physical(uint32_t address,uint32_t size,uint32_t permission) {
+    bool sram=false;auto* result=physical(address,size,nullptr,&sram);
+    return sram && !(sram_visibility_&permission)?nullptr:result;
+}
+void Starlet::stored(uint32_t address,uint32_t size) {
+    if(!store_observer_ || !size)return;
+    uint32_t canonical;
+    if(!physical(address,size,&canonical))throw std::runtime_error("Starlet invalid store notification span");
+    store_observer_(store_user_,canonical,size);
 }
 uint32_t Starlet::translate(uint32_t original,bool writing) {
     uint32_t address=original<0x02000000u ? original|fcse_:original;
@@ -199,14 +226,16 @@ uint32_t Starlet::load_ios(std::span<const uint8_t> b) {
     if(stride!=32 || !count || !fits(table,uint64_t(stride)*count,e.size()) || (entry&3))
         throw std::runtime_error("Invalid IOS program-header table/entry");
     bool executable=false;
+    const auto entry_bytes=reinterpret_cast<uintptr_t>(physical(entry,4));
     for(uint32_t n=0;n<count;++n) {
         const auto* p=e.data()+table+n*stride;
         if(be32(p)!=1)continue;
         const uint32_t at=be32(p+4),dest=be32(p+12),files=be32(p+16),memory=be32(p+20);
         if(files>memory || !fits(at,files,e.size()) || !physical(dest,memory))
             throw std::runtime_error("Invalid IOS loadable segment");
-        if((be32(p+24)&1) && entry>=dest && uint64_t(entry)+4<=uint64_t(dest)+files)
-            executable=true;
+        const auto destination_bytes=reinterpret_cast<uintptr_t>(physical(dest,memory));
+        if((be32(p+24)&1) && files>=4 && entry_bytes && entry_bytes>=destination_bytes && entry_bytes-destination_bytes<=files-4)
+            executable=true; /* Entry and segment may use different aliases. */
     }
     if(!executable)throw std::runtime_error("IOS entry is not backed by executable bytes");
     /* All validation precedes stores. Zero BSS first so initialized bytes win
@@ -221,7 +250,7 @@ uint32_t Starlet::load_ios(std::span<const uint8_t> b) {
     }
     if(store_observer_)for(uint32_t n=0;n<count;++n) {
         const auto* p=e.data()+table+n*stride;
-        if(be32(p)==1 && be32(p+20))store_observer_(store_user_,be32(p+12),be32(p+20));
+        if(be32(p)==1 && be32(p+20))stored(be32(p+12),be32(p+20));
     }
     cpu.R[15]=entry;
     return entry;
@@ -236,6 +265,10 @@ uint8_t Starlet::read8(uint32_t at) {
 uint16_t Starlet::read16(uint32_t at) {
     check_alignment(at,2);
     const auto bus_address=translate(at,false);
+    if(bus_address==0x0d8b4202u) {
+        if(!register_protection_known_)unsupported("unqualified MEM_PROT_REG read",cpu.R[15],bus_address);
+        return register_protection_;
+    }
     if(bus_address==0x0d8b4228u)return flush_request_;
     if(bus_address==0x0d8b422au)return flush_ack_;
     if(bus_address==0x0d8b420au)return protect_enabled_;
@@ -260,6 +293,7 @@ uint32_t Starlet::read32(uint32_t at) {
     if(bus_address==0x0d800014u)return alarm_;
     if(bus_address==0x0d800040u)return 0; /* FIQ source mask, currently all IRQ. */
     if(bus_address==0x0d80005cu)return debug_irq_enable_;
+    if(bus_address==0x0d800060u)return sram_visibility_;
     if(bus_address==0x0d800064u)return ahb_protection_;
     if(bus_address==0x0d800194u)return resets_;
     if(bus_address==0x0d8001ecu)return otp_command_;
@@ -307,11 +341,17 @@ uint32_t Starlet::read32(uint32_t at) {
 void Starlet::write8(uint32_t at,uint8_t v) {
     const auto address=translate(at,true);
     auto* p=physical(address,1);if(!p)unsupported("write8",cpu.R[15],at);*p=v;
-    if(store_observer_)store_observer_(store_user_,address,1);
+    stored(address,1);
 }
 void Starlet::write16(uint32_t at,uint16_t v) {
     check_alignment(at,2);
     const auto bus_address=translate(at,true);
+    if(bus_address==0x0d8b4202u) {
+        /* Actual IOS4 syscall54 programs0/1. Retain only that known command
+         * surface; no inferred PPC address-protection/reset semantics. */
+        if(v>1)unsupported("MEM_PROT_REG control bits",cpu.R[15],bus_address);
+        register_protection_=v;register_protection_known_=true;return;
+    }
     if(bus_address==0x0d8b420au) {
         /* This isolated IOS-entry boundary holds the PPC in reset. Retain the
          * programmed protection state; a combined machine must enforce these
@@ -332,7 +372,7 @@ void Starlet::write16(uint32_t at,uint16_t v) {
         return;
     }
     auto* p=physical(bus_address,2);if(!p)unsupported("write16",cpu.R[15],at);p[0]=uint8_t(v>>8);p[1]=uint8_t(v);
-    if(store_observer_)store_observer_(store_user_,bus_address,2);
+    stored(bus_address,2);
 }
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
@@ -351,6 +391,12 @@ void Starlet::write32(uint32_t at,uint32_t v) {
         otp_command_=v;return;
     }
     if(bus_address==0x0d80005cu) {debug_irq_enable_=v;return;}
+    if(bus_address==0x0d800060u) {
+        /* This boundary keeps SM1 and engine visibility fixed. AHPEN is
+         * configuration only while the PPC SRAM/protection port is unbound. */
+        if((v^sram_visibility_)&~8u)unsupported("unqualified SRAM visibility/remapping",cpu.R[15],bus_address);
+        sram_visibility_=v;return;
+    }
     if(bus_address==0x0d800064u) {ahb_protection_=v;return;}
     if(bus_address==0x0d800040u) {
         if(v)unsupported("FIQ source routing",cpu.R[15],v);
@@ -358,6 +404,7 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     }
     if(bus_address==0x0d800194u) {
         if(!(v&0x08000000u))unsupported("IOP reset",cpu.R[15],v);
+        if((v^resets_)&0x30u)unsupported("unbound PPC reset/release transition",cpu.R[15],bus_address);
         resets_=v&0x7fffffffu;return;
     }
     if(bus_address>=0x0d020000u && bus_address<=0x0d020010u &&
@@ -441,7 +488,7 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     }
     auto* p=physical(bus_address,4);if(!p)unsupported("write32",cpu.R[15],at);
     p[0]=uint8_t(v>>24);p[1]=uint8_t(v>>16);p[2]=uint8_t(v>>8);p[3]=uint8_t(v);
-    if(store_observer_)store_observer_(store_user_,bus_address,4);
+    stored(bus_address,4);
 }
 void Starlet::coproc_write(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uint32_t op2,uint32_t value) {
     if(cpu.cpsr.mode==uint8_t(armv4t::Mode::User))unsupported("unprivileged coprocessor write",cpu.R[15],cp);
