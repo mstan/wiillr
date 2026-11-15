@@ -68,11 +68,11 @@ int main(int argc,char** argv){
     display.has_supersampling=1;display.num_internal_resolutions=6;
     display.internal_resolution_values=resolution_values;
     display.internal_resolution_labels=resolution_labels;
-    settings.internal_resolution=1920;settings.volume=43;
+    settings.internal_resolution=1920;settings.volume=43;settings.aspect_index=3;
     menu_mod_prepare(&display);
     CHECK(display.mods && !display.has_supersampling && display.mods->hide_hidden_features);
     const RecompLauncherCModProvider* provider=display.mods;
-    CHECK(provider->feature_count(provider->ctx)==1);
+    CHECK(provider->feature_count(provider->ctx)==2 && !display.num_aspect_labels);
     RecompLauncherCModFeature feature;
     CHECK(provider->feature_get(provider->ctx,0,&feature) && feature.enabled && !feature.hidden);
     RecompLauncherCModOption option;
@@ -87,11 +87,26 @@ int main(int argc,char** argv){
     CHECK(settings.internal_resolution==3840 && settings.volume==43);
     CHECK(mod_save_calls==1 && mod_saved_resolution==3840 && mod_before_resolution==1920);
     CHECK(size_calls==5); /* changing resolution does not recreate/resize a window */
+    RecompLauncherCModFeature wide;
+    CHECK(provider->feature_get(provider->ctx,1,&wide) && wide.enabled);
+    CHECK(provider->feature_option_get(provider->ctx,wide.package_id,wide.id,0,&option) &&
+        option.choice_count==4 && !strcmp(option.value,"3")); /* fresh Fit to screen */
+    before=settings;
+    CHECK(provider->feature_set_option(provider->ctx,wide.package_id,wide.id,"view","1"));
+    CHECK(!provider->feature_set_option(provider->ctx,wide.package_id,wide.id,"view","3junk"));
+    settings.aspect_index=3; /* the ordinary model still carries the old view */
+    menu_mod_finish(&display,&before);
+    CHECK(settings.aspect_index==1 && mod_saved_view==1 && mod_before_view==3);
+    CHECK(settings.internal_resolution==3840 && settings.volume==43 && size_calls==5);
     before=settings;
     CHECK(provider->feature_enable(provider->ctx,feature.package_id,feature.id,0));
     menu_mod_finish(&display,&before);CHECK(settings.internal_resolution==1 && mod_saved_resolution==1);
     CHECK(provider->feature_enable(provider->ctx,feature.package_id,feature.id,1));
     menu_mod_finish(&display,&before);CHECK(settings.internal_resolution==3840);
+    CHECK(provider->feature_enable(provider->ctx,wide.package_id,wide.id,0));
+    menu_mod_finish(&display,&before);CHECK(settings.aspect_index==0 && settings.internal_resolution==3840);
+    CHECK(provider->feature_enable(provider->ctx,wide.package_id,wide.id,1));
+    menu_mod_finish(&display,&before);CHECK(settings.aspect_index==1);
     menu_mod_prepare(&display); /* hidden display row does not remove the existing provider */
     CHECK(display.mods==provider && provider->feature_get(provider->ctx,0,&feature) && feature.enabled);
     puts("Window binder: Menu/game/Menu preserves manual geometry; explicit settings and new windows apply");return 0;

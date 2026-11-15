@@ -149,6 +149,7 @@ bool wii_launcher_menu_session(const char* image) {
         game.has_supersampling=1;game.internal_resolution_labels=resolution_labels;
         game.internal_resolution_values=resolution_values;game.num_internal_resolutions=6;
         game.internal_resolution_note="Raster resolution for geometry and effects. Bitmap artwork retains its original detail.";
+        game.aspect_labels=view_labels;game.num_aspect_labels=4;
     }
     load_settings(&game);menu_mod_prepare(&game);
     game_info=game;strcpy(boot_image,image);SDL_free(pref);
