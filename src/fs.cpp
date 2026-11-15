@@ -26,6 +26,8 @@ struct WiiFs {
   const uint32_t boot_uid;
   const uint16_t boot_gid;
   uint32_t content_handles=0;
+  struct FileContext {uint32_t uid=0;uint16_t gid=0;bool valid=false;};
+  std::array<FileContext,16> file_contexts{};
   WiiFs(const fs::path& p,uint32_t u,uint16_t g):root(p),backend(p.generic_string()),uid(u),gid(g),boot_uid(u),boot_gid(g){}
 };
 static int32_t result(nand::ResultCode code){return code==nand::ResultCode::Success?0:-100-int32_t(code);}
@@ -512,10 +514,17 @@ extern "C" int32_t wii_fs_open(WiiFs* s,const char* path,uint32_t mode) {
     const auto allowed=s->uid==0?3:uint8_t(metadata->uid==s->uid?metadata->modes.owner:metadata->gid==s->gid?metadata->modes.group:metadata->modes.other);
     if((allowed&mode)!=mode)return -102;
     auto opened=s->backend.OpenFile(s->uid,s->gid,path,nand::Mode(mode));
-    return opened?int32_t(opened->Release()):result(opened.error());
+    if(!opened)return result(opened.error());
+    const auto fd=opened->Release();
+    if(fd>=s->file_contexts.size()){s->backend.Close(fd);return -109;}
+    s->file_contexts[fd]={s->uid,s->gid,true};return int32_t(fd);
   }catch(const std::invalid_argument&){return -101;}catch(const std::exception&){return -117;}
 }
-extern "C" int32_t wii_fs_close(WiiFs* s,uint32_t fd){try{return result(s->backend.Close(fd));}catch(...){return -117;}}
+extern "C" int32_t wii_fs_close(WiiFs* s,uint32_t fd){try{
+  const auto closed=s->backend.Close(fd);
+  if(closed==nand::ResultCode::Success && fd<s->file_contexts.size())s->file_contexts[fd]={};
+  return result(closed);
+}catch(...){return -117;}}
 extern "C" int32_t wii_fs_read(WiiFs* s,uint32_t fd,uint8_t* p,uint32_t n){try{return result(s->backend.ReadBytesFromFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_write(WiiFs* s,uint32_t fd,const uint8_t* p,uint32_t n){try{return result(s->backend.WriteBytesToFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_seek(WiiFs* s,uint32_t fd,uint32_t at,uint32_t mode){try{return result(s->backend.SeekFile(fd,at,nand::SeekMode(mode)));}catch(...){return -117;}}
@@ -728,7 +737,15 @@ extern "C" bool wii_fs_ioctl(WiiFs* s,int32_t fd,uint32_t command,const uint8_t*
       auto status=s->backend.GetFileStatus(uint32_t(fd));if(!status){*r=result(status.error());return true;}
       put32(out,status->size);put32(out+4,status->offset);*r=0;return true;
     }
-    if(fd>=0)return false;
+    uint32_t caller_uid=s->uid;uint16_t caller_gid=s->gid;
+    if(fd>=0) {
+      if(command!=7)return false;
+      if(uint32_t(fd)>=s->file_contexts.size() || !s->file_contexts[fd].valid ||
+         !s->backend.GetFileStatus(uint32_t(fd)))return true;
+      // Global FS operations use the valid handle's opener, including after
+      // SetUID changes the identity used for subsequent opens.
+      caller_uid=s->file_contexts[fd].uid;caller_gid=s->file_contexts[fd].gid;
+    }
     if(command==2) {
       if(no<28 || !out)return true;
       auto stats=s->backend.GetNandStats();if(!stats){*r=result(stats.error());return true;}
@@ -753,7 +770,7 @@ extern "C" bool wii_fs_ioctl(WiiFs* s,int32_t fd,uint32_t command,const uint8_t*
       std::memset(out,0,74);put32(out,m->uid);out[4]=uint8_t(m->gid>>8);out[5]=uint8_t(m->gid);
       out[70]=uint8_t(m->modes.owner);out[71]=uint8_t(m->modes.group);out[72]=uint8_t(m->modes.other);out[73]=m->attribute;*r=0;return true;
     }
-    if(command==7){*r=result(s->backend.Delete(s->uid,s->gid,path_param(s,in,ni)));return true;}
+    if(command==7){*r=result(s->backend.Delete(caller_uid,caller_gid,path_param(s,in,ni)));return true;}
     if(command==8){if(ni<128)return true;auto a=path_param(s,in,ni);auto b=path_param(s,in+64,ni-64);*r=result(s->backend.Rename(s->uid,s->gid,a,b));return true;}
     return false;
   } catch(const std::invalid_argument&){return true;}catch(const std::exception& e){std::fprintf(stderr,"NAND operation: %s\n",e.what());*r=-117;return true;}
