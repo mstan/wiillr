@@ -139,11 +139,17 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_layers_get_api");
     GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_mask_get_api");
     GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_effects_get_api");
+#if WIILLR_MENU_PICTURES
+    GcWiiNativeGuiProgramGetApi program_get=(GcWiiNativeGuiProgramGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_gui_program_get_api");
+#endif
 #else
     GcWiiNativeGuiGetApi gui_get=(GcWiiNativeGuiGetApi)dlsym(g->library,"gc_wii_native_gui_get_api");
     GcWiiNativeGuiLayersGetApi layers_get=(GcWiiNativeGuiLayersGetApi)dlsym(g->library,"gc_wii_native_gui_layers_get_api");
     GcWiiNativeGuiMaskGetApi mask_get=(GcWiiNativeGuiMaskGetApi)dlsym(g->library,"gc_wii_native_gui_mask_get_api");
     GcWiiNativeGuiEffectsGetApi effects_get=(GcWiiNativeGuiEffectsGetApi)dlsym(g->library,"gc_wii_native_gui_effects_get_api");
+#if WIILLR_MENU_PICTURES
+    GcWiiNativeGuiProgramGetApi program_get=(GcWiiNativeGuiProgramGetApi)dlsym(g->library,"gc_wii_native_gui_program_get_api");
+#endif
 #endif
     const GcWiiNativeGuiApi* gui_api=gui_get?gui_get(GC_WII_NATIVE_GUI_ABI):NULL;
 #if WIILLR_MENU_PICTURES
@@ -151,6 +157,7 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     if(layers_get)wii_menu_picture_hook_layers(layers_get(GC_WII_NATIVE_GUI_LAYERS_ABI));
     if(mask_get)wii_menu_picture_hook_mask(mask_get(GC_WII_NATIVE_GUI_MASK_ABI));
     if(effects_get)wii_menu_picture_hook_effects(effects_get(GC_WII_NATIVE_GUI_EFFECTS_ABI));
+    if(program_get)wii_menu_picture_hook_program(program_get(GC_WII_NATIVE_GUI_PROGRAM_ABI));
 #endif
 #if WIILLR_MM9_RENDERER || WIILLR_MENU_FRAME_ACTIVE
 #ifdef _WIN32
