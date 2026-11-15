@@ -143,6 +143,13 @@ if(WIILLR_DSP STREQUAL "hle")
   target_link_libraries(bluewake_dsp_donor PUBLIC "$<LINK_ONLY:wii_fs>")
 endif()
 target_link_libraries(wii_boot PUBLIC wii_fs)
+add_library(wii_menu_welcome STATIC src/menu_welcome.cpp)
+set_target_properties(wii_menu_welcome PROPERTIES CXX_STANDARD 23)
+target_include_directories(wii_menu_welcome PUBLIC include)
+target_link_libraries(wii_boot PUBLIC wii_menu_welcome)
+add_executable(test_wii_menu_welcome tests/test_menu_welcome.cpp)
+target_link_libraries(test_wii_menu_welcome PRIVATE wii_menu_welcome)
+add_test(NAME wii_menu_welcome_persistence COMMAND test_wii_menu_welcome "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(wii_boot PUBLIC wii_ipc)
 add_library(wii_bluetooth STATIC third_party/dolphin-bluetooth/BTEmuHCI.cpp
   third_party/dolphin-bluetooth/Devices.cpp third_party/dolphin-bluetooth/Packets.cpp
