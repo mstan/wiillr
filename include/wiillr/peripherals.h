@@ -18,6 +18,13 @@ typedef struct {WiiUsbPortConfig usb[2];WiiSdConfig sd;} WiiPeripheralsConfig;
  * Get returns borrowed paths valid until configure/eject/destroy. */
 void wii_peripherals_defaults(WiiPeripheralsConfig*);
 bool wii_ios_native_configure_peripherals(WiiIosNative*,const WiiPeripheralsConfig*,char* error,size_t);
+typedef bool (*WiiPeripheralsCommit)(void* user,char* error,size_t capacity);
+/* Prepare every file and flush existing media, then persist before publishing
+ * device changes. Rejection preserves handles, generations and queued events.
+ * The callback must not reenter IOS APIs. Success is followed only by
+ * allocation-free publication; all potentially failing work precedes it. */
+bool wii_ios_native_configure_peripherals_commit(WiiIosNative*,const WiiPeripheralsConfig*,
+                                               WiiPeripheralsCommit,void* user,char* error,size_t);
 bool wii_ios_native_get_peripherals(const WiiIosNative*,WiiPeripheralsConfig*);
 bool wii_ios_native_flush_peripherals(WiiIosNative*,char* error,size_t);
 /* slot 0/1 = USB1/USB2, 2 = SD. Successful eject flushes before disconnect. */

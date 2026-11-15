@@ -9,6 +9,7 @@ typedef struct WiiPeripherals WiiPeripherals;
 WiiPeripherals* wii_peripherals_create(void);
 void wii_peripherals_destroy(WiiPeripherals*);
 bool wii_peripherals_configure(WiiPeripherals*,const WiiPeripheralsConfig*,char*,size_t);
+bool wii_peripherals_configure_commit(WiiPeripherals*,const WiiPeripheralsConfig*,WiiPeripheralsCommit,void*,char*,size_t);
 void wii_peripherals_get(const WiiPeripherals*,WiiPeripheralsConfig*);
 bool wii_peripherals_flush(WiiPeripherals*,char*,size_t);
 bool wii_peripherals_eject(WiiPeripherals*,unsigned,char*,size_t);

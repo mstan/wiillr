@@ -57,13 +57,16 @@ static int keyboard_flush(IpcRequests* q) {
     }
     return result;
 }
-bool wii_ios_native_configure_peripherals(WiiIosNative* ios,const WiiPeripheralsConfig* c,char* error,size_t n) {
+bool wii_ios_native_configure_peripherals_commit(WiiIosNative* ios,const WiiPeripheralsConfig* c,WiiPeripheralsCommit commit,void* user,char* error,size_t n) {
     if(!ios || !c)return false;
     lock_requests();IpcRequests* q=keyboard_requests(ios);
     if(q && !q->peripherals)q->peripherals=wii_peripherals_create();
-    const bool ok=q && q->peripherals && wii_peripherals_configure(q->peripherals,c,error,n);
+    const bool ok=q && q->peripherals && wii_peripherals_configure_commit(q->peripherals,c,commit,user,error,n);
     if(ok)keyboard_flush(q);
     unlock_requests();return ok;
+}
+bool wii_ios_native_configure_peripherals(WiiIosNative* ios,const WiiPeripheralsConfig* c,char* error,size_t n) {
+    return wii_ios_native_configure_peripherals_commit(ios,c,NULL,NULL,error,n);
 }
 bool wii_ios_native_get_peripherals(const WiiIosNative* ios,WiiPeripheralsConfig* c) {
     if(!ios || !c)return false;lock_requests();const IpcRequests* q=find_requests(ios);

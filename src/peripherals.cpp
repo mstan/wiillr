@@ -112,8 +112,9 @@ extern "C" void wii_peripherals_get(const WiiPeripherals* p,WiiPeripheralsConfig
  c->sd={p->sd?p->sd->path.c_str():nullptr,p->sd?p->sd->read_only:false};
 }
 extern "C" bool wii_peripherals_flush(WiiPeripherals* p,char* out,size_t n){if(!p)return true;for(auto& port:p->usb)if(port.image && !port.image->flush()){error(out,n,"The USB image could not be flushed; it is still attached.");return false;}if(p->sd && !p->sd->flush()){error(out,n,"The SD image could not be flushed; it is still attached.");return false;}error(out,n,"");return true;}
-extern "C" bool wii_peripherals_configure(WiiPeripherals* p,const WiiPeripheralsConfig* c,char* out,size_t n){
+extern "C" bool wii_peripherals_configure_commit(WiiPeripherals* p,const WiiPeripheralsConfig* c,WiiPeripheralsCommit commit,void* user,char* out,size_t n){
  if(!p || !c){error(out,n,"Peripheral configuration is unavailable.");return false;}
+ const WiiPeripheralsConfig requested=*c;c=&requested;
  try {
   Port ports[2];std::shared_ptr<Image> sd;std::vector<std::string> paths;
   auto attach=[&](const char* path,bool ro)->std::shared_ptr<Image>{
@@ -134,11 +135,15 @@ extern "C" bool wii_peripherals_configure(WiiPeripherals* p,const WiiPeripherals
    unsigned mult=0;const u64 sectors=sd->bytes/512;while(sectors/(1ull<<(mult+2))>4096 && mult<7)++mult;
    if(sd->bytes>32ull*1024*1024*1024 || (sd->bytes>2ull*1024*1024*1024?sd->bytes%(512*1024):sectors%(1ull<<(mult+2)))){error(out,n,"SD images must be at most 32 GiB and aligned to SD card capacity units.");return false;}}
   if(!wii_peripherals_flush(p,out,n))return false;
+  if(commit && !commit(user,out,n))return false;
+  /* Everything below is noexcept: no file opens, allocation, validation, or
+   * fallible flush may occur after the persisted selection is committed. */
   const bool same_sd=p->sd==sd;
   for(unsigned i=0;i<2;i++)if(p->usb[i].kind!=ports[i].kind || p->usb[i].image!=ports[i].image){if(p->usb[i].kind==WII_USB_KEYBOARD || ports[i].kind==WII_USB_KEYBOARD)++p->keyboard_changes;if(p->usb[i].kind==WII_USB_MASS_STORAGE || ports[i].kind==WII_USB_MASS_STORAGE)++p->disk_changes;ports[i].generation=p->usb[i].generation+1;p->usb[i]=std::move(ports[i]);}
   p->sd=std::move(sd);for(unsigned i=0;i<2;i++)if(p->usb[i].image)p->usb[i].image->read_only=c->usb[i].read_only;if(p->sd)p->sd->read_only=c->sd.read_only;if(!same_sd){p->sd_initialized=false;p->sd_selected=false;p->sd_app=false;p->block_length=512;p->hcr.fill(0);}error(out,n,"");return true;
  }catch(...){error(out,n,"The peripheral configuration could not be allocated.");return false;}
 }
+extern "C" bool wii_peripherals_configure(WiiPeripherals* p,const WiiPeripheralsConfig* c,char* out,size_t n){return wii_peripherals_configure_commit(p,c,nullptr,nullptr,out,n);}
 extern "C" bool wii_peripherals_eject(WiiPeripherals* p,unsigned slot,char* out,size_t n){
  if(!p || slot>2){error(out,n,"Unknown peripheral slot.");return false;}
  auto image=slot==2?p->sd:p->usb[slot].image;if(image && !image->flush()){error(out,n,"The image could not be flushed; it is still attached.");return false;}
