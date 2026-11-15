@@ -165,6 +165,7 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
         layers_get?layers_get(GC_WII_NATIVE_GUI_LAYERS_ABI):NULL,
         mask_get?mask_get(GC_WII_NATIVE_GUI_MASK_ABI):NULL,
         effects_get?effects_get(GC_WII_NATIVE_GUI_EFFECTS_ABI):NULL)){wii_gx_stop(g);return false;}
+#endif
 #if WIILLR_NATIVE_OUTPUT
     if(g->output) {
 #ifdef _WIN32
@@ -173,9 +174,13 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
         GcWiiNativeOutputGetApi output_get=(GcWiiNativeOutputGetApi)dlsym(g->library,"gc_wii_native_output_get_api");
 #endif
         const GcWiiNativeOutputApi* output=output_get?output_get(GC_WII_NATIVE_OUTPUT_ABI):NULL;
-        if(!output){wii_gx_stop(g);return false;}wii_mm9_renderer_bind_output(output);
-    }
+        if(!wii_gx_output_bind_completion(g,output)){wii_gx_stop(g);return false;}
+#if WIILLR_MM9_RENDERER
+        /* Preserve the existing renderer's required extension contract. */
+        if(!output){wii_gx_stop(g);return false;}
+        wii_mm9_renderer_bind_output(output);
 #endif
+    }
 #endif
 #if WIILLR_MENU_FRAME_ACTIVE
     if(!wii_menu_frame_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}

@@ -12,6 +12,10 @@
 static GcWiiNativeVertex captured[4];
 static GcWiiNativeDraw draw;
 static unsigned submitted;
+static unsigned frontier_order,frontier_completions;
+static bool frontier_drains=true;
+static int drain_frontier(void){if(frontier_order)abort();frontier_order=1;return frontier_drains;}
+static int complete_frontier(u32 events,u32 token){if(events || token || frontier_order!=1)abort();frontier_order=2;++frontier_completions;return 1;}
 static u64 create(const GcWiiNativeMesh* mesh) {
     if(mesh->vertex_count!=4 || mesh->index_count!=6)return 0;
     memcpy(captured,mesh->vertices,sizeof captured);return 1;
@@ -83,5 +87,14 @@ int main(void) {
     }
     const unsigned before=submitted;cpu.gpr[4]=0x81800000;state.bad=false;
     CHECK(!keyboard_line(&cpu)&&state.bad&&submitted==before);
-    cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard line geometry and invalid-pointer rejection\n",cases);return 0;
+    /* Actual Menu frontier preserves the earlier drain and zero PE events
+     * when the portable/no-guarded-owner completion floor is selected. */
+    WiiMachine machine={0};WiiGx gx={.cpu=&cpu,.machine=&machine};
+    const GcnllrNativeGxApi graphics={.drain=drain_frontier};
+    const GcWiiNativeFrameApi frame={.abi=GC_WII_NATIVE_FRAME_ABI,.complete=complete_frontier};
+    gx.api=&graphics;state.owner=&gx;state.frame=&frame;
+    frontier_order=0;CHECK(frontier() && frontier_order==2 && frontier_completions==1);
+    frontier_order=0;frontier_drains=false;
+    CHECK(!frontier() && frontier_order==1 && frontier_completions==1);
+    cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard lines, invalid pointers and Menu completion ordering\n",cases);return 0;
 }

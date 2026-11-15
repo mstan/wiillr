@@ -163,7 +163,7 @@ static bool frontier(void) {
         u32 n;const u8* p=gcn_mem_resolve(cpu,gcn_cp_fifo_read_pointer(&m->cp),&n);
         if(!p || n<32 || !g->api->fifo(p,32))return false;gcn_cp_gpu_consume_chunk(&m->cp);
     }
-    return !gcn_cp_fifo_rw_distance(&m->cp) && g->api->drain() && state.frame->complete(0,0);
+    return !gcn_cp_fifo_rw_distance(&m->cp) && g->api->drain() && wii_gx_output_complete(g,state.frame);
 }
 static int copy_frame(CPUState* cpu,u32 object) {
     u32 p;if(!mode(cpu,object,&p))return false;const u32 index=word(cpu,object+4);if(index>1)return false;
@@ -383,7 +383,7 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         if(copied!=1)return stop(cpu,"frame copy mode/submission",copied<0);
     } else if(address==0x8133df24) {
         if(!identity(cpu,0x8133df10,0x48,UINT64_C(0x4eee3be39c10ead6)))return stop(cpu,"frame handoff identity",false);
-        if(!state.frame->complete(0,0))return stop(cpu,"frame completion",true);
+        if(!wii_gx_output_complete(state.owner,state.frame))return stop(cpu,"frame completion",true);
         if(state.active){GcnllrNativeGxStatus s;state.owner->api->status(&s);const u64 n=s.fifo_bytes-state.fifo_start;state.fifo_bytes+=n;
             if(n || state.owner->machine->gp.count || gcn_cp_fifo_rw_distance(&state.owner->machine->cp))return stop(cpu,"unowned graphics in frame",false);}
         state.active=false;++state.completions;cpu->pc=0x8133df28;++cpu->cycles;return 1;

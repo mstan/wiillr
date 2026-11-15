@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include <errno.h>
 
+static int physical_complete(const GcWiiNativeFrameApi* frame) {
+    return frame && frame->abi==GC_WII_NATIVE_FRAME_ABI && frame->complete && frame->complete(0,0);
+}
+
 #if defined(_WIN32) && defined(_WIN64) && WIILLR_NATIVE_OUTPUT
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -20,6 +24,10 @@ typedef struct {
     GcnResidentMemory* memory;
     u8* pages;
     u8* armed;
+    CPUState* cpu;
+    u8* ram;
+    u32 ram_size;
+    const GcWiiNativeOutputApi* completion;
     u32 page_size,page_count;
     DWORD thread;
     void* handler;
@@ -27,6 +35,27 @@ typedef struct {
     u64 faults,eager_copies,resident_presents;
 } Output;
 static Output* active;
+static bool completion_owner(const Output* o,const WiiGx* g) {
+    /* Foreign threads must neither publish nor poison owner-thread state. */
+    return o && o==active && GetCurrentThreadId()==o->thread && o->gx==g &&
+        !o->failed && !o->materializing && g->cpu==o->cpu &&
+        g->cpu->ram==o->ram && g->cpu->ram_size==o->ram_size;
+}
+bool wii_gx_output_bind_completion(WiiGx* g,const GcWiiNativeOutputApi* api) {
+    Output* o=g?g->output:NULL;
+    if(!completion_owner(o,g) || (api && (api->abi!=GC_WII_NATIVE_OUTPUT_ABI || !api->submit)))return false;
+    o->completion=api;return true;
+}
+int wii_gx_output_complete(WiiGx* g,const GcWiiNativeFrameApi* frame) {
+    if(!g)return 0;
+    Output* o=g->output;
+    if(!o)return physical_complete(frame);
+    if(!completion_owner(o,g))return 0;
+    if(!o->completion)return physical_complete(frame);
+    const int submitted=o->completion->submit();
+    if(!submitted)o->failed=true;
+    return submitted;
+}
 u32 wii_gx_output_allocation_alignment(const WiiGx* g) {
     const Output* o=g?g->output:NULL;
     return o?o->page_size:32;
@@ -84,7 +113,8 @@ bool wii_gx_output_open(WiiGx* g) {
         if(!VirtualQuery(g->cpu->ram+at,&info,sizeof info) || info.State!=MEM_COMMIT ||
            info.Protect!=PAGE_READWRITE)return false;
     Output* o=calloc(1,sizeof *o);if(!o)return false;
-    o->gx=g;o->page_size=page;o->page_count=g->cpu->ram_size/page;o->thread=GetCurrentThreadId();
+    o->gx=g;o->cpu=g->cpu;o->ram=g->cpu->ram;o->ram_size=g->cpu->ram_size;
+    o->page_size=page;o->page_count=g->cpu->ram_size/page;o->thread=GetCurrentThreadId();
     o->pages=calloc(o->page_count,1);o->armed=calloc(o->page_count,1);
     if(o->pages && o->armed) {
         const GcnResidentMemoryConfig c={g->cpu->ram_size,page,32,o->pages,o->page_count,materialize,release,o};
@@ -159,6 +189,8 @@ int wii_gx_output_present(WiiGx* g,u32 address,u32 width,u32 height,u32 stride) 
 u32 wii_gx_output_allocation_alignment(const WiiGx* g){(void)g;return 32;}
 bool wii_gx_output_open(WiiGx* g){(void)g;return false;}
 bool wii_gx_output_close(WiiGx* g){(void)g;return true;}
+bool wii_gx_output_bind_completion(WiiGx* g,const GcWiiNativeOutputApi* api){(void)g;(void)api;return false;}
+int wii_gx_output_complete(WiiGx* g,const GcWiiNativeFrameApi* frame){return g?physical_complete(frame):0;}
 int wii_gx_output_own(void* g,const GcnllrNativeGxCopy* c){(void)g;(void)c;return 0;}
 int wii_gx_output_pending(void* g,u32 a,u32 n){(void)g;(void)a;(void)n;return 0;}
 int wii_gx_output_prepare(void* g,u32 a,u32 n){(void)g;(void)a;(void)n;return 1;}
