@@ -26,7 +26,7 @@ static void entry(Bytes& b,size_t at,const char* raw,unsigned c,unsigned n,uint8
 }
 static Bytes fixture(bool existing=true){
     Bytes b(size);memcpy(b.data(),"VFF \xfe\xff\x01\0",8);wr32(b.data()+8,size);b[13]=32;
-    fat(b,0,0xfff8);fat(b,1,0xffff);
+    fat(b,0,0xfff0);fat(b,1,0xffff);
     if(existing){
         /* Independent FAT LFN for cdb.conf and ordinary existing mail. Only
          * synthetic bytes are used, never a player's message or fixture. */
@@ -95,7 +95,12 @@ int main(int argc,char** argv){
     auto empty=fixture(false);check(wii_menu_welcome_image(empty.data(),empty.size(),0,id,true)==WII_MENU_WELCOME_CREATED,"empty initialized VFF creates initial counter");
     check(rd32(contents(empty,find(empty,0,"CDB~1   CON")).data())==0,"initial counter zero");
     d=subdir(empty,0,"2000       ");d=subdir(empty,d,"00         ");(void)subdir(empty,d,"01         ");
-    auto bad=old;bad[32+fats+4]^=1;refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
+    auto fixed=old;fat(fixed,0,0xfff8);
+    check(wii_menu_welcome_image(fixed.data(),fixed.size(),seconds,id,true)==WII_MENU_WELCOME_CREATED,"FAT fixed-media descriptor also supported");
+    auto bad=old;fat(bad,0,0xfff1);refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
+    bad=old;fat(bad,0,0xfff7);refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
+    bad=old;fat(bad,1,0xfff0);refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
+    bad=old;bad[32+fats+4]^=1;refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
     bad=old;fat(bad,4,4);refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
     bad=old;entry(bad,root+96,"DUPMAIL TXT",3,400);refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
     bad=old;wr32(bad.data()+cluster(2),0xffffffff);refuse_unchanged(bad,WII_MENU_WELCOME_INVALID,seconds,id);
