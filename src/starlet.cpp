@@ -44,6 +44,9 @@ void Starlet::advance(uint64_t arm_cycles) {
     if(nand_.advance(cycles_,nand_bus()))ipc_->arm_flags|=2;
     if(aes_.advance(cycles_,aes_bus()))ipc_->arm_flags|=4;
     if(sha_.advance(cycles_,sha_bus()))ipc_->arm_flags|=8;
+    /* Shared DI owns its level and clock; Hollywood IRQ18 samples that level.
+     * Keep the consumer's existing PPC interrupt callback unchanged. */
+    if(di_.user && di_.interrupt(di_.user))ipc_->arm_flags|=1u<<18;
     for(unsigned i=0;i<ohci_.size();++i)if(ohci_[i].interrupt(cycles_,ohci_bus()))ipc_->arm_flags|=1u<<(5+i);
     const uint64_t ticks=cycles_/128-old_timer;
     const uint32_t distance=alarm_-uint32_t(old_timer);
@@ -279,6 +282,12 @@ uint16_t Starlet::read16(uint32_t at) {
 uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
+    const auto di_address=bus_address;
+    if(di_address>=0x0d006000u && di_address<0x0d006040u) {
+        if(!di_.user || (di_address&3) || di_address>0x0d006024u)
+            unsupported("unbound/unsupported DI read32",cpu.R[15],bus_address);
+        return di_.read(di_.user,di_address-0x0d006000u);
+    }
     uint32_t ipc_value;
     if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
        nand_.read(bus_address-0x0d010000u,ipc_value))return ipc_value;
@@ -377,6 +386,20 @@ void Starlet::write16(uint32_t at,uint16_t v) {
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
+    const auto di_address=bus_address;
+    if(di_address>=0x0d006000u && di_address<0x0d006040u) {
+        const uint32_t offset=di_address-0x0d006000u;
+        /* Status/cover use their shared W1C/mask semantics. Command and DMA
+         * registers may be prepared while idle, but ARM transfer execution and
+         * BREAK are unqualified and must fail before any device mutation. */
+        if(!di_.user || (offset&3) || offset>=0x24 ||
+           (offset==0 && ((v&~0x7fu) || (v&1u))) ||
+           (offset==4 && (v&~7u)) ||
+           (offset==0x1c && ((v&~7u) || (v&1u))) ||
+           (offset>=8 && (di_.read(di_.user,0x1c)&1u)))
+            unsupported("unbound/unsupported DI write32",cpu.R[15],bus_address);
+        di_.write(di_.user,offset,v);return;
+    }
     if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
        nand_.write(bus_address-0x0d010000u,v,cycles_,nand_bus()))return;
     if(bus_address>=0x0d030000u && bus_address<=0x0d030018u &&

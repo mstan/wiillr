@@ -19,6 +19,13 @@ namespace wiillr {
  * to Starlet. Unknown hardware/CP15 operations fail, rather than succeed. */
 class Starlet final : public armv4t::Bus {
 public:
+    /* Borrow the consumer's existing DI; no device or clock ownership here. */
+    struct DiBus {
+        void* user=nullptr;
+        uint32_t (*read)(void*,uint32_t offset)=nullptr;
+        void (*write)(void*,uint32_t offset,uint32_t value)=nullptr;
+        bool (*interrupt)(void*)=nullptr;
+    };
     Starlet(std::span<uint8_t> mem1, std::span<uint8_t> mem2);
     uint32_t load_ios(std::span<const uint8_t> binary);
     void load_otp(std::span<const uint8_t> bytes);
@@ -37,6 +44,10 @@ public:
     void attach_ipc(WiiIpc& ipc,uint64_t ppc_origin=0) {ipc_=&ipc;ppc_origin_=ppc_origin;}
     /* Attach before PPC execution, establishing the original-kernel profile. */
     void attach_hollywood(WiiHollywood& hardware) {hardware=owned_hollywood_;hollywood_=&hardware;}
+    bool attach_di(DiBus bus) {
+        if(cycles_ || instruction_epoch_ || di_.user || !bus.user || !bus.read || !bus.write || !bus.interrupt)return false;
+        di_=bus;return true;
+    }
     WiiIpc& ipc() {return *ipc_;}
     void observe_stores(void (*observer)(void*,uint32_t,uint32_t),void* user) {
         store_observer_=observer;store_user_=user;
@@ -129,6 +140,7 @@ private:
     NandController nand_;
     Sha1Engine sha_;
     AesEngine aes_;
+    DiBus di_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
     uint32_t spare0_=0;

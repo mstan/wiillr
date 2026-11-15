@@ -9,6 +9,22 @@ static void put32(unsigned char* p,unsigned value) {
     p[2]=(unsigned char)(value>>8);p[3]=(unsigned char)value;
 }
 static void put16(unsigned char* p,unsigned value) {p[0]=(unsigned char)(value>>8);p[1]=(unsigned char)value;}
+/* Selected original proves actual PPC MMIO. The native-build Cbridge control
+ * uses those same DI entry points directly, leaving its native IOS owner idle. */
+static unsigned di_ppc_read(CPUState* cpu,WiiMachine* machine,unsigned offset) {
+#if WIILLR_IOS_LLE
+    (void)machine;return mem_read32(cpu,0xcd006000u+offset,0);
+#else
+    return gcn_di_read(&machine->di,cpu,GCN_DI_BASE+offset,4);
+#endif
+}
+static void di_ppc_write(CPUState* cpu,WiiMachine* machine,unsigned offset,unsigned value) {
+#if WIILLR_IOS_LLE
+    (void)machine;mem_write32(cpu,0xcd006000u+offset,value,0);
+#else
+    gcn_di_write(&machine->di,cpu,GCN_DI_BASE+offset,value,4);
+#endif
+}
 int main(void) {
     CPUState cpu;CHECK(cpu_init(&cpu));CHECK(cpu_alloc_mem2(&cpu,WII_MEM2_SIZE));
     WiiMachine machine;wii_machine_init(&machine,&cpu);
@@ -72,5 +88,81 @@ int main(void) {
     CHECK(wii_ios_lle_status(machine.ios_lle).stopped);
     CHECK(strstr(wii_ios_lle_error(machine.ios_lle),"128-byte OTP"));
     wii_ios_lle_destroy(machine.ios_lle);machine.ios_lle=NULL;
+    /* Same DI as the PPC MMIO path, selected no-disc model, no private drive.
+     * A real existing-core RequestError command earns TCINT/PI; original ARM
+     * then observes and acknowledges it through the shared status register. */
+    const unsigned di_words[]={
+        0xe59f0030,0xe59f1030,0xe5902000,0xe5812000,0xe5902004,
+        0xe5812004,0xe5912008,0xe5802000,0xe5902000,0xe581200c,
+        0xe5902004,0xe5812010,0xeafffffe,0,0x0d006000,0x800,0};
+    CHECK(!machine.di.disc_present && !machine.di.disc_file && machine.di.dicvr==1);
+    cpu.halted=false;wii_machine_scheduler_init(&machine,&cpu);
+    di_ppc_write(&cpu,&machine,0,GCN_DI_SR_TCINTMASK);
+    di_ppc_write(&cpu,&machine,8,0xe0000000);
+    di_ppc_write(&cpu,&machine,0x1c,GCN_DI_CR_TSTART);
+    CHECK(machine.di.cmd_pending && !machine.di.irq_level);
+    gcn_di_tick(&cpu,729000); /* Existing PPC core fixture, not PPC execution. */
+    CHECK(!machine.di.cmd_pending && machine.di.irq_level && (machine.pi.intsr&GCN_PI_INT_DI));
+    for(unsigned phase=0;phase<5;++phase) {
+        for(unsigned n=0;n<sizeof di_words/sizeof *di_words;++n)put32(elf+84+4*n,di_words[n]);
+        if(phase==1) { /* Read PPC command programming; ARM writes same register. */
+            put32(elf+84+8,0xe5902008);put32(elf+84+28,0xe5802008);
+            di_ppc_write(&cpu,&machine,8,0xaabbccdd);
+        }
+        if(phase==2)put32(elf+84+28,0xe5802004); /* Cover mask/W1C. */
+        if(phase==3)put32(elf+84+28,0xe580201c); /* Refused ARM TSTART. */
+        put32(cpu.ram+0x808,phase==0?0x18:phase==1?0x11223344:phase==2?6:1);
+        memset(cpu.ram+0x2000,0x6d,32);
+        CHECK(wii_ipc_write(&machine.ipc,0x38,1u<<18,cpu.cycles));
+        cpu.halted=false;
+        machine.ios_lle=wii_ios_lle_create(&cpu,&machine.ipc,&machine.hollywood,image,sizeof image,NULL,0,cpu.cycles);
+        CHECK(machine.ios_lle);
+        wii_machine_scheduler_init(&machine,&cpu); /* Fresh synthetic context, including after intentional stops. */
+        GcnDi invalid={0};
+        CHECK(!wii_ios_lle_attach_di(NULL,&machine.di));
+        CHECK(!wii_ios_lle_attach_di(machine.ios_lle,NULL));
+        CHECK(!wii_ios_lle_attach_di(machine.ios_lle,&invalid));
+        if(phase!=4) {
+            CHECK(wii_ios_lle_attach_di(machine.ios_lle,&machine.di));
+            CHECK(!wii_ios_lle_attach_di(machine.ios_lle,&machine.di));
+        }
+        const GcnDi before=machine.di;
+        cpu.cycles+=WII_MACHINE_EVENT_CAP;
+#if WIILLR_IOS_LLE
+        wii_machine_tick(&machine,&cpu);
+        CHECK(cpu.halted==(phase>=3));
+#else
+        CHECK(wii_ios_lle_tick(machine.ios_lle,cpu.cycles)==(phase<3));
+#endif
+        if(phase==0) {
+            CHECK(mem_read32(&cpu,0x800,0)==0x18 && mem_read32(&cpu,0x804,0)==1);
+            CHECK(mem_read32(&cpu,0x80c,0)==8 && di_ppc_read(&cpu,&machine,0)==8);
+            CHECK(machine.ipc.arm_flags&(1u<<18));
+            CHECK(!machine.di.irq_level && !(machine.pi.intsr&GCN_PI_INT_DI));
+            CHECK(wii_ipc_write(&machine.ipc,0x38,1u<<18,cpu.cycles));
+            CHECK(!(machine.ipc.arm_flags&(1u<<18)));
+        } else if(phase==1) {
+            CHECK(mem_read32(&cpu,0x800,0)==0xaabbccdd);
+            CHECK(di_ppc_read(&cpu,&machine,8)==0x11223344);
+        } else if(phase==2) {
+            CHECK(mem_read32(&cpu,0x804,0)==1 && mem_read32(&cpu,0x810,0)==3);
+            CHECK(di_ppc_read(&cpu,&machine,4)==3 && !machine.di.irq_level);
+        } else {
+            CHECK(wii_ios_lle_status(machine.ios_lle).stopped);
+            CHECK(strstr(wii_ios_lle_error(machine.ios_lle),"DI"));
+            GcnDi after=machine.di;
+#if WIILLR_IOS_LLE
+            CHECK(after.now_cycles==before.now_cycles+WII_MACHINE_EVENT_CAP);
+#else
+            CHECK(after.now_cycles==before.now_cycles);
+#endif
+            after.now_cycles=before.now_cycles; /* Only the existing clock owner advanced. */
+            CHECK(!memcmp(&before,&after,sizeof before));
+        }
+        CHECK(!wii_ios_lle_attach_di(machine.ios_lle,&machine.di));
+        CHECK(!machine.di.disc_present && !machine.di.cmd_pending && !machine.di.pending_read_active);
+        for(unsigned n=0;n<32;++n)CHECK(cpu.ram[0x2000+n]==0x6d);
+        wii_ios_lle_destroy(machine.ios_lle);machine.ios_lle=NULL;
+    }
     wii_ios_native_destroy(&machine.ios);cpu_free(&cpu);return 0;
 }

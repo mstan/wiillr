@@ -12,6 +12,29 @@ static bool faults(auto&& operation) {
 int main() {
     std::vector<uint8_t> mem1(0x1800000),mem2(0x4000000);
     {
+        /* Callback contract remains independent of the consumer's C DI core. */
+        wiillr::Starlet board(mem1,mem2);unsigned writes=0;uint32_t value=0;
+        struct Fixture {unsigned* writes;uint32_t* value;} fixture{&writes,&value};
+        wiillr::Starlet::DiBus bus{&fixture,
+            [](void* p,uint32_t offset) {return offset==0x1c?0u:*static_cast<Fixture*>(p)->value;},
+            [](void* p,uint32_t,uint32_t v) {auto& f=*static_cast<Fixture*>(p);++*f.writes;*f.value=v;},
+            [](void*) {return false;}};
+        CHECK(faults([&]{board.read32(0x0d006000);}));CHECK(!board.attach_di({}));
+        CHECK(board.attach_di(bus) && !board.attach_di(bus));
+        board.write32(0x0d006000,0x10);CHECK(writes==1 && board.read32(0x0d006000)==0x10);
+        CHECK(faults([&]{board.read32(0x0d806000);}));CHECK(faults([&]{board.write32(0x0d806000,0);}));
+        for(uint32_t at:{0x0d006000u,0x0d006004u}) {
+            CHECK(faults([&]{board.read8(at);}));CHECK(faults([&]{board.read16(at);}));
+            CHECK(faults([&]{board.write8(at,0);}));CHECK(faults([&]{board.write16(at,0);}));
+        }
+        CHECK(faults([&]{board.read32(0x0d006001);}));CHECK(faults([&]{board.read32(0x0d006028);}));
+        CHECK(faults([&]{board.write32(0x0d006000,1);}));CHECK(faults([&]{board.write32(0x0d006000,0x80);}));
+        CHECK(faults([&]{board.write32(0x0d006004,8);}));CHECK(faults([&]{board.write32(0x0d00601c,1);}));
+        CHECK(faults([&]{board.write32(0x0d00601c,8);}));CHECK(faults([&]{board.write32(0x0d006024,0);}));
+        CHECK(faults([&]{board.write32(0x0d006028,0);}));CHECK(writes==1 && value==0x10);
+        wiillr::Starlet late(mem1,mem2);late.advance(1);CHECK(!late.attach_di(bus));
+    }
+    {
         /* Selected IOS-entry profile: BOOT0 disabled, SM1, independent A64/B32.
          * This is not a claimed power-on register value or boot0 image. */
         wiillr::Starlet sram(mem1,mem2);std::vector<std::pair<uint32_t,uint32_t>> stores;
