@@ -14,6 +14,12 @@ static GcWiiNativeDraw draw;
 static unsigned submitted;
 static unsigned frontier_order,frontier_completions;
 static bool frontier_drains=true;
+static unsigned display_calls,display_numerator,display_denominator;
+static bool display_ready=true;
+static int display_aspect(u32 numerator,u32 denominator) {
+    ++display_calls;if(!display_ready)return 0;
+    display_numerator=numerator;display_denominator=denominator;return 1;
+}
 static int drain_frontier(void){if(frontier_order)abort();frontier_order=1;return frontier_drains;}
 static int complete_frontier(u32 events,u32 token){if(events || token || frontier_order!=1)abort();frontier_order=2;++frontier_completions;return 1;}
 static u64 create(const GcWiiNativeMesh* mesh) {
@@ -96,5 +102,22 @@ int main(void) {
     frontier_order=0;CHECK(frontier() && frontier_order==2 && frontier_completions==1);
     frontier_order=0;frontier_drains=false;
     CHECK(!frontier() && frontier_order==1 && frontier_completions==1);
-    cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard lines, invalid pointers and Menu completion ordering\n",cases);return 0;
+    /* The real original Menu mode controls display aspect without changing
+     * the physical viewport, RAM, or an existing service's legacy contract. */
+    const u32 object=0x80002000,mode_data=0x80002100;
+    put(&cpu,object,mode_data);put(&cpu,mode_data+4,(640u<<16)|456u);
+    put(&cpu,mode_data+8,456u<<16);put(&cpu,mode_data+0x14,1);
+    put(&cpu,object+0x10,1);memset(&state,0,sizeof state);
+    CHECK(set_viewport(&cpu,object)); /* Optional extension absent. */
+    const GcWiiNativeDisplayApi display={GC_WII_NATIVE_DISPLAY_ABI,display_aspect};
+    wii_menu_frame_display(&display);
+    CHECK(set_viewport(&cpu,object) && display_calls==1 && display_numerator==16 && display_denominator==9);
+    CHECK(state.view.width==640 && state.view.height==456 && half(&cpu,mode_data+4)==640);
+    CHECK(set_viewport(&cpu,object) && display_calls==1);
+    put(&cpu,object+0x10,0);CHECK(set_viewport(&cpu,object) && display_calls==2 && !display_numerator && !display_denominator);
+    put(&cpu,object+0x10,2);CHECK(!set_viewport(&cpu,object) && display_calls==2);
+    put(&cpu,object+0x10,1);display_ready=false;
+    CHECK(!set_viewport(&cpu,object) && display_calls==3 && !state.display_aspect);
+    display_ready=true;CHECK(set_viewport(&cpu,object) && display_calls==4 && state.display_aspect==1);
+    cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard lines, Menu completion ordering and display mode\n",cases);return 0;
 }

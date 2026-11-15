@@ -4,6 +4,7 @@
 #include <wiillr/menu_picture.h>
 #include <wiillr/gx.h>
 #include <gcnllr/native_frame.h>
+#include <gcnllr/native_display.h>
 typedef struct CPUState CPUState;
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,7 @@ int wii_menu_frame_current_view(CPUState*,WiiMenuView*);
 int wii_menu_frame_current_model(CPUState*,float output[12]);
 bool wii_menu_frame_start(WiiGx*,const GcWiiNativeRenderApi*,const GcWiiNativeFrameApi*);
 void wii_menu_frame_capture(const GcWiiNativeCaptureApi*);
+void wii_menu_frame_display(const GcWiiNativeDisplayApi*);
 void wii_menu_frame_stop(void);
 int wii_menu_frame_entry(CPUState*,uint32_t);
 void wii_menu_frame_invalidate(uint32_t,uint32_t);

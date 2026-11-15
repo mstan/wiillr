@@ -193,10 +193,13 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     if(!wii_menu_frame_start(g,native_api,frame_api)){wii_gx_stop(g);return false;}
 #ifdef _WIN32
     GcWiiNativeCaptureGetApi capture_get=(GcWiiNativeCaptureGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_capture_get_api");
+    GcWiiNativeDisplayGetApi display_get=(GcWiiNativeDisplayGetApi)GetProcAddress((HMODULE)g->library,"gc_wii_native_display_get_api");
 #else
     GcWiiNativeCaptureGetApi capture_get=(GcWiiNativeCaptureGetApi)dlsym(g->library,"gc_wii_native_capture_get_api");
+    GcWiiNativeDisplayGetApi display_get=(GcWiiNativeDisplayGetApi)dlsym(g->library,"gc_wii_native_display_get_api");
 #endif
     if(capture_get)wii_menu_frame_capture(capture_get(GC_WII_NATIVE_CAPTURE_ABI));
+    if(display_get)wii_menu_frame_display(display_get(GC_WII_NATIVE_DISPLAY_ABI));
 #endif
 #endif
 #endif

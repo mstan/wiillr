@@ -19,6 +19,7 @@
 #define GRAPHICS_ARG 0x810897c0u
 static struct {
     WiiGx* owner;const GcWiiNativeRenderApi* render;const GcWiiNativeFrameApi* frame;const GcWiiNativeCaptureApi* capture;
+    const GcWiiNativeDisplayApi* display;u32 display_aspect;bool display_known;
     WiiMenuView view,keyboard_view;float model[12],keyboard_model[12];bool active,bad,projection_ready,keyboard;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
     bool transform_verified,transform_sampled;u64 transforms,transform_declines;
@@ -152,6 +153,14 @@ static bool mode(CPUState* cpu,u32 object,u32* output) {
 }
 static bool set_viewport(CPUState* cpu,u32 object) {
     u32 p;if(!mode(cpu,object,&p))return false;
+    const u32 aspect=word(cpu,object+0x10);if(state.bad || aspect>1)return false;
+    if(state.display && (!state.display_known || state.display_aspect!=aspect)) {
+        /* The original Menu selects its own anamorphic layout. Presentation
+         * honors that mode without changing guest pixels or window geometry. */
+        if(!state.display->set_aspect(aspect?16:0,aspect?9:0))return false;
+        state.display_aspect=aspect;state.display_known=true;
+        printf("{\"native_menu_display_aspect\":%u,\"numerator\":%u,\"denominator\":%u}\n",aspect,aspect?16:0,aspect?9:0);
+    }
     state.object=object;state.view.x=state.view.y=0;state.view.width=state.view.clip_width=half(cpu,p+4);
     state.view.height=state.view.clip_height=half(cpu,p+6);state.view.clip_x=state.view.clip_y=0;
     state.view.near_depth=0;state.view.far_depth=1;++state.views;return !state.bad;
@@ -335,6 +344,10 @@ bool wii_menu_frame_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcW
 void wii_menu_frame_capture(const GcWiiNativeCaptureApi* api) {
     state.capture=api && api->abi==GC_WII_NATIVE_CAPTURE_ABI?api:NULL;
 }
+void wii_menu_frame_display(const GcWiiNativeDisplayApi* api) {
+    state.display=api && api->abi==GC_WII_NATIVE_DISPLAY_ABI && api->set_aspect?api:NULL;
+    state.display_known=false;
+}
 int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;state.bad=false;
@@ -484,6 +497,7 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
 }
 void wii_menu_frame_stop(void) {
     if(!state.owner)return;if(state.mesh)state.render->destroy_mesh(state.mesh);
+    if(state.display)(void)state.display->set_aspect(0,0);
     printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"isolated_buffers\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.isolated_buffers,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
 #if WIILLR_MENU_TRANSFORM
     printf("{\"native_menu_transforms\":1,\"admitted\":%llu,\"declined\":%llu}\n",(unsigned long long)state.transforms,(unsigned long long)state.transform_declines);
