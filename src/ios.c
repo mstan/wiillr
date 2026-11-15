@@ -949,6 +949,12 @@ bool wii_ios_native_stm_event(WiiIosNative* ios,CPUState* cpu,u32 event) {
 }
 bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
     if(ios->launch_pending)return true;
+    /* Receive the PPC's reply-retirement notification independently of the
+     * request/reply phase. Preserve outgoing Y bits, receive masks and X1. */
+    if(ipc->x&2) {
+        const u32 control=2u|(ipc->y&1u)|((ipc->y&2u)<<2)|(ipc->ix<<4);
+        wii_ipc_write(ipc,12,control,cpu->cycles);
+    }
     if(ios->kd_utc_set && ios->kd_utc_cycles==UINT64_MAX)ios->kd_utc_cycles=cpu->cycles;
     /* Clearing a Y bit can precede the handler's IRQFLAG acknowledgment.
      * Reusing the mailbox during that interval can lose the next ACK. */
