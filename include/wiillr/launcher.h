@@ -4,6 +4,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "wiillr/gx.h"
+struct WiiPackage;
+/* Package startup can import missing system files before producing boot args. */
+int wii_launcher_menu_package(struct WiiPackage*,bool force,bool check_only);
 /* Optional native-build launcher. No UI or file picker in check-only mode. */
 int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned gid,
     bool force,bool check_only,char* selected,size_t capacity);

@@ -17,6 +17,8 @@ static unsigned views=1,ui_calls,pref_calls,settings_calls,init_calls;
 static unsigned mod_save_calls;
 static int mod_saved_resolution,mod_before_resolution;
 static bool rejected,skip;
+static bool peripheral_missing;
+static RecompLauncherCPeripheral test_peripheral;
 static int ui_action,launch_status;
 static char directory[4096],pref_name[64],alternate[4096];
 struct WiiFs {int unused;};static struct WiiFs filesystem;
@@ -46,7 +48,11 @@ bool SDL_HasGamepad(void){return false;}
 void recomp_launcher_set_preserve_sdl(int keep){CHECK(keep==1);}
 void wii_launcher_input_defaults(RecompLauncherCSettings* value){(void)value;}
 void wii_launcher_input_reset(void){}
-void wii_launcher_input_poll(void* user,GcnllrPad* pad){CHECK(user);memset(pad,0,sizeof *pad);}
+void wii_launcher_input_poll(void* user,GcnllrPad* pad){CHECK(user);memset(pad,0,sizeof *pad);pad->stick_x=pad->stick_y=pad->substick_x=pad->substick_y=128;}
+bool wii_launcher_peripherals_prepare(RecompLauncherCGameInfo* game,const char* path){
+    CHECK(game && path);test_peripheral.ready=!peripheral_missing;
+    game->peripherals=&test_peripheral;game->num_peripherals=1;return true;
+}
 void launcher_settings_load(RecompLauncherCSettings* value,const RecompLauncherCGameInfo* game){
     ++settings_calls;CHECK(!strcmp(game->name,"Wii Menu"));CHECK(value->aspect_index==3);value->skip_launcher=skip;
 }
@@ -58,9 +64,12 @@ void launcher_settings_save(const RecompLauncherCSettings* value,const RecompLau
 int recomp_launcher_run_window(const char* caption,RecompLauncherCSettings* value,const RecompLauncherCGameInfo* game,
     const char* assets,const char* initial,char* selected,size_t capacity){
     ++ui_calls;CHECK(value && !assets && initial && !strcmp(caption,"Wii Menu") && !strcmp(game->name,"Wii Menu"));
-    CHECK(game->num_players==1 && game->settings_bindings && game->num_known_sha256==1);
+    CHECK(game->num_players==4 && game->settings_bindings && game->num_known_sha256==1);
+    CHECK(game->channel_grid_art && game->system_media_title && game->system_media_folders);
     CHECK(!game->setup_wizard_supported && !game->prepare_disc && !game->import_dlc && !game->mods);
     CHECK(strstr(game->config_path,directory)==game->config_path);
+    /* The user repairs an unavailable saved attachment before choosing Launch. */
+    if(game->peripherals)game->peripherals[0].ready=1;
     CHECK(strlen(*alternate?alternate:initial)<capacity);strcpy(selected,*alternate?alternate:initial);return ui_action;
 }
 static void file(const char* path,const void* p,size_t size){FILE* f=fopen(path,"wb");CHECK(f);CHECK(fwrite(p,1,size,f)==size);CHECK(!fclose(f));}
@@ -80,6 +89,9 @@ int main(int argc,char** argv){
     CHECK(wii_launcher_menu_start(image,"synthetic NAND",0,1,false,false,selected,sizeof selected,4)==0);
     CHECK(ui_calls==1 && !strcmp(pref_name,"Wii Menu"));
     skip=true;ui_calls=0;CHECK(wii_launcher_menu_start(image,"synthetic NAND",0,1,false,false,selected,sizeof selected,4)==0 && !ui_calls);
+    peripheral_missing=true;
+    CHECK(wii_launcher_menu_start(image,"synthetic NAND",0,1,false,false,selected,sizeof selected,4)==0 && ui_calls==1);
+    peripheral_missing=false;ui_calls=0;
     CHECK(wii_launcher_menu_start(image,"synthetic NAND",0,1,true,false,selected,sizeof selected,4)==0 && ui_calls==1);
     ui_action=RECOMP_LAUNCHER_RESULT_QUIT;CHECK(wii_launcher_menu_start(image,"synthetic NAND",0,1,true,false,selected,sizeof selected,4)==1);
     ui_action=RECOMP_LAUNCHER_RESULT_UNAVAILABLE;CHECK(wii_launcher_menu_start(image,"synthetic NAND",0,1,true,false,selected,sizeof selected,4)==2);

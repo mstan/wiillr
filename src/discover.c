@@ -190,6 +190,12 @@ static int run(int argc, char** argv) {
             fclose(log);
             if(!freopen(wii_package_log(package),"ab",stdout) || !freopen(wii_package_log(package),"ab",stderr))return 2;
         }
+        if(package_menu_request) {
+            const bool force=!strcmp(action,"--launcher-settings") ||
+                             !strcmp(action,"--menu-launcher-settings");
+            const int setup=wii_launcher_menu_package(package,force,check);
+            if(setup)return setup==1?0:setup;
+        }
         wii_package_arguments(package,argv[0],action,&argc,&argv);
     }
     if(argc>1 && (!strcmp(argv[1],"--launcher") ||
@@ -606,11 +612,14 @@ int main(int argc,char** argv) {
 #endif
 #ifdef RECOMP_LAUNCHER
     const char* hidden=getenv("GCNLLR_RENDER_HIDDEN");const char* test=getenv("LNG_TEST_HIDDEN");
-    const bool check=argc==2 && !strcmp(argv[1],"--launcher-check");
+    const bool check=argc==2 && (!strcmp(argv[1],"--launcher-check") ||
+                                !strcmp(argv[1],"--menu-launcher-check"));
     if(result && package_request(argc,argv) && !check &&
        !(hidden && !strcmp(hidden,"1")) && !(test && !strcmp(test,"1")))
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Mega Man 9",
-            *package_error?package_error:"Mega Man 9 could not start. See game.log in the game preferences folder for details.",NULL);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,package_menu_request?"Wii Menu":"Mega Man 9",
+            *package_error?package_error:package_menu_request?
+                "Wii Menu could not start. See game.log in the Wii Menu preferences folder for details.":
+                "Mega Man 9 could not start. See game.log in the game preferences folder for details.",NULL);
 #endif
     return result;
 }

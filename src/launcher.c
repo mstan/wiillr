@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/launcher.h"
 #include "wiillr/launcher_input.h"
+#include "wiillr/launcher_peripherals.h"
 #include "wiillr/launcher_mods.h"
+#include "wiillr/package.h"
+#include "wiillr/nand_setup.h"
 #include "wiillr/mm9_mods.h"
 #include "wiillr/fs.h"
 #include "wiillr/wad.h"
@@ -30,9 +33,17 @@ static struct {char nand[32768],key[32768],cache[32768];} dlc;
 static char dlc_path[32768],dlc_status[128];
 static const char* const dlc_patterns[]={"*.wad"};
 static bool settings_key_held,input_release;
+static bool session_controls_held,session_input_releasing;
 static unsigned char menu_sha256[1][32];
 static unsigned char menu_boot_sha256[32];
 static bool menu_boot_verified;
+static bool menu_package_started;
+static WiiPackage* menu_package;
+static char menu_system_status[1024];
+static WiiNandSetupInfo menu_import_info;
+static unsigned char menu_import_sha256[32];
+static char menu_keys_path[1024];
+static char launcher_directory[32768];
 static const char* const view_labels[]={"Original 4:3","16:9","21:9","Fit to screen"};
 static const char* const resolution_labels[]={"Original (1x)","2x","3x","4x","8x","16x"};
 static const int resolution_values[]={1,960,1440,1920,3840,7680};
@@ -105,6 +116,7 @@ static void session_stop(void* user) {
         SDL_RemoveEventWatch(session_cursor_event,user);cursor_owner=NULL;
     }
     session_cursor(false);wii_launcher_input_stop(user);
+    wii_launcher_peripherals_unbind();
 }
 
 static bool set_env(const char* name,const char* value) {
@@ -127,22 +139,37 @@ static void load_settings(RecompLauncherCGameInfo* game) {
     launcher_settings_load(&settings,game);
     recomp_launcher_set_preserve_sdl(1);
 }
+static bool launch_devices_ready(const RecompLauncherCGameInfo* game) {
+    for(int i=0;game->peripherals && i<game->num_peripherals;++i)
+        if(!game->peripherals[i].ready)return false;
+    return true;
+}
 
 bool wii_launcher_menu_session(const char* image) {
     const char* directory=getenv("WIILLR_USER_DIR");char* pref=NULL;
     if(!directory || !*directory) {
         pref=SDL_GetPrefPath("RetroPortingToolKit","Wii Menu");directory=pref;
     }
-    if(!directory || strlen(image)>=sizeof boot_image ||
+    if(!directory || strlen(directory)>=sizeof launcher_directory ||
+       !image || strlen(image)>=sizeof boot_image ||
        snprintf(config_path,sizeof config_path,"%s/config.ini",directory)>=(int)sizeof config_path ||
        snprintf(rom_cache_path,sizeof rom_cache_path,"%s/boot.cfg",directory)>=(int)sizeof rom_cache_path) {
         SDL_free(pref);return false;
     }
-    size_t size=0;void* original=SDL_LoadFile(image,&size);
-    if(!original){SDL_free(pref);return false;}
-    recompui_sha256_compute(original,size,menu_sha256[0]);SDL_free(original);
+    strcpy(launcher_directory,directory);
+    memset(menu_sha256,0,sizeof menu_sha256);
+    if(*image) {
+        size_t size=0;void* original=SDL_LoadFile(image,&size);
+        if(!original){SDL_free(pref);return false;}
+        recompui_sha256_compute(original,size,menu_sha256[0]);SDL_free(original);
+    }
     RecompLauncherCGameInfo game={0};launcher_profile_apply("wii",&game);
-    game.name="Wii Menu";game.num_players=1;game.config_path=config_path;
+    game.name="Wii Menu";game.num_players=4;game.config_path=config_path;
+    game.rom_noun="Wii system";game.channel_grid_art=1;
+    game.system_media_title="Wii system files";
+    game.system_media_status=menu_system_status;
+    game.system_media_note="Import a Wii Menu 4.3U NAND backup or an extracted NAND folder. System files and saved data use a managed copy; your original backup is preserved.";
+    game.system_media_folders=1;game.host_persists_paths=1;
     game.rom_cache_path=rom_cache_path;game.settings_bindings=1;
     game.known_sha256=(const uint8_t(*)[32])menu_sha256;game.num_known_sha256=1;
     if(view_supported()) {
@@ -151,6 +178,7 @@ bool wii_launcher_menu_session(const char* image) {
         game.internal_resolution_note="Raster resolution for geometry and effects. Bitmap artwork retains its original detail.";
     }
     load_settings(&game);menu_mod_prepare(&game);
+    if(!wii_launcher_peripherals_prepare(&game,directory)){SDL_free(pref);return false;}
     game_info=game;strcpy(boot_image,image);SDL_free(pref);
     char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
     if(!set_env("WIILLR_WINDOW_TITLE","Wii Menu") || !set_env("GCN_WINDOW","1") ||
@@ -158,6 +186,75 @@ bool wii_launcher_menu_session(const char* image) {
     wii_launcher_input_reset();
     GcnllrPad initial_input;wii_launcher_input_poll(&settings,&initial_input);
     active=true;return true;
+}
+
+static void menu_identity(const WiiNandSetupInfo* info) {
+    snprintf(menu_system_status,sizeof menu_system_status,"%s%s%s",
+        info->menu_label,info->region_label[0]?" · ":"",info->region_label);
+}
+static int import_menu_system(const char* source,char* out,size_t out_capacity,
+                              char* error,size_t error_capacity) {
+    if(!menu_package) {
+        snprintf(error,error_capacity,"Use the packaged Wii Menu launcher to import system files.");return 0;
+    }
+    WiiNandSetupInfo info={0};
+    if(!wii_package_import_system(menu_package,source,*menu_keys_path?menu_keys_path:NULL,&info,error,error_capacity))return 0;
+    const int n=snprintf(out,out_capacity,"%s/%s",wii_package_nand(menu_package),info.boot_relative);
+    if(n<0 || (size_t)n>=out_capacity) {
+        snprintf(error,error_capacity,"The managed system path is too long.");return 0;
+    }
+    size_t size=0;void* data=SDL_LoadFile(out,&size);
+    if(!data) {snprintf(error,error_capacity,"Could not read the imported Wii Menu.");return 0;}
+    recompui_sha256_compute(data,size,menu_import_sha256);SDL_free(data);
+    menu_import_info=info;return 1;
+}
+static void menu_imported(const char* boot_path) {
+    (void)boot_path;
+    memcpy(menu_sha256[0],menu_import_sha256,sizeof menu_import_sha256);
+    menu_identity(&menu_import_info);
+}
+
+int wii_launcher_menu_package(WiiPackage* package,bool force,bool check_only) {
+    if(!package || !wii_package_menu(package))return 2;
+    char error[1024]={0},image[32768]={0};WiiNandSetupInfo info={0};
+    const bool ready=wii_package_ready(package);
+    if(ready) {
+        if(!wii_package_refresh(package,&info,error,sizeof error)) {
+            fprintf(stderr,"launcher: %s\n",error);return 2;
+        }
+        const int n=snprintf(image,sizeof image,"%s/%s",wii_package_nand(package),info.boot_relative);
+        if(n<0 || n>=(int)sizeof image)return 2;
+        menu_identity(&info);
+    } else {
+        (void)wii_package_refresh(package,&info,error,sizeof error);
+        snprintf(menu_system_status,sizeof menu_system_status,"%s",
+            *error?error:"System files have not been imported.");
+    }
+    if(check_only)return ready?0:2;
+    if(!wii_launcher_menu_session(image))return 2;
+    menu_package=package;
+    static const char* const patterns[]={"*.bin"};
+    game_info.rom_patterns=patterns;game_info.num_rom_patterns=1;
+    game_info.rom_filter_desc="Wii NAND backup (nand.bin)";
+    game_info.prepare_disc=import_menu_system;
+    game_info.system_media_imported=menu_imported;
+    game_info.system_media_keys_path=menu_keys_path;
+    game_info.system_media_keys_capacity=sizeof menu_keys_path;
+    game_info.prepare_busy_status="Checking and importing Wii system files...";
+    game_info.prepare_success_status="Wii system files are ready.";
+    const RecompLauncherCSettings before=settings;
+    int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
+    char selected[32768];
+    if(!ready || force || !settings.skip_launcher || !launch_devices_ready(&game_info))
+        action=recomp_launcher_run_window("Wii Menu",&settings,&game_info,NULL,
+                                          *image?image:NULL,selected,sizeof selected);
+    menu_mod_finish(&game_info,&before);
+    if(action==RECOMP_LAUNCHER_RESULT_QUIT)return 1;
+    if(action!=RECOMP_LAUNCHER_RESULT_LAUNCH ||
+       !wii_package_refresh(package,&info,error,sizeof error)) {
+        fprintf(stderr,"launcher: %s\n",error);return 2;
+    }
+    menu_package_started=true;return 0;
 }
 
 bool wii_launcher_verify(const void* image,size_t size) {
@@ -246,15 +343,20 @@ int wii_launcher_menu_start(const char* image,const char* nand,unsigned uid,unsi
     }
     strcpy(selected,image);
     if(check_only){puts("{\"launcher_title_verified\":true,\"window_opened\":false}");return 0;}
+    if(menu_package_started) {
+        menu_package_started=false;
+        goto menu_selected;
+    }
     if(!wii_launcher_menu_session(image))return 2;
     const RecompLauncherCSettings before=settings;
     int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
-    if(force || !settings.skip_launcher)
+    if(force || !settings.skip_launcher || !launch_devices_ready(&game_info))
         action=recomp_launcher_run_window("Wii Menu",&settings,&game_info,NULL,image,selected,capacity);
     menu_mod_finish(&game_info,&before);
     if(action==RECOMP_LAUNCHER_RESULT_QUIT)return 1;
     if(action!=RECOMP_LAUNCHER_RESULT_LAUNCH || !installed_menu_valid(selected,nand,uid,gid,ios_profile) ||
        strlen(selected)>=sizeof boot_image)return 2;
+menu_selected:
     strcpy(boot_image,selected);
     char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
     if(!set_env("WIILLR_WINDOW","1") || !set_env("GCN_WINDOW","1") ||
@@ -310,6 +412,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     game.prepare_busy_status="Importing Mega Man 9...";game.prepare_success_status="Mega Man 9 is ready.";
     if(!prepare_dlc(&game,nand,directory)){SDL_free(pref);return 2;}
     if(!wii_launcher_mods_prepare(&game,directory,nand)){SDL_free(pref);return 2;}
+    if(!wii_launcher_peripherals_prepare(&game,directory)){SDL_free(pref);return 2;}
     game.settings_bindings=1;
     static const char* const actions[]={"Previous weapon (L)","Next weapon (R)"};
     game.assist_binding_labels=actions;game.assist_binding_count=2;
@@ -327,7 +430,7 @@ int wii_launcher_start(const char* image,const char* nand,unsigned uid,unsigned 
     int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
     /* Keep the launcher's selected SDL instance valid for the game. */
     recomp_launcher_set_preserve_sdl(1);
-    if(!valid || force || !settings.skip_launcher)
+    if(!valid || force || !settings.skip_launcher || !launch_devices_ready(&game))
         action=recomp_launcher_run_window("Mega Man 9",&settings,&game,NULL,
             valid?image:NULL,selected,capacity);
     SDL_free(pref);
@@ -410,6 +513,7 @@ static void session_input(void* user,GcnllrPad* pad) {
     const bool controls_held=pressed || pad->buttons || pad->stick_x!=128 ||
         pad->stick_y!=128 || pad->substick_x!=128 || pad->substick_y!=128 ||
         wii_launcher_input_held_actions() || (focused && SDL_GetMouseState(NULL,NULL));
+    session_controls_held=controls_held;session_input_releasing=input_release;
     if(input_release && !controls_held)input_release=false;
     gx->host_input_capture=input_release;
     if(input_release) {
@@ -422,6 +526,26 @@ static void session_input(void* user,GcnllrPad* pad) {
         gx->input.pointing && !input_release && !gx->scripted_input);
     wii_mm9_mods_host_actions(gx->title==0x0001000157523945ull && !gx->scripted_input && !input_release &&
         !(pad->buttons&0x10)?wii_launcher_input_held_actions():0);
+}
+
+static unsigned session_player_input(void* user,unsigned player,GcnllrPad* pad) {
+    static bool releasing,held;
+    WiiGx* gx=user;
+    if(player==0) {
+        session_input(user,pad);
+        releasing=session_input_releasing;held=session_controls_held;
+    } else {
+        const unsigned flags=wii_launcher_input_poll_player(&settings,player,pad);
+        held=held || pad->buttons || pad->stick_x!=128 || pad->stick_y!=128 ||
+              pad->substick_x!=128 || pad->substick_y!=128;
+        if(player==3) {
+            input_release=releasing && held;
+            gx->host_input_capture=input_release;
+            if(input_release)session_cursor(false);
+        }
+        return flags;
+    }
+    return wii_launcher_input_player_flags(0);
 }
 
 bool wii_launcher_window(WiiGx* gx) {
@@ -458,6 +582,8 @@ bool wii_launcher_window(WiiGx* gx) {
     gx->host_settings=mm9 || menu?session_settings:NULL;
     gx->host_review=mm9 || menu?session_review:NULL;
     gx->host_input_stop=session_stop;
+    if(!wii_gx_set_player_input(gx,session_player_input,gx))return false;
+    if(!wii_launcher_peripherals_bind(&gx->machine->ios))return false;
     if(menu && cursor_owner!=gx) {
         if(cursor_owner)SDL_RemoveEventWatch(session_cursor_event,cursor_owner);
         cursor_owner=NULL;

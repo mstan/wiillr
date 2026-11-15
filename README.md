@@ -1,5 +1,35 @@
 # wiillr
 
+The Wii Menu package has its own startup launcher. Open `Wii Menu.exe`, choose
+**Import NAND backup** or **Import extracted folder**, and provide your own
+system data. This release supports Wii Menu 4.3U with its native IOS80 provider.
+Other Menu revisions are identified and rejected before launch. A BootMii
+backup uses its embedded keys when available; the optional Console keys control
+accepts its matching `keys.bin` or 128-byte OTP backup. Extracted NAND folders do
+not need a separate key file.
+
+Setup verifies the supported Menu content, installed metadata, UID and system
+settings before enabling launch. It creates a new writable managed copy and
+preserves the source backup, native saves and settings. Importing another system
+creates another managed profile and selects it only after validation succeeds;
+it never merges over existing progress. Original IOS80 firmware is optional for
+this native provider. This does not qualify original-IOS title startup.
+
+The startup screen provides four independent Wii Remote assignments and a
+**Wii Peripherals** section with USB 1, USB 2 and SD Card. USB ports accept the
+host keyboard or raw mass-storage images; the SD slot accepts a raw SD image.
+USB 1 defaults to Keyboard, and the other slots start disconnected. Images must
+already exist and contain the desired filesystem; the launcher does not format
+them. New image selections default to read only. Clear Read only to allow guest
+writes, and use Eject to flush and detach an image. Selections persist in the
+same preferences directory as the launcher settings.
+
+Wii Menu Mods contains system features. Mega Man 9 has a separate launcher with
+its own game and DLC controls. Fresh launcher settings use Fit to screen;
+existing choices and the window geometry survive title handoffs. F1 opens
+in-session settings. Keyboard HOME defaults to A and can be rebound under
+Controller; this is separate from typing through the USB keyboard peripheral.
+
 An optional shared pre-boot UI is available in the strict native build with
 `-DWIILLR_LAUNCHER=ON` (SDL3, native IOS and native graphics required).
 Prefix the existing `wiillr-native` arguments with `--launcher`; use
@@ -131,9 +161,10 @@ they also load with character switching disabled.
 Wii low-level static recompiler, sharing GameCube compiler and device foundations
 with gcnllr. Initial targets are the original Startup Menu and Mega Man 9.
 
-Bring-up is in progress. The original Startup Menu reaches its Startup Disc
-prompt with live rendering in discovery and static PPC development builds.
-Input, audio delivery, title lifecycle and Mega Man 9 gameplay remain unqualified.
+The original Startup Menu development target reaches its Startup Disc prompt
+with live rendering in discovery and static PPC development builds. It is
+separate from the packaged 4.3U Menu and Mega Man 9 native consumers described
+above; its complete input, audio and title lifecycle remain development work.
 Native acceptance requires zero interpreter execution and unresolved native
 misses. Development discovery and maintained LLE references remain separate
 from accepted native execution. HLE/LLE service selection happens at build time.
@@ -170,8 +201,10 @@ the native service provider or manufacture IPC results. Missing hardware stops
 explicitly. `wiillr-starlet-discover ORIGINAL-IOS MAX-STEPS [ORIGINAL-OTP]`
 also supports this exception-enabled original execution. OTP input must contain
 exactly 128 original bytes, and an actual fuse-data read fails when it is absent.
-ROM-free tests cover exception returns and shared-memory/mailbox wiring; an
-original IOS service reply and the full LLE service floor remain unqualified.
+ROM-free tests cover exception returns and shared-memory/mailbox wiring.
+A bounded ES open, ticket-view query and close sequence has matching native
+and original-IOS IPC coverage. Full original-IOS title startup remains
+unqualified.
 The native disc resource borrows the shared device for register queries,
 interrupt controls and resets. It does not replace drive state with canned
 successful reads.
