@@ -4,6 +4,12 @@
 #include "cpu_state.h"
 #include "wiillr/hollywood.h"
 #include "wiillr/ipc.h"
+#include "wiillr/seeprom.hpp"
+#include "wiillr/ohci_init.hpp"
+#include "wiillr/nand_controller.hpp"
+#include "wiillr/sha1_engine.hpp"
+#include "wiillr/aes_engine.hpp"
+#include "wiillr/exi_boot.hpp"
 #include <array>
 #include <span>
 #include <cstdint>
@@ -14,9 +20,19 @@ namespace wiillr {
  * to Starlet. Unknown hardware/CP15 operations fail, rather than succeed. */
 class Starlet final : public armv4t::Bus {
 public:
+    /* Borrow the consumer's existing DI; no device or clock ownership here. */
+    struct DiBus {
+        void* user=nullptr;
+        uint32_t (*read)(void*,uint32_t offset)=nullptr;
+        void (*write)(void*,uint32_t offset,uint32_t value)=nullptr;
+        bool (*interrupt)(void*)=nullptr;
+    };
     Starlet(std::span<uint8_t> mem1, std::span<uint8_t> mem2);
     uint32_t load_ios(std::span<const uint8_t> binary);
     void load_otp(std::span<const uint8_t> bytes);
+    void load_seeprom(std::span<const uint8_t> bytes) {seeprom_.load(bytes);}
+    std::span<const uint8_t> seeprom_image() {return seeprom_.image(cycles_);}
+    void load_nand(std::vector<uint8_t> bytes) {nand_.load(std::move(bytes));}
     uint32_t execute(const armv4t::Instr& instruction);
     uint32_t step();
     uint64_t cycles() const {return cycles_;}
@@ -29,9 +45,17 @@ public:
     void attach_ipc(WiiIpc& ipc,uint64_t ppc_origin=0) {ipc_=&ipc;ppc_origin_=ppc_origin;}
     /* Attach before PPC execution, establishing the original-kernel profile. */
     void attach_hollywood(WiiHollywood& hardware) {hardware=owned_hollywood_;hollywood_=&hardware;}
+    bool attach_di(DiBus bus) {
+        if(cycles_ || instruction_epoch_ || di_.user || !bus.user || !bus.read || !bus.write || !bus.interrupt)return false;
+        di_=bus;return true;
+    }
     WiiIpc& ipc() {return *ipc_;}
     void observe_stores(void (*observer)(void*,uint32_t,uint32_t),void* user) {
         store_observer_=observer;store_user_=user;
+    }
+    bool read_ppc_boot(uint32_t address,uint32_t width,uint32_t& value) const {
+        return (hollywood_->compat&ExiBootMemory::ppc_boot_mask) &&
+               exi_boot_.ppc_read(address,width,(exi_control_&1u)!=0,value);
     }
     uint32_t fetch32(uint32_t);
     uint16_t fetch16(uint32_t);
@@ -46,10 +70,39 @@ public:
     void coproc_cdp(uint32_t,uint32_t,uint32_t,uint32_t,uint32_t) override;
     armv4t::CPUState cpu{};
 private:
-    uint8_t* physical(uint32_t,uint32_t);
+    uint8_t* physical(uint32_t,uint32_t,uint32_t* canonical=nullptr,bool* sram=nullptr);
+    uint8_t* dma_physical(uint32_t,uint32_t,uint32_t sram_permission);
+    void stored(uint32_t,uint32_t);
     void check_alignment(uint32_t,uint32_t);
     uint32_t translate(uint32_t,bool writing);
     void exception(armv4t::Mode mode,uint32_t vector,uint32_t link);
+    void update_ahb_drain();
+    uint32_t gpio_outputs() const {return gpio_[0]&gpio_[1]&gpio_enable_;}
+    NandController::Bus nand_bus() {
+        return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
+            auto& m=*static_cast<Starlet*>(user);
+            return m.dma_physical(address,size,4); /* FLAEN */
+        },[](void* user,uint32_t address,uint32_t size) {
+            auto& m=*static_cast<Starlet*>(user);
+            m.stored(address,size);
+        }};
+    }
+    Sha1Engine::Bus sha_bus() {
+        return {this,[](void* user,uint32_t address,uint32_t size)->const uint8_t* {
+            auto& m=*static_cast<Starlet*>(user);
+            return m.dma_physical(address,size,2); /* SHAEN */
+        }};
+    }
+    AesEngine::Bus aes_bus() {
+        const auto b=nand_bus();return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
+            return static_cast<Starlet*>(user)->dma_physical(address,size,1); /* AESEN */
+        },b.stored};
+    }
+    OhciInit::Bus ohci_bus() {
+        const auto b=nand_bus();return {this,[](void* user,uint32_t address,uint32_t size)->uint8_t* {
+            return static_cast<Starlet*>(user)->dma_physical(address,size,0); /* USB remains RAM-only. */
+        },b.stored};
+    }
     /* Starlet's high exception vectors are selected on entry (ARM926
      * VINITHI/SCTLR.V). The original IOS startup preserves that V bit. */
     uint32_t sctl_=0x000520f8u,ttbr_=0,dacr_=0,dfsr_=0,far_=0,fcse_=0;
@@ -69,28 +122,42 @@ private:
     uint32_t alarm_=0;
     uint32_t debug_irq_enable_=0;
     uint32_t ahb_protection_=0;
+    /* Selected IOS-entry profile, NOT power-on state: HW1.1, BOOT0 off,
+     * SM1, AES/SHA/NAND SRAM visible, PPC/USB SRAM disabled. The qualified
+     * ARM view uses the BOOT0-disabled/SM-set map in WiiBrew Main Memory. */
+    uint32_t sram_visibility_=0x27;
     uint32_t otp_command_=0;
     std::array<uint8_t,128> otp_{};
     bool otp_loaded_=false;
     uint16_t flush_request_=0,flush_ack_=0;
     uint32_t ahb_flush_mask_=0;
     uint32_t exi_control_=0;
+    ExiBootMemory exi_boot_;
     uint32_t ahb_prefetch_=0;
     uint32_t vi_pll_=0,vi_pll_ext_=0;
     uint32_t usb_pll_=0,usb_pll_ext_=0;
     uint32_t usb_force_reset_=0;
     std::array<uint32_t,4> usb_phy_{};
     std::array<uint32_t,3> io_strength_{};
-    std::array<uint32_t,3> dma_control_{}; /* NAND, AES, SHA idle controls */
     std::array<uint32_t,8> gpio_{};
     uint32_t gpio_enable_=0;
+    Seeprom seeprom_;
+    std::array<OhciInit,2> ohci_;
+    NandController nand_;
+    Sha1Engine sha_;
+    AesEngine aes_;
+    DiBus di_;
     uint32_t resets_=0x08000000u; /* isolated entry: IOP running; PPC held */
     std::array<uint32_t,18> arbiter_config_{};
+    uint32_t spare0_=0;
     uint32_t spare1_=0x1000; /* IOS entry: boot0 ROM is already unmapped. */
     WiiHollywood owned_hollywood_{};
     WiiHollywood* hollywood_=&owned_hollywood_;
     uint16_t protect_enabled_=0,protect_start_=0,protect_end_=0;
+    uint16_t register_protection_=0;
+    bool register_protection_known_=false; /* No invented reset readback. */
     std::span<uint8_t> mem1_,mem2_;
     std::array<uint8_t,0x10000> sram_{};
+    std::array<uint8_t,0x8000> sram_b_{};
 };
 }

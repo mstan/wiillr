@@ -24,6 +24,12 @@ int usb_phy_index(uint32_t address) {
     default:return -1;
     }
 }
+uint32_t di_register_address(uint32_t address) {
+    /* Only the documented DI physical port; no general AHB alias rule.
+     * https://wiibrew.org/wiki/Hardware/Drive_Interface */
+    if(address>=0x0d806000u && address<0x0d806040u)return address-0x00800000u;
+    return address;
+}
 [[noreturn]] void unsupported(const char* operation,uint32_t pc,uint32_t address) {
     char message[128];
     std::snprintf(message,sizeof message,"Starlet unsupported %s pc=%08x address=%08x",operation,pc,address);
@@ -41,10 +47,28 @@ Starlet::Starlet(std::span<uint8_t> mem1,std::span<uint8_t> mem2):mem1_(mem1),me
 void Starlet::advance(uint64_t arm_cycles) {
     const uint64_t old_timer=cycles_/128;
     cycles_+=arm_cycles;
+    if(nand_.advance(cycles_,nand_bus()))ipc_->arm_flags|=2;
+    if(aes_.advance(cycles_,aes_bus()))ipc_->arm_flags|=4;
+    if(sha_.advance(cycles_,sha_bus()))ipc_->arm_flags|=8;
+    /* Shared DI owns its level and clock; Hollywood IRQ18 samples that level.
+     * Keep the consumer's existing PPC interrupt callback unchanged. */
+    if(di_.user && di_.interrupt(di_.user))ipc_->arm_flags|=1u<<18;
+    for(unsigned i=0;i<ohci_.size();++i)if(ohci_[i].interrupt(cycles_,ohci_bus()))ipc_->arm_flags|=1u<<(5+i);
     const uint64_t ticks=cycles_/128-old_timer;
     const uint32_t distance=alarm_-uint32_t(old_timer);
     if(ticks>=(distance ? uint64_t(distance):0x100000000ull))ipc_->arm_flags|=1;
     wii_ipc_tick(ipc_,ppc_origin_+cycles_*3);
+}
+void Starlet::update_ahb_drain() {
+    /* SPARE0/M9/MD handshake exercised by original IOS and documented by
+     * https://github.com/fail0verflow/mini/blob/master/memory.c (_ahb_flush_to).
+     * This bus publishes RAM stores synchronously and retains no AHB FIFO.
+     * Acknowledge a configured drain only after publishing those stores.
+     * Peripheral command latency/completion belongs to advance(), not here. */
+    const bool drained=(spare0_&0x02000000u) && !(spare0_&0x00010000u) &&
+        (arbiter_config_[9]&0x7c0u)==0x280u && (arbiter_config_[13]&0x400u);
+    if(drained)std::atomic_thread_fence(std::memory_order_seq_cst);
+    spare1_=(spare1_&~0xfu)|(drained?9u:0u);
 }
 void Starlet::exception(armv4t::Mode mode,uint32_t vector,uint32_t link) {
     auto bank=[](uint8_t current) {
@@ -104,13 +128,40 @@ uint32_t Starlet::execute(const armv4t::Instr& instruction) {
     }
     return cost;
 }
-uint8_t* Starlet::physical(uint32_t address,uint32_t size) {
+uint8_t* Starlet::physical(uint32_t address,uint32_t size,uint32_t* canonical,bool* sram) {
+    if(canonical)*canonical=address;
+    if(sram)*sram=false;
     if(address<=mem1_.size() && size<=mem1_.size()-address)return mem1_.data()+address;
     if(address>=0x10000000u && address-0x10000000u<=mem2_.size() &&
        size<=mem2_.size()-(address-0x10000000u))return mem2_.data()+address-0x10000000u;
-    if(address>=0xffff0000u && uint64_t(address)+size<=0x100000000ull)
-        return sram_.data()+(address-0xffff0000u);
+    /* BOOT0-disabled/SM1 mapping: B32K, hole32K, A64K per128K window.
+     * https://wiibrew.org/wiki/Hardware/Main_Memory
+     * Neither holes nor an extent crossing a bank/mirror boundary is RAM. */
+    uint32_t offset;
+    if(address>=0x0d400000u && address<0x0d420000u)offset=address-0x0d400000u;
+    else if(address>=0xfff00000u && uint64_t(address)+size<=0x100000000ull)offset=address&0x1ffffu;
+    else return nullptr;
+    if(offset<0x8000u && size<=0x8000u-offset) {
+        if(canonical)*canonical=0xfffe0000u+offset;
+        if(sram)*sram=true;
+        return sram_b_.data()+offset;
+    }
+    if(offset>=0x10000u && size<=0x20000u-offset) {
+        if(canonical)*canonical=0xffff0000u+offset-0x10000u;
+        if(sram)*sram=true;
+        return sram_.data()+offset-0x10000u;
+    }
     return nullptr;
+}
+uint8_t* Starlet::dma_physical(uint32_t address,uint32_t size,uint32_t permission) {
+    bool sram=false;auto* result=physical(address,size,nullptr,&sram);
+    return sram && !(sram_visibility_&permission)?nullptr:result;
+}
+void Starlet::stored(uint32_t address,uint32_t size) {
+    if(!store_observer_ || !size)return;
+    uint32_t canonical;
+    if(!physical(address,size,&canonical))throw std::runtime_error("Starlet invalid store notification span");
+    store_observer_(store_user_,canonical,size);
 }
 uint32_t Starlet::translate(uint32_t original,bool writing) {
     uint32_t address=original<0x02000000u ? original|fcse_:original;
@@ -184,14 +235,16 @@ uint32_t Starlet::load_ios(std::span<const uint8_t> b) {
     if(stride!=32 || !count || !fits(table,uint64_t(stride)*count,e.size()) || (entry&3))
         throw std::runtime_error("Invalid IOS program-header table/entry");
     bool executable=false;
+    const auto entry_bytes=reinterpret_cast<uintptr_t>(physical(entry,4));
     for(uint32_t n=0;n<count;++n) {
         const auto* p=e.data()+table+n*stride;
         if(be32(p)!=1)continue;
         const uint32_t at=be32(p+4),dest=be32(p+12),files=be32(p+16),memory=be32(p+20);
         if(files>memory || !fits(at,files,e.size()) || !physical(dest,memory))
             throw std::runtime_error("Invalid IOS loadable segment");
-        if((be32(p+24)&1) && entry>=dest && uint64_t(entry)+4<=uint64_t(dest)+files)
-            executable=true;
+        const auto destination_bytes=reinterpret_cast<uintptr_t>(physical(dest,memory));
+        if((be32(p+24)&1) && files>=4 && entry_bytes && entry_bytes>=destination_bytes && entry_bytes-destination_bytes<=files-4)
+            executable=true; /* Entry and segment may use different aliases. */
     }
     if(!executable)throw std::runtime_error("IOS entry is not backed by executable bytes");
     /* All validation precedes stores. Zero BSS first so initialized bytes win
@@ -206,7 +259,7 @@ uint32_t Starlet::load_ios(std::span<const uint8_t> b) {
     }
     if(store_observer_)for(uint32_t n=0;n<count;++n) {
         const auto* p=e.data()+table+n*stride;
-        if(be32(p)==1 && be32(p+20))store_observer_(store_user_,be32(p+12),be32(p+20));
+        if(be32(p)==1 && be32(p+20))stored(be32(p+12),be32(p+20));
     }
     cpu.R[15]=entry;
     return entry;
@@ -221,6 +274,10 @@ uint8_t Starlet::read8(uint32_t at) {
 uint16_t Starlet::read16(uint32_t at) {
     check_alignment(at,2);
     const auto bus_address=translate(at,false);
+    if(bus_address==0x0d8b4202u) {
+        if(!register_protection_known_)unsupported("unqualified MEM_PROT_REG read",cpu.R[15],bus_address);
+        return register_protection_;
+    }
     if(bus_address==0x0d8b4228u)return flush_request_;
     if(bus_address==0x0d8b422au)return flush_ack_;
     if(bus_address==0x0d8b420au)return protect_enabled_;
@@ -231,7 +288,25 @@ uint16_t Starlet::read16(uint32_t at) {
 uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
+    if(bus_address>=ExiBootMemory::arm_base && bus_address<ExiBootMemory::arm_base+ExiBootMemory::size) {
+        uint32_t value;
+        if(!exi_boot_.arm_read(bus_address,(exi_control_&1u)!=0,value))
+            unsupported("EXI boot memory read",cpu.R[15],bus_address);
+        return value;
+    }
+    const auto di_address=di_register_address(bus_address);
+    if(di_address>=0x0d006000u && di_address<0x0d006040u) {
+        if(!di_.user || (di_address&3) || di_address>0x0d006024u)
+            unsupported("unbound/unsupported DI read32",cpu.R[15],bus_address);
+        return di_.read(di_.user,di_address-0x0d006000u);
+    }
     uint32_t ipc_value;
+    if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
+       nand_.read(bus_address-0x0d010000u,ipc_value))return ipc_value;
+    if(bus_address>=0x0d030000u && bus_address<=0x0d030018u &&
+       sha_.read(bus_address-0x0d030000u,ipc_value))return ipc_value;
+    if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
+       ohci_[(bus_address-0x0d050000u)>>16].read(bus_address&0xffffu,cycles_,ipc_value,ohci_bus()))return ipc_value;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
        wii_ipc_read(ipc_,bus_address-0x0d800000u,&ipc_value))return ipc_value;
     /* HW_TIMER: free-running AHB/128 counter (243MHz /128). */
@@ -239,6 +314,7 @@ uint32_t Starlet::read32(uint32_t at) {
     if(bus_address==0x0d800014u)return alarm_;
     if(bus_address==0x0d800040u)return 0; /* FIQ source mask, currently all IRQ. */
     if(bus_address==0x0d80005cu)return debug_irq_enable_;
+    if(bus_address==0x0d800060u)return sram_visibility_;
     if(bus_address==0x0d800064u)return ahb_protection_;
     if(bus_address==0x0d800194u)return resets_;
     if(bus_address==0x0d8001ecu)return otp_command_;
@@ -247,8 +323,8 @@ uint32_t Starlet::read32(uint32_t at) {
         if(!otp_loaded_)throw std::runtime_error("Starlet original 128-byte OTP input is required for OTP data read");
         return be32(otp_.data()+(otp_command_&31u)*4);
     }
-    if(bus_address>=0x0d010000u && bus_address<=0x0d030000u && !(bus_address&0xffffu))
-        return dma_control_[(bus_address-0x0d010000u)/0x10000];
+    if(bus_address>=0x0d020000u && bus_address<=0x0d020010u &&
+       aes_.read(bus_address-0x0d020000u,ipc_value))return ipc_value;
     if(bus_address>=0x0d8001e0u && bus_address<=0x0d8001e8u && !(bus_address&3))
         return io_strength_[(bus_address-0x0d8001e0u)/4];
     if(bus_address==0x0d8001c4u)return vi_pll_;
@@ -260,7 +336,15 @@ uint32_t Starlet::read32(uint32_t at) {
     if(bus_address==0x0d8000dcu)return gpio_enable_;
     if(bus_address>=0x0d8000c0u && bus_address<=0x0d8000fcu && !(bus_address&3)) {
         const uint32_t index=((bus_address-0x0d8000c0u)/4)&7;
-        if(index==2 || index==6)unsupported("unattached GPIO input/straps",cpu.R[15],bus_address);
+        if(index==2) {
+            /* Only the exercised serial device is attached. Other board
+             * input/strap routes stay explicit, rather than inventing them. */
+            if(!seeprom_.loaded() || !(gpio_outputs()&Seeprom::cs))
+                unsupported("unattached GPIO input/straps",cpu.R[15],bus_address);
+            const uint32_t pins=gpio_outputs()|(seeprom_.input(cycles_)?Seeprom::miso:0);
+            return pins&(bus_address<0x0d8000e0u?gpio_[7]:0xffffffu);
+        }
+        if(index==6)unsupported("unattached GPIO input/straps",cpu.R[15],bus_address);
         const uint32_t mask=bus_address<0x0d8000e0u && index!=7 ? gpio_[7]:0xffffffu;
         return gpio_[index]&mask;
     }
@@ -269,6 +353,7 @@ uint32_t Starlet::read32(uint32_t at) {
     if(bus_address==0x0d8b0008u)return ahb_flush_mask_;
     if(bus_address==0x0d800070u)return exi_control_;
     if(bus_address==0x0d8b0010u)return ahb_prefetch_;
+    if(bus_address==0x0d800188u)return spare0_;
     if(bus_address==0x0d80018cu)return spare1_;
     if(bus_address>=0x0d800100u && bus_address<=0x0d800144u && !(bus_address&3))
         return arbiter_config_[(bus_address-0x0d800100u)/4];
@@ -277,11 +362,17 @@ uint32_t Starlet::read32(uint32_t at) {
 void Starlet::write8(uint32_t at,uint8_t v) {
     const auto address=translate(at,true);
     auto* p=physical(address,1);if(!p)unsupported("write8",cpu.R[15],at);*p=v;
-    if(store_observer_)store_observer_(store_user_,address,1);
+    stored(address,1);
 }
 void Starlet::write16(uint32_t at,uint16_t v) {
     check_alignment(at,2);
     const auto bus_address=translate(at,true);
+    if(bus_address==0x0d8b4202u) {
+        /* Actual IOS4 syscall54 programs0/1. Retain only that known command
+         * surface; no inferred PPC address-protection/reset semantics. */
+        if(v>1)unsupported("MEM_PROT_REG control bits",cpu.R[15],bus_address);
+        register_protection_=v;register_protection_known_=true;return;
+    }
     if(bus_address==0x0d8b420au) {
         /* This isolated IOS-entry boundary holds the PPC in reset. Retain the
          * programmed protection state; a combined machine must enforce these
@@ -302,11 +393,37 @@ void Starlet::write16(uint32_t at,uint16_t v) {
         return;
     }
     auto* p=physical(bus_address,2);if(!p)unsupported("write16",cpu.R[15],at);p[0]=uint8_t(v>>8);p[1]=uint8_t(v);
-    if(store_observer_)store_observer_(store_user_,bus_address,2);
+    stored(bus_address,2);
 }
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
+    if(bus_address>=ExiBootMemory::arm_base && bus_address<ExiBootMemory::arm_base+ExiBootMemory::size) {
+        if(!exi_boot_.arm_write(bus_address,(exi_control_&1u)!=0,v))
+            unsupported("EXI boot memory write",cpu.R[15],bus_address);
+        if(store_observer_)store_observer_(store_user_,ExiBootMemory::ppc_base+bus_address-ExiBootMemory::arm_base,4);
+        return;
+    }
+    const auto di_address=di_register_address(bus_address);
+    if(di_address>=0x0d006000u && di_address<0x0d006040u) {
+        const uint32_t offset=di_address-0x0d006000u;
+        /* Status/cover use their shared W1C/mask semantics. Command and DMA
+         * registers may be prepared while idle, but ARM transfer execution and
+         * BREAK are unqualified and must fail before any device mutation. */
+        if(!di_.user || (offset&3) || offset>=0x24 ||
+           (offset==0 && ((v&~0x7fu) || (v&1u))) ||
+           (offset==4 && (v&~7u)) ||
+           (offset==0x1c && ((v&~7u) || (v&1u))) ||
+           (offset>=8 && (di_.read(di_.user,0x1c)&1u)))
+            unsupported("unbound/unsupported DI write32",cpu.R[15],bus_address);
+        di_.write(di_.user,offset,v);return;
+    }
+    if(bus_address>=0x0d010000u && bus_address<=0x0d01001cu &&
+       nand_.write(bus_address-0x0d010000u,v,cycles_,nand_bus()))return;
+    if(bus_address>=0x0d030000u && bus_address<=0x0d030018u &&
+       sha_.write(bus_address-0x0d030000u,v,cycles_,sha_bus()))return;
+    if(bus_address>=0x0d050000u && bus_address<0x0d070000u &&
+       ohci_[(bus_address-0x0d050000u)>>16].write(bus_address&0xffffu,v,cycles_,ohci_bus()))return;
     if(bus_address>=0x0d800000u && bus_address<=0x0d80003cu &&
        wii_ipc_write(ipc_,bus_address-0x0d800000u,v,ppc_origin_+cycles_*3))return;
     if(bus_address==0x0d800014u) {alarm_=v;return;}
@@ -315,6 +432,12 @@ void Starlet::write32(uint32_t at,uint32_t v) {
         otp_command_=v;return;
     }
     if(bus_address==0x0d80005cu) {debug_irq_enable_=v;return;}
+    if(bus_address==0x0d800060u) {
+        /* This boundary keeps SM1 and engine visibility fixed. AHPEN is
+         * configuration only while the PPC SRAM/protection port is unbound. */
+        if((v^sram_visibility_)&~8u)unsupported("unqualified SRAM visibility/remapping",cpu.R[15],bus_address);
+        sram_visibility_=v;return;
+    }
     if(bus_address==0x0d800064u) {ahb_protection_=v;return;}
     if(bus_address==0x0d800040u) {
         if(v)unsupported("FIQ source routing",cpu.R[15],v);
@@ -322,15 +445,11 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     }
     if(bus_address==0x0d800194u) {
         if(!(v&0x08000000u))unsupported("IOP reset",cpu.R[15],v);
+        if((v^resets_)&0x30u)unsupported("unbound PPC reset/release transition",cpu.R[15],bus_address);
         resets_=v&0x7fffffffu;return;
     }
-    if(bus_address>=0x0d010000u && bus_address<=0x0d030000u && !(bus_address&0xffffu)) {
-        /* Original IOS clears the NAND/AES/SHA command words before setup.
-         * Idle/clear is meaningful without media or keys; starting a command
-         * still fails explicitly until that actual device is implemented. */
-        if(v)unsupported("unimplemented NAND/AES/SHA command/control",cpu.R[15],v);
-        dma_control_[(bus_address-0x0d010000u)/0x10000]=0;return;
-    }
+    if(bus_address>=0x0d020000u && bus_address<=0x0d020010u &&
+       aes_.write(bus_address-0x0d020000u,v,cycles_,aes_bus()))return;
     /* I/O pad drive-strength configuration; no data or completion bits. */
     if(bus_address>=0x0d8001e0u && bus_address<=0x0d8001e8u && !(bus_address&3)) {
         io_strength_[(bus_address-0x0d8001e0u)/4]=v;return;
@@ -346,10 +465,19 @@ void Starlet::write32(uint32_t at,uint32_t v) {
      * the native title-handoff helper only accepts completed clock presets. */
     if(bus_address==0x0d8001ccu) {hollywood_->audio_pll=v;return;}
     if(bus_address==0x0d8001d0u) {hollywood_->audio_control=v;return;}
-    if(bus_address==0x0d800180u && !((v^hollywood_->compat)&~0x106u)) {
+    if(bus_address==0x0d800180u && !((v^hollywood_->compat)&~(0x200106u|ExiBootMemory::ppc_boot_mask))) {
         /* Kernel boot also sets COMPAT.B1/B2. Its PPC-side interface is not
-         * attached here; preserve the control without changing other bits. */
-        hollywood_->compat=v;return;
+         * attached here. Bit21 is the DVDVIDEO command filtering control;
+         * retain its set/clear state without starting a drive operation.
+         * PPCBOOT selects the uploaded EXI boot memory for PPC reads; EXICTRL
+         * must independently route that window to PPC. No reset or execution
+         * follows from selecting it. Other compatibility bits remain explicit
+         * misses, and the native title-handoff provider stays unchanged.
+         * https://wiibrew.org/wiki/Hollywood/Registers#HW_COMPAT */
+        const bool boot_changed=((v^hollywood_->compat)&ExiBootMemory::ppc_boot_mask)!=0;
+        hollywood_->compat=v;
+        if(boot_changed && store_observer_)store_observer_(store_user_,ExiBootMemory::ppc_base,ExiBootMemory::size);
+        return;
     }
     /* HW_USBFRCRST: USB reset output configuration, not a completion flag.
      * No USB host is attached to this isolated IOS-entry machine. */
@@ -357,7 +485,10 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     /* EHCI analogue PHY setup only. Controller commands/status and USB DMA
      * remain unsupported; these output controls never synthesize a device. */
     if(const int index=usb_phy_index(bus_address);index>=0) {usb_phy_[index]=v;return;}
-    if(bus_address==0x0d8000dcu) {gpio_enable_=v&0xffffffu;return;}
+    if(bus_address==0x0d8000dcu) {
+        const auto before=gpio_outputs();gpio_enable_=v&0xffffffu;
+        seeprom_.outputs(before,gpio_outputs(),cycles_);return;
+    }
     if(bus_address>=0x0d8000c0u && bus_address<=0x0d8000fcu && !(bus_address&3)) {
         const uint32_t index=((bus_address-0x0d8000c0u)/4)&7;
         if(index==2 || index==6)unsupported("read-only GPIO input/straps write",cpu.R[15],bus_address);
@@ -365,11 +496,18 @@ void Starlet::write32(uint32_t at,uint32_t v) {
          * Starlet window can read all pins, but only write its owned pins. */
         const uint32_t mask=index==7 ? 0xffffffu:
             (bus_address<0x0d8000e0u ? gpio_[7]:~gpio_[7])&0xffffffu;
+        const auto before=gpio_outputs();
         if(index==4)gpio_[index]&=~(v&mask); /* W1C interrupt latch */
         else gpio_[index]=(gpio_[index]&~mask)|(v&mask);
+        if(index==0 || index==1)seeprom_.outputs(before,gpio_outputs(),cycles_);
         return;
     }
     if(wii_hollywood_write(hollywood_,bus_address,v))return;
+    if(bus_address==0x0d800188u) {
+        if((v^spare0_)&~0x02010000u)
+            unsupported("SPARE0 control change",cpu.R[15],v);
+        spare0_=v;update_ahb_drain();return;
+    }
     if(bus_address==0x0d80018cu) {
         /* IOS initializes the decoupled graphics/PI reset lines. They have no
          * attached PPC/GX in this isolated route. Boot-ROM remapping requires
@@ -384,9 +522,15 @@ void Starlet::write32(uint32_t at,uint32_t v) {
          * machine has one synchronous bus master, so priorities cannot change
          * an access result. Performance counters are deliberately unsupported. */
         arbiter_config_[(bus_address-0x0d800100u)/4]=v;
+        update_ahb_drain();
         return;
     }
-    if(bus_address==0x0d800070u) {exi_control_=v;return;}
+    if(bus_address==0x0d800070u) {
+        const bool changed=((exi_control_^v)&1u)!=0;
+        exi_control_=v;
+        if(changed && store_observer_)store_observer_(store_user_,ExiBootMemory::ppc_base,ExiBootMemory::size);
+        return;
+    }
     if(bus_address==0x0d8b0010u) {ahb_prefetch_=v;return;} /* prefetch configuration; synchronous memory */
     if(bus_address==0x0d8b0008u) {
         /* The AHB flush routing mask used by the IOS/mini coherent-memory
@@ -397,7 +541,7 @@ void Starlet::write32(uint32_t at,uint32_t v) {
     }
     auto* p=physical(bus_address,4);if(!p)unsupported("write32",cpu.R[15],at);
     p[0]=uint8_t(v>>24);p[1]=uint8_t(v>>16);p[2]=uint8_t(v>>8);p[3]=uint8_t(v);
-    if(store_observer_)store_observer_(store_user_,bus_address,4);
+    stored(bus_address,4);
 }
 void Starlet::coproc_write(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uint32_t op2,uint32_t value) {
     if(cpu.cpsr.mode==uint8_t(armv4t::Mode::User))unsupported("unprivileged coprocessor write",cpu.R[15],cp);
@@ -426,6 +570,14 @@ void Starlet::coproc_write(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uin
 }
 uint32_t Starlet::coproc_read(uint32_t cp,uint32_t op,uint32_t crn,uint32_t crm,uint32_t op2) {
     if(cpu.cpsr.mode==uint8_t(armv4t::Mode::User))unsupported("unprivileged coprocessor read",cpu.R[15],cp);
+    if(cp==15 && op==0 && crn==7 && (crm==10 || crm==14) && op2==3) {
+        /* ARM926 test-and-clean (optionally invalidate): there are no cached
+         * dirty lines on this synchronous bus. Prior CPU stores are already
+         * visible; this does not complete a pending peripheral DMA command. */
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if(crm==14)++instruction_epoch_;
+        return 1u<<30; /* Z=1: cleaning is complete. */
+    }
     if(cp==15 && op==0 && crn==5 && crm==0 && op2==1)return ifsr_;
     if(cp==15 && op==0 && crm==0 && op2==0) {
         switch(crn) {
