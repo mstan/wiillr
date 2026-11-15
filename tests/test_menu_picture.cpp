@@ -89,6 +89,18 @@ void units() {
     require(out.vertices[0].uv[0]==0 && out.vertices[0].uv[1]==1,"Native reverse quarter-turn texture rotation");
     pf(mem+40,180);require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
     require(out.vertices[0].uv[0]==1 && out.vertices[0].uv[1]==1,"Native half-turn texture rotation");
+    for(float angle:{30.f,-37.f,45.f,135.f,222.5f,1087.5f}) {
+        pf(mem+32,.25f);pf(mem+36,.5f);pf(mem+40,angle);pf(mem+44,2);pf(mem+48,.5f);
+        require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !out.needs_program,error);
+        const double radians=double(angle)*0.017453292519943295;
+        constexpr double u[]{0,1,1,0},v[]{0,0,1,1};
+        for(unsigned i=0;i<4;++i) {
+            const double x=2*(u[i]-.5),y=.5*(v[i]-.5);
+            require(std::abs(out.vertices[i].uv[0]-(.75+std::cos(radians)*x-std::sin(radians)*y))<2e-6 &&
+                    std::abs(out.vertices[i].uv[1]-(1.+std::sin(radians)*x+std::cos(radians)*y))<2e-6,
+                    "Named material uses centered arbitrary-angle scale/rotation/translation");
+        }
+    }
     pf(mem+32,.25f);pf(mem+36,.5f);pf(mem+40,0);pf(mem+44,2);pf(mem+48,.5f);
     const GcWiiNativeRenderApi api{1,create,destroy,draw,status};auto* renderer=wii_menu_native_create(memory,&api);require(renderer,"Native provider creation");
     require(wii_menu_native_draw_picture(renderer,pane,info,&view)==1,"Initial native picture draw");

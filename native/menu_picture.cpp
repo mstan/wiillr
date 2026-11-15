@@ -8,6 +8,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <stdexcept>
 
 namespace {
@@ -30,6 +31,24 @@ struct Reader {
     uint32_t u32(uint32_t a)const{auto* p=bytes(a,4);return uint32_t(p[0])<<24|uint32_t(p[1])<<16|uint32_t(p[2])<<8|p[3];}
     float f32(uint32_t a)const{const auto f=std::bit_cast<float>(u32(a));need(std::isfinite(f),"Nonfinite Wii Menu geometry");return f;}
 };
+void texture_transform(const Reader& r,uint32_t address,float (&out)[2][3]) {
+    const float rotation=std::remainder(r.f32(address+8),360.f);
+    float cosine=1,sine=0;
+    if(rotation==90)sine=1,cosine=0;else if(rotation==-90)sine=-1,cosine=0;
+    else if(rotation==180 || rotation==-180)cosine=-1;
+    else if(rotation!=0) {
+        const float radians=rotation*(std::numbers::pi_v<float>/180.f);
+        cosine=std::cos(radians);sine=std::sin(radians);
+    }
+    const float x=r.f32(address+12),y=r.f32(address+16);
+    out[0][0]=cosine*x;out[0][1]=-sine*y;
+    out[1][0]=sine*x;out[1][1]=cosine*y;
+    // NW4R rotates the scaled coordinates about the texture center, then
+    // translates. Keep the accepted quarter-turn arithmetic exact.
+    out[0][2]=r.f32(address)+.5f-out[0][0]*.5f-out[0][1]*.5f;
+    out[1][2]=r.f32(address+4)+.5f-out[1][0]*.5f-out[1][1]*.5f;
+    for(const auto& row:out)for(float value:row)need(std::isfinite(value),"Nonfinite generated GUI texture transform");
+}
 struct Counts {
     unsigned textures,srts,generators,ind_srts,ind_stages,swaps,stages,channels,color,alpha,blend;
     explicit Counts(uint32_t v):textures(v>>28),srts((v>>24)&15),generators((v>>20)&15),ind_srts((v>>18)&3),ind_stages((v>>15)&7),swaps((v>>14)&1),stages((v>>9)&31),channels((v>>8)&1),color((v>>7)&1),alpha((v>>6)&1),blend((v>>5)&1){}
@@ -249,15 +268,10 @@ WiiMenuPicture prepare_impl(const Reader& r,uint32_t pane,uint32_t info,const Wi
             const auto tex_matrix=r.u8(gen+t*4+2);float sx=1,sy=1,tx=0,ty=0,rx=0,ry=0;
             if(tex_matrix!=60) {
                 need(tex_matrix>=30 && tex_matrix<=57 && (tex_matrix-30)%3==0,"Invalid Wii Menu texture matrix");const auto slot=(tex_matrix-30)/3;
-                need(slot<num.srts,"Missing Wii Menu texture transform");const auto transform=srt+slot*20;
-                const auto rotation=std::remainder(r.f32(transform+8),360.f);
-                float cosine=1,sine=0;
-                if(rotation==90)sine=1,cosine=0;else if(rotation==-90)sine=-1,cosine=0;
-                else if(rotation==180 || rotation==-180)cosine=-1;
-                else need(rotation==0,"Wii Menu non-quarter-turn texture rotation needs qualification");
-                const auto scale_x=r.f32(transform+12),scale_y=r.f32(transform+16);
-                sx=cosine*scale_x;rx=-sine*scale_y;ry=sine*scale_x;sy=cosine*scale_y;
-                tx=r.f32(transform)+.5f-sx*.5f-rx*.5f;ty=r.f32(transform+4)+.5f-ry*.5f-sy*.5f;
+                need(slot<num.srts,"Missing Wii Menu texture transform");float transform[2][3];
+                texture_transform(r,srt+slot*20,transform);
+                sx=transform[0][0];rx=transform[0][1];tx=transform[0][2];
+                ry=transform[1][0];sy=transform[1][1];ty=transform[1][2];
             }
             const auto coords=quad?0:r.u32(pane+0xe8)+(source-4)*32;
             transforms[t][0][0]=sx;transforms[t][0][1]=rx;transforms[t][0][2]=tx;

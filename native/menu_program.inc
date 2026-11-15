@@ -84,13 +84,7 @@ void program_material(const Reader& r,uint32_t pane,const QuadInput* quad,const 
         p.coordinate_source[t]=source-4;auto& m=p.uv[t];m[0][0]=m[1][1]=1;
         const auto matrix=r.u8(gen+t*4+2);if(matrix==60)continue;
         need(matrix>=30 && matrix<=57 && (matrix-30)%3==0,"Invalid GUI texture matrix");const auto slot=(matrix-30)/3;
-        need(slot<num.srts,"Missing GUI texture transform");const auto transform=srt+slot*20;
-        const auto angle=std::remainder(r.f32(transform+8),360.f);float cs=1,sn=0;
-        if(angle==90)cs=0,sn=1;else if(angle==-90)cs=0,sn=-1;else if(angle==180 || angle==-180)cs=-1;
-        else need(angle==0,"GUI non-quarter-turn rotation needs qualification");
-        const auto x=r.f32(transform+12),y=r.f32(transform+16);m[0][0]=cs*x;m[0][1]=-sn*y;m[1][0]=sn*x;m[1][1]=cs*y;
-        m[0][2]=r.f32(transform)+.5f-.5f*(m[0][0]+m[0][1]);m[1][2]=r.f32(transform+4)+.5f-.5f*(m[1][0]+m[1][1]);
-        for(const auto& row:m)for(float value:row)need(std::isfinite(value),"Nonfinite generated GUI texture transform");
+        need(slot<num.srts,"Missing GUI texture transform");texture_transform(r,srt+slot*20,m);
     }
     out.needs_program=1;out.needs_gui=0;out.draw.material.texture=num.textures?p.textures[0]:GcWiiNativeTexture{};p.draw=out.draw;
 }

@@ -2,6 +2,7 @@
 #include <wiillr/menu_picture.h>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -77,6 +78,23 @@ int main(){try {
     const uint32_t transformed=(2u<<28)|(1u<<24)|(2u<<20);
     p32(mat+0x4c,transformed);p32(mat+0x50,transformed);
     p32(mem+84,(1u<<24)|(4u<<16)|(30u<<8));p32(mem+88,(1u<<24)|(5u<<16)|(60u<<8));
+    for(float angle:{30.f,-37.f,45.f,135.f,222.5f,1087.5f}) {
+        pf(mem+64,.25f);pf(mem+68,.5f);pf(mem+72,angle);pf(mem+76,2);pf(mem+80,.5f);
+        check(wii_menu_picture_prepare(memory,pane,info,&view,&picture,error,sizeof error),error);
+        check(picture.needs_program && picture.program.coordinate_count==2,"Program keeps independent coordinate generators");
+        const auto& matrix=picture.program.uv[0];const double radians=double(angle)*0.017453292519943295;
+        for(const auto point:{std::array<double,2>{0,0},{1,0},{.5,.5},{.2,.9}}) {
+            const double x=2*(point[0]-.5),y=.5*(point[1]-.5);
+            const double u=matrix[0][0]*point[0]+matrix[0][1]*point[1]+matrix[0][2];
+            const double v=matrix[1][0]*point[0]+matrix[1][1]*point[1]+matrix[1][2];
+            check(std::abs(u-(.75+std::cos(radians)*x-std::sin(radians)*y))<2e-6 &&
+                  std::abs(v-(1.+std::sin(radians)*x+std::cos(radians)*y))<2e-6,"Program transforms arbitrary-angle points around texture center");
+        }
+        check(picture.program.uv[1][0][0]==1 && picture.program.uv[1][1][1]==1 && picture.program.uv[1][0][2]==0,"Untransformed second coordinate remains unchanged");
+    }
+    pf(mem+72,450);check(wii_menu_picture_prepare(memory,pane,info,&view,&picture,error,sizeof error),error);
+    check(picture.program.uv[0][0][0]==0 && picture.program.uv[0][0][1]==-.5f && picture.program.uv[0][0][2]==1 &&
+          picture.program.uv[0][1][0]==2 && picture.program.uv[0][1][1]==0 && picture.program.uv[0][1][2]==0,"Wrapped quarter turns retain exact coefficients");
     pf(mem+64,std::numeric_limits<float>::max());pf(mem+68,0);pf(mem+72,0);
     pf(mem+76,-std::numeric_limits<float>::max());pf(mem+80,1);
     check(!wii_menu_picture_prepare(memory,pane,info,&view,&picture,error,sizeof error),"Overflowed generated UV matrix rejects before submission");
