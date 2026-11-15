@@ -29,7 +29,20 @@ static void ios_cases(void) {
     request(&ios,&ipc,&cpu,1,0,0);CHECK(ipc.y==1 && ios.descriptors[0]==11);consume(&ipc,0x34,cpu.cycles);
     memcpy(cpu.ram+0x900,(const u8[5]){0,0,0,0,0x80},5);
     request(&ios,&ipc,&cpu,4,0,5);CHECK(ipc.y==1 && !mem_read32_cia(&cpu,0x10000204,0));consume(&ipc,0x34,cpu.cycles);
+    /* The original Menu SDK sends sizeof({u32 device;u8 leds;}) == 8,
+     * including three unspecified padding bytes. Its async and synchronous
+     * wrappers share this IOS write contract, including the attach callback's
+     * virtual-LED acknowledgement. */
+    memcpy(cpu.ram+0x900,(const u8[8]){0,0,0,0,0x80,0x5a,0xa5,0xff},8);
+    request(&ios,&ipc,&cpu,4,0,8);CHECK(ipc.y==1 && !mem_read32_cia(&cpu,0x10000204,0));consume(&ipc,0x34,cpu.cycles);
+    cpu.ram[0x904]=0x82; /* Guest lock LEDs never touch the physical keyboard. */
+    request(&ios,&ipc,&cpu,4,0,8);CHECK(ipc.y==1 && !mem_read32_cia(&cpu,0x10000204,0));consume(&ipc,0x34,cpu.cycles);
+    cpu.ram[0x903]=1;
+    request(&ios,&ipc,&cpu,4,0,8);CHECK(ipc.y==1 && (s32)mem_read32_cia(&cpu,0x10000204,0)==-4);consume(&ipc,0x34,cpu.cycles);
+    cpu.ram[0x903]=0;
     request(&ios,&ipc,&cpu,4,0,4);CHECK(ipc.y==1 && (s32)mem_read32_cia(&cpu,0x10000204,0)==-4);consume(&ipc,0x34,cpu.cycles);
+    request(&ios,&ipc,&cpu,4,0,7);CHECK(ipc.y==1 && (s32)mem_read32_cia(&cpu,0x10000204,0)==-4);consume(&ipc,0x34,cpu.cycles);
+    request(&ios,&ipc,&cpu,4,0,9);CHECK(ipc.y==1 && (s32)mem_read32_cia(&cpu,0x10000204,0)==-4);consume(&ipc,0x34,cpu.cycles);
     mem_write32_cia(&cpu,0x10000400,0xabcdef01,0);request(&ios,&ipc,&cpu,6,0,16);
     CHECK(!ipc.y && ios.keyboard_messages[0] && mem_read32_cia(&cpu,0x10000400,0)==0xabcdef01);
     const WiiKeyboardReport shifted_a={true,2,{4,0,0,0,0,0}};

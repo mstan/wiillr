@@ -305,12 +305,14 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     }
     if(fd<24 && ios->descriptors[fd]==11) {
         if(ios->command==4) {
-            /* The known five-byte LED-off command affects only this virtual
-             * keyboard; never change the host's physical keyboard LEDs. */
+            /* The Menu SDK writes its naturally padded {u32 device;u8 leds;}
+             * (8 bytes); retain the packed 5-byte form too. Padding is not
+             * part of the command. Consume LED changes for virtual device0
+             * without changing the host's physical keyboard LEDs. */
             const u8* command=ios_memory(cpu,read_be32(request+12),&available);
             ios->result=-4;
-            if(read_be32(request+16)!=5 || !command || available<5)return 1;
-            if(memcmp(command,(const u8[5]){0,0,0,0,0x80},5))return 0;
+            const u32 size=read_be32(request+16);
+            if((size!=5 && size!=8) || !command || available<size || read_be32(command)!=0)return 1;
             ios->result=0;return 1;
         }
         if(ios->command==6) {
