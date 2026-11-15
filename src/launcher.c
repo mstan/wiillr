@@ -118,7 +118,7 @@ static void load_settings(RecompLauncherCGameInfo* game) {
     memset(&settings,0,sizeof settings);
     settings.window_scale=2;settings.enable_audio=1;settings.audio_freq=32000;
     settings.volume=100;settings.player_src[0]=1;
-    settings.aspect_index=view_supported()?3:0;
+    settings.aspect_index=((game->name && !strcmp(game->name,"Wii Menu")) || view_supported())?3:0;
     settings.internal_resolution=1;
     if(SDL_InitSubSystem(SDL_INIT_GAMEPAD) && SDL_HasGamepad())settings.player_src[0]=2;
     wii_launcher_input_defaults(&settings);

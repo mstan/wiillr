@@ -46,7 +46,7 @@ void wii_launcher_input_defaults(RecompLauncherCSettings* value){(void)value;}
 void wii_launcher_input_reset(void){}
 void wii_launcher_input_poll(void* user,GcnllrPad* pad){CHECK(user);memset(pad,0,sizeof *pad);}
 void launcher_settings_load(RecompLauncherCSettings* value,const RecompLauncherCGameInfo* game){
-    ++settings_calls;CHECK(!strcmp(game->name,"Wii Menu"));value->skip_launcher=skip;
+    ++settings_calls;CHECK(!strcmp(game->name,"Wii Menu"));CHECK(value->aspect_index==3);value->skip_launcher=skip;
 }
 int recomp_launcher_run_window(const char* caption,RecompLauncherCSettings* value,const RecompLauncherCGameInfo* game,
     const char* assets,const char* initial,char* selected,size_t capacity){
