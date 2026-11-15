@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* ROM-free architectural bus fixture, not evidence of an original IOS reply. */
 #include "wiillr/machine.h"
+#include "memory/memory.h"
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}}while(0)
@@ -168,6 +169,55 @@ int main(void) {
             for(unsigned n=0;n<32;++n)CHECK(cpu.ram[0x2000+n]==0x6d);
             wii_ios_lle_destroy(machine.ios_lle);machine.ios_lle=NULL;
         }
+    }
+    {
+        /* The same original-owned memory is visible on the actual PPC bus.
+         * The instructions only publish synthetic words and loop on ARM. */
+        const unsigned publish[]={0xe59f002c,0xe3a01001,0xe5801000,0xe59f2024,
+            0xe59f3024,0xe5823000,0xe59f2020,0xe3a03601,0xe5823000,
+            0xe3a01000,0xe5801000,0xeafffffe,0,
+            0x0d800070,0x0d806840,0x11223344,0x0d800180};
+        WiiIosLle* boards[2]={0};WiiIpc ipc[2];WiiHollywood hardware[2];
+        unsigned value=0xfeedbeef;
+        CHECK(!wii_ios_lle_read_ppc_boot(NULL,0xfff00100,4,&value) && value==0xfeedbeef);
+        for(unsigned which=0;which<2;++which) {
+            wii_ipc_init(&ipc[which]);
+            for(unsigned n=0;n<sizeof publish/sizeof *publish;++n)put32(elf+84+4*n,publish[n]);
+            put32(elf+84+0x3c,which?0xaabbccdd:0x11223344);
+            boards[which]=wii_ios_lle_create(&cpu,&ipc[which],&hardware[which],image,sizeof image,NULL,0,cpu.cycles);
+            CHECK(boards[which]);
+            CHECK(!wii_ios_lle_read_ppc_boot(boards[which],0xfff00100,4,&value));
+            cpu.reserve_addr=0xfff00100;cpu.reserve_valid=true;
+            CHECK(wii_ios_lle_tick(boards[which],cpu.cycles+3000));
+            CHECK(!cpu.reserve_valid);
+            CHECK(wii_ios_lle_read_ppc_boot(boards[which],0xfff00100,4,&value));
+            CHECK(value==(which?0xaabbccdd:0x11223344));
+            CHECK(!wii_ios_lle_read_ppc_boot(boards[which],0xfff00100,4,NULL));
+            for(unsigned width=1;width<=8;width*=2)if(width!=4)
+                CHECK(!wii_ios_lle_read_ppc_boot(boards[which],0xfff00100,(unsigned char)width,&value));
+            CHECK(!wii_ios_lle_read_ppc_boot(boards[which],0xfff00101,4,&value));
+            CHECK(!wii_ios_lle_read_ppc_boot(boards[which],0xfff00104,4,&value)); /* Unwritten. */
+            CHECK(!wii_ios_lle_read_ppc_boot(boards[which],0xfff00140,4,&value));
+#if WIILLR_IOS_LLE
+            machine.ios_lle=boards[which];
+            CHECK(mem_read32(&cpu,0xfff00100,0)==(which?0xaabbccdd:0x11223344));
+#endif
+        }
+#if WIILLR_IOS_LLE
+        machine.ios_lle=boards[0];
+        cpu_reset(&cpu);
+        CHECK(mem_read32(&cpu,0xfff00100,0)==0x11223344);
+#endif
+        CHECK(wii_ios_lle_read_ppc_boot(boards[0],0xfff00100,4,&value) && value==0x11223344);
+        for(unsigned n=0;n<2;++n)wii_ios_lle_destroy(boards[n]);machine.ios_lle=NULL;
+        /* A real GameCube ROM keeps precedence in the unchanged shared core;
+         * an original Wii context must not silently inherit that mapping. */
+        unsigned char rom[0x104]={0};put32(rom+0x100,0x55667788);
+        gcn_mem_set_rom_window(&cpu,rom,sizeof rom);
+        CHECK(mem_read32(&cpu,0xfff00100,0)==0x55667788);
+        CHECK(!wii_ios_lle_create(&cpu,&machine.ipc,&machine.hollywood,image,sizeof image,NULL,0,cpu.cycles));
+        CHECK(mem_read32(&cpu,0xfff00100,0)==0x55667788);
+        gcn_mem_set_rom_window(&cpu,NULL,0);
     }
     wii_ios_native_destroy(&machine.ios);cpu_free(&cpu);return 0;
 }

@@ -288,6 +288,12 @@ uint16_t Starlet::read16(uint32_t at) {
 uint32_t Starlet::read32(uint32_t at) {
     check_alignment(at,4);
     const auto bus_address=translate(at,false);
+    if(bus_address>=ExiBootMemory::arm_base && bus_address<ExiBootMemory::arm_base+ExiBootMemory::size) {
+        uint32_t value;
+        if(!exi_boot_.arm_read(bus_address,(exi_control_&1u)!=0,value))
+            unsupported("EXI boot memory read",cpu.R[15],bus_address);
+        return value;
+    }
     const auto di_address=di_register_address(bus_address);
     if(di_address>=0x0d006000u && di_address<0x0d006040u) {
         if(!di_.user || (di_address&3) || di_address>0x0d006024u)
@@ -392,6 +398,12 @@ void Starlet::write16(uint32_t at,uint16_t v) {
 void Starlet::write32(uint32_t at,uint32_t v) {
     check_alignment(at,4);
     const auto bus_address=translate(at,true);
+    if(bus_address>=ExiBootMemory::arm_base && bus_address<ExiBootMemory::arm_base+ExiBootMemory::size) {
+        if(!exi_boot_.arm_write(bus_address,(exi_control_&1u)!=0,v))
+            unsupported("EXI boot memory write",cpu.R[15],bus_address);
+        if(store_observer_)store_observer_(store_user_,ExiBootMemory::ppc_base+bus_address-ExiBootMemory::arm_base,4);
+        return;
+    }
     const auto di_address=di_register_address(bus_address);
     if(di_address>=0x0d006000u && di_address<0x0d006040u) {
         const uint32_t offset=di_address-0x0d006000u;
@@ -453,12 +465,19 @@ void Starlet::write32(uint32_t at,uint32_t v) {
      * the native title-handoff helper only accepts completed clock presets. */
     if(bus_address==0x0d8001ccu) {hollywood_->audio_pll=v;return;}
     if(bus_address==0x0d8001d0u) {hollywood_->audio_control=v;return;}
-    if(bus_address==0x0d800180u && !((v^hollywood_->compat)&~0x200106u)) {
+    if(bus_address==0x0d800180u && !((v^hollywood_->compat)&~(0x200106u|ExiBootMemory::ppc_boot_mask))) {
         /* Kernel boot also sets COMPAT.B1/B2. Its PPC-side interface is not
          * attached here. Bit21 is the DVDVIDEO command filtering control;
          * retain its set/clear state without starting a drive operation.
-         * DI commands remain unsupported in this isolated machine. */
-        hollywood_->compat=v;return;
+         * PPCBOOT selects the uploaded EXI boot memory for PPC reads; EXICTRL
+         * must independently route that window to PPC. No reset or execution
+         * follows from selecting it. Other compatibility bits remain explicit
+         * misses, and the native title-handoff provider stays unchanged.
+         * https://wiibrew.org/wiki/Hollywood/Registers#HW_COMPAT */
+        const bool boot_changed=((v^hollywood_->compat)&ExiBootMemory::ppc_boot_mask)!=0;
+        hollywood_->compat=v;
+        if(boot_changed && store_observer_)store_observer_(store_user_,ExiBootMemory::ppc_base,ExiBootMemory::size);
+        return;
     }
     /* HW_USBFRCRST: USB reset output configuration, not a completion flag.
      * No USB host is attached to this isolated IOS-entry machine. */
@@ -506,7 +525,12 @@ void Starlet::write32(uint32_t at,uint32_t v) {
         update_ahb_drain();
         return;
     }
-    if(bus_address==0x0d800070u) {exi_control_=v;return;}
+    if(bus_address==0x0d800070u) {
+        const bool changed=((exi_control_^v)&1u)!=0;
+        exi_control_=v;
+        if(changed && store_observer_)store_observer_(store_user_,ExiBootMemory::ppc_base,ExiBootMemory::size);
+        return;
+    }
     if(bus_address==0x0d8b0010u) {ahb_prefetch_=v;return;} /* prefetch configuration; synchronous memory */
     if(bus_address==0x0d8b0008u) {
         /* The AHB flush routing mask used by the IOS/mini coherent-memory

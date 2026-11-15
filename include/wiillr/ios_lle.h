@@ -37,6 +37,10 @@ bool wii_ios_lle_load_nand(WiiIosLle*,const uint8_t*,size_t);
  * retains DI and CPU lifetime; this neither resets the drive nor takes over
  * its clock/PPC interrupt callback. ARM transfers remain explicit failures. */
 bool wii_ios_lle_attach_di(WiiIosLle*,GcnDi*);
+/* Read the Wii PPC boot-memory alias through the original board's PPCBOOT
+ * selector and EXICTRL routing. Only initialized aligned words qualify. No guest
+ * execution, time advance or synthetic reset vector. False preserves *value. */
+bool wii_ios_lle_read_ppc_boot(const WiiIosLle*,uint32_t address,uint8_t width,uint32_t* value);
 bool wii_ios_lle_tick(WiiIosLle*,uint64_t ppc_cycles);
 WiiIosLleStatus wii_ios_lle_status(const WiiIosLle*);
 const char* wii_ios_lle_error(const WiiIosLle*);

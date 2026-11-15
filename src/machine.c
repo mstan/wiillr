@@ -43,6 +43,12 @@ static unsigned mmio_device(u32 physical) {
 static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     WiiMachine* m = cpu->external_user_data;
     ++m->mmio_reads;
+    /* The Wii reset-vector memory keeps its full physical address. The
+     * normal register decoder's alias mask would destroy this high window.
+     * CPU ROM reads precede this callback, so original IOS rejects a stale
+     * GameCube ROM mapping when its context is created. */
+    u32 boot_value;
+    if(WIILLR_IOS_LLE && wii_ios_lle_read_ppc_boot(m->ios_lle,address,width,&boot_value))return boot_value;
     u32 physical = address & 0x3fffffffu;
     wii_machine_observe_register(m,cpu,physical);
     const u32 gpio=physical&~0x00800000u;

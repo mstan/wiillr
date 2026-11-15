@@ -8,6 +8,7 @@ extern "C" {
 }
 #include <string>
 #include <cstdio>
+#include <stdexcept>
 #include <memory>
 #include <vector>
 
@@ -23,7 +24,9 @@ struct WiiIosLle {
         machine.observe_stores([](void* user,uint32_t address,uint32_t size) {
             auto& ppc=*static_cast<CPUState*>(user);
             if(!size)return;
-            if(address>=ppc.ram_size && !(address>=0x10000000u && address-0x10000000u<ppc.mem2_size))return;
+            const bool boot=address>=wiillr::ExiBootMemory::ppc_base &&
+                uint64_t(address)+size<=uint64_t(wiillr::ExiBootMemory::ppc_base)+wiillr::ExiBootMemory::size;
+            if(!boot && address>=ppc.ram_size && !(address>=0x10000000u && address-0x10000000u<ppc.mem2_size))return;
             const uint32_t key=gcn_reservation_key(ppc.reserve_addr)&~31u;
             if(ppc.reserve_valid && key>=(address&~31u) && key<=((address+size-1)&~31u))ppc.reserve_valid=false;
             gcn_native_code_invalidate(address,size);
@@ -48,12 +51,17 @@ extern "C" WiiIosLle* wii_ios_lle_create(CPUState* cpu,WiiIpc* ipc,WiiHollywood*
     if(!cpu || !ipc || !hardware || !ios || !ios_size || (!otp && otp_size) ||
        !cpu->ram || cpu->ram_size!=GC_MAIN_RAM_SIZE || !cpu->mem2 || cpu->mem2_size!=WII_MEM2_SIZE)return nullptr;
     try {
+        if(cpu->rom_window && cpu->rom_window_size)
+            throw std::runtime_error("Original Wii IOS cannot overlay a GameCube ROM window");
         auto context=std::make_unique<WiiIosLle>(*cpu,*ipc,origin);
         if(otp_size)context->machine.load_otp({otp,otp_size});
         context->machine.load_ios({ios,ios_size});
         context->machine.attach_hollywood(*hardware);
         return context.release();
     }catch(const std::exception& error) {std::fprintf(stderr,"original IOS initialization: %s\n",error.what());return nullptr;}
+}
+extern "C" bool wii_ios_lle_read_ppc_boot(const WiiIosLle* context,uint32_t address,uint8_t width,uint32_t* value) {
+    return context && value && context->machine.read_ppc_boot(address,width,*value);
 }
 extern "C" bool wii_ios_lle_tick(WiiIosLle* context,uint64_t ppc_cycles) {
     if(!context || !context->error.empty())return false;

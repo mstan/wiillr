@@ -9,6 +9,7 @@
 #include "wiillr/nand_controller.hpp"
 #include "wiillr/sha1_engine.hpp"
 #include "wiillr/aes_engine.hpp"
+#include "wiillr/exi_boot.hpp"
 #include <array>
 #include <span>
 #include <cstdint>
@@ -51,6 +52,10 @@ public:
     WiiIpc& ipc() {return *ipc_;}
     void observe_stores(void (*observer)(void*,uint32_t,uint32_t),void* user) {
         store_observer_=observer;store_user_=user;
+    }
+    bool read_ppc_boot(uint32_t address,uint32_t width,uint32_t& value) const {
+        return (hollywood_->compat&ExiBootMemory::ppc_boot_mask) &&
+               exi_boot_.ppc_read(address,width,(exi_control_&1u)!=0,value);
     }
     uint32_t fetch32(uint32_t);
     uint16_t fetch16(uint32_t);
@@ -127,6 +132,7 @@ private:
     uint16_t flush_request_=0,flush_ack_=0;
     uint32_t ahb_flush_mask_=0;
     uint32_t exi_control_=0;
+    ExiBootMemory exi_boot_;
     uint32_t ahb_prefetch_=0;
     uint32_t vi_pll_=0,vi_pll_ext_=0;
     uint32_t usb_pll_=0,usb_pll_ext_=0;

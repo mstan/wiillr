@@ -590,5 +590,91 @@ int main() {
     CHECK(faults([&]{machine.write32(0x0d80601c,1);})); /* No drive transfer. */
     WiiHollywood native{};wii_hollywood_init(&native);
     CHECK(!wii_hollywood_write(&native,0x0d800180,native.compat^0x200000));
+    CHECK(!wii_hollywood_write(&native,0x0d800180,native.compat^wiillr::ExiBootMemory::ppc_boot_mask));
+    {
+        /* Volatile Wii boot memory has distinct ARM/PPC routing. No original
+         * vector or presumed power-on contents appear in this fixture. */
+        using Boot=wiillr::ExiBootMemory;
+        wiillr::ExiBootMemory bytes;
+        uint32_t value=0xfeedbeef;
+        CHECK(!bytes.ppc_read(Boot::ppc_base,4,false,value) && value==0xfeedbeef);
+        CHECK(bytes.arm_write(Boot::arm_base,true,0x11223344));
+        CHECK(bytes.bytes()[0]==0x11 && bytes.bytes()[1]==0x22 && bytes.bytes()[2]==0x33 && bytes.bytes()[3]==0x44);
+        wiillr::Starlet first(mem1,mem2),second(mem1,mem2);
+        struct Stores {unsigned count=0;uint32_t address=0,size=0;} stores;
+        first.observe_stores([](void* user,uint32_t address,uint32_t size) {
+            auto& s=*static_cast<Stores*>(user);++s.count;s.address=address;s.size=size;
+        },&stores);
+        CHECK(faults([&]{first.write32(Boot::arm_base,1);}));
+        first.write32(0x0d800070,1);
+        CHECK(stores.count==1 && stores.address==Boot::ppc_base && stores.size==64);
+        CHECK(faults([&]{first.read32(Boot::arm_base);}));
+        for(unsigned n=0;n<16;++n) {
+            const uint32_t pattern=0x10203040u+n;
+            first.write32(Boot::arm_base+4*n,pattern);
+            CHECK(first.read32(Boot::arm_base+4*n)==pattern);
+            CHECK(stores.address==Boot::ppc_base+4*n && stores.size==4);
+        }
+        CHECK(!first.read_ppc_boot(Boot::ppc_base,4,value));
+        const unsigned observed=stores.count;
+        for(uint32_t at:{Boot::arm_base-4,Boot::arm_base+64,0x0d006840u})
+            CHECK(faults([&]{first.write32(at,0);}));
+        CHECK(faults([&]{first.write32(Boot::arm_base+1,0);}));
+        CHECK(faults([&]{first.write8(Boot::arm_base,0);}));
+        CHECK(faults([&]{first.write16(Boot::arm_base,0);}));
+        CHECK(stores.count==observed && first.read32(Boot::arm_base)==0x10203040);
+        first.write32(0x0d800070,0);
+        CHECK(stores.count==observed+1 && stores.address==Boot::ppc_base && stores.size==64);
+        CHECK(!first.read_ppc_boot(Boot::ppc_base,4,value)); /* PPCBOOT is independently required. */
+        const uint32_t compat=first.read32(0x0d800180);
+        const auto before_flags=first.ipc().arm_flags, before_ppc_flags=first.ipc().ppc_flags;
+        const auto before_cycles=first.cycles();
+        first.write32(0x0d800180,compat|Boot::ppc_boot_mask);
+        CHECK(first.read32(0x0d800180)==(compat|Boot::ppc_boot_mask));
+        CHECK(stores.count==observed+2 && stores.address==Boot::ppc_base && stores.size==64);
+        CHECK(first.read32(0x0d800070)==0 && first.cycles()==before_cycles);
+        CHECK(first.ipc().arm_flags==before_flags && first.ipc().ppc_flags==before_ppc_flags);
+        for(unsigned n=0;n<16;++n)CHECK(first.read_ppc_boot(Boot::ppc_base+4*n,4,value) && value==0x10203040u+n);
+        /* A rejected mixed transition cannot partially publish the selector. */
+        const unsigned selected_stores=stores.count;
+        CHECK(faults([&]{first.write32(0x0d800180,compat^0x400000u);}));
+        CHECK(faults([&]{first.write8(0x0d800180,0);}));
+        CHECK(faults([&]{first.write16(0x0d800180,0);}));
+        CHECK(first.read32(0x0d800180)==(compat|Boot::ppc_boot_mask) && stores.count==selected_stores);
+        first.write32(0x0d800180,compat);
+        CHECK(!first.read_ppc_boot(Boot::ppc_base,4,value));
+        CHECK(stores.count==selected_stores+1 && stores.address==Boot::ppc_base && stores.size==64);
+        first.write32(0x0d800180,compat|Boot::ppc_boot_mask);
+        CHECK(first.read_ppc_boot(Boot::ppc_base,4,value) && value==0x10203040);
+        CHECK(faults([&]{first.read32(Boot::arm_base);}));
+        CHECK(faults([&]{first.write32(Boot::arm_base,0);}));
+        for(uint32_t at:{Boot::ppc_base-4,Boot::ppc_base+1,Boot::ppc_base+64})CHECK(!first.read_ppc_boot(at,4,value));
+        for(unsigned width:{0u,1u,2u,8u})CHECK(!first.read_ppc_boot(Boot::ppc_base,width,value));
+        CHECK(!second.read_ppc_boot(Boot::ppc_base,4,value));
+        second.write32(0x0d800070,1);second.write32(Boot::arm_base,0xaabbccdd);
+        second.write32(0x0d800180,Boot::ppc_boot_mask);second.write32(0x0d800070,0);
+        CHECK(second.read_ppc_boot(Boot::ppc_base,4,value) && value==0xaabbccdd);
+        CHECK(first.read_ppc_boot(Boot::ppc_base,4,value) && value==0x10203040);
+        /* The unbound PPC reset/release transition remains an explicit stop,
+         * preserving both the reset latch and authored boot memory. */
+        const uint32_t resets=first.read32(0x0d800194);
+        CHECK(faults([&]{first.write32(0x0d800194,0x08000020);}));
+        CHECK(first.read32(0x0d800194)==resets);
+        CHECK(first.read_ppc_boot(Boot::ppc_base,4,value) && value==0x10203040);
+        wiillr::Starlet fresh(mem1,mem2);CHECK(!fresh.read_ppc_boot(Boot::ppc_base,4,value));
+        first.write32(0x0d800070,1);
+        CHECK(!first.read_ppc_boot(Boot::ppc_base,4,value));
+        CHECK(first.read32(Boot::arm_base)==0x10203040);
+        /* The low guest VA reaches boot RAM only through a real MMU mapping;
+         * it is not accepted as an invented second physical EXI port. */
+        first.write32(0x4340,0x0d800c02);
+        first.coproc_write(15,0,2,0,0,0x4000);
+        first.coproc_write(15,0,3,0,0,3);
+        first.coproc_write(15,0,1,0,0,0x500f9);
+        first.write32(0x0d006840,0x55667788);
+        CHECK(first.read32(0x0d006840)==0x55667788);
+        CHECK(stores.address==Boot::ppc_base && stores.size==4);
+        first.coproc_write(15,0,1,0,0,0x500f8);
+    }
     return 0;
 }
