@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/launcher_input.h"
+#include "wiillr/keyboard.h"
 #include "launcher_input.h"
 #include <SDL3/SDL.h>
 #include <string.h>
@@ -33,6 +34,7 @@ void wii_launcher_input_defaults(RecompLauncherCSettings* s) {
 
 static bool key_down(const WiiLauncherInput* input,int binding) {
     if(binding>512 && binding<=517)return (input->mouse&(1u<<(binding-513)))!=0;
+    if(wii_keyboard_host_captured())return false;
     return binding>0 && binding<input->key_count && input->keys && input->keys[binding];
 }
 
@@ -161,6 +163,7 @@ void wii_launcher_input_poll(void* user,GcnllrPad* pad) {
         input.keys=SDL_GetKeyboardState(&input.key_count);
         if(SDL_GetMouseFocus()==focus)input.mouse=SDL_GetMouseState(NULL,NULL);
     }
+    wii_keyboard_host_keys(input.keys,input.key_count,SDL_HasKeyboard());
     if(s->player_src[0]==2) {
         SDL_Gamepad* gamepad=selected_gamepad(s);
         if(gamepad) {

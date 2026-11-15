@@ -8,6 +8,7 @@
 #include "wiillr/bluetooth.h"
 #include "wiillr/hollywood.h"
 #include "wiillr/network.h"
+#include "wiillr/keyboard.h"
 typedef struct {
     u8 descriptors[24],phase;
     u32 message,command;
@@ -39,7 +40,7 @@ typedef struct {
     WiiFs* fs; /* borrowed isolated NAND profile */
     u32 fs_handles[24];
     u32 es_uids[24]; /* identity captured when each ES descriptor opens */
-    u32 keyboard_messages[24]; /* pending event reads; no keyboard attached */
+    u32 keyboard_messages[24]; /* pending asynchronous USB keyboard reads */
     u32 sd_event_message,sd_event_fd; /* empty slot: pending insert notification */
     bool sd_event_cancelled;
     WiiBluetooth* bluetooth;
@@ -60,4 +61,7 @@ bool wii_ios_native_request(WiiIosNative*,u32 message,u64 cycles);
 /* Broadway cycles until the next captured request, or UINT64_MAX if empty. */
 u64 wii_ios_native_request_deadline(const WiiIosNative*,u64 cycles);
 bool wii_ios_native_stm_event(WiiIosNative*,CPUState*,u32 event);
+/* 1: accepted, 0: bounded queue busy (latest state retained for retry),
+ * -1: invalid/unavailable contract. Busy never stops the application. */
+int wii_ios_native_keyboard_input(WiiIosNative*,const WiiKeyboardReport*);
 #endif

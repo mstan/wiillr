@@ -96,5 +96,12 @@ int main(void) {
     frontier_order=0;CHECK(frontier() && frontier_order==2 && frontier_completions==1);
     frontier_order=0;frontier_drains=false;
     CHECK(!frontier() && frontier_order==1 && frontier_completions==1);
+    /* Camera getters are shared with other overlays; only the original
+     * keyboard draw wrapper marks text entry for the completed frame. */
+    state.keyboard_visible=false;state.keyboard=false;state.active=state.projection_ready=true;
+    keyboard_frame_begin();CHECK(keyboard_begin(&cpu));state.keyboard_drawn=true;
+    keyboard_frame_end();CHECK(state.keyboard_visible);
+    keyboard_frame_begin();keyboard_frame_end();CHECK(!state.keyboard_visible); /* Back/non-keyboard frame */
+    state.keyboard_visible=true;state.mesh=0;wii_menu_frame_stop();CHECK(!state.owner && !state.keyboard_visible); /* title retirement */
     cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard lines, invalid pointers and Menu completion ordering\n",cases);return 0;
 }
