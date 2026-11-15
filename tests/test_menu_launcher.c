@@ -14,6 +14,8 @@
 static unsigned char installed[256];
 static uint64_t title=0x100000002ull,ios=0x100000004ull;
 static unsigned views=1,ui_calls,pref_calls,settings_calls,init_calls;
+static unsigned mod_save_calls;
+static int mod_saved_resolution,mod_before_resolution;
 static bool rejected,skip;
 static int ui_action,launch_status;
 static char directory[4096],pref_name[64],alternate[4096];
@@ -47,6 +49,11 @@ void wii_launcher_input_reset(void){}
 void wii_launcher_input_poll(void* user,GcnllrPad* pad){CHECK(user);memset(pad,0,sizeof *pad);}
 void launcher_settings_load(RecompLauncherCSettings* value,const RecompLauncherCGameInfo* game){
     ++settings_calls;CHECK(!strcmp(game->name,"Wii Menu"));CHECK(value->aspect_index==3);value->skip_launcher=skip;
+}
+void launcher_settings_save(const RecompLauncherCSettings* value,const RecompLauncherCSettings* before,
+    const RecompLauncherCGameInfo* game){
+    CHECK(game->has_supersampling && game->num_internal_resolutions==6);
+    ++mod_save_calls;mod_saved_resolution=value->internal_resolution;mod_before_resolution=before->internal_resolution;
 }
 int recomp_launcher_run_window(const char* caption,RecompLauncherCSettings* value,const RecompLauncherCGameInfo* game,
     const char* assets,const char* initial,char* selected,size_t capacity){

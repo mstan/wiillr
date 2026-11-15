@@ -78,6 +78,7 @@ static bool view_supported(void) {
     return false;
 #endif
 }
+#include "menu_launcher_mods.inc"
 static const char* game_caption(const WiiGx* gx) {
     return gx->title==0x0000000100000002ull?"Wii Menu":"Mega Man 9";
 }
@@ -149,7 +150,8 @@ bool wii_launcher_menu_session(const char* image) {
         game.internal_resolution_values=resolution_values;game.num_internal_resolutions=6;
         game.internal_resolution_note="Raster resolution for geometry and effects. Bitmap artwork retains its original detail.";
     }
-    load_settings(&game);game_info=game;strcpy(boot_image,image);SDL_free(pref);
+    load_settings(&game);menu_mod_prepare(&game);
+    game_info=game;strcpy(boot_image,image);SDL_free(pref);
     char volume[8];snprintf(volume,sizeof volume,"%d",settings.enable_audio?settings.volume:0);
     if(!set_env("WIILLR_WINDOW_TITLE","Wii Menu") || !set_env("GCN_WINDOW","1") ||
        !set_env("GCN_AUDIO_VOLUME",volume))return false;
@@ -245,9 +247,11 @@ int wii_launcher_menu_start(const char* image,const char* nand,unsigned uid,unsi
     strcpy(selected,image);
     if(check_only){puts("{\"launcher_title_verified\":true,\"window_opened\":false}");return 0;}
     if(!wii_launcher_menu_session(image))return 2;
+    const RecompLauncherCSettings before=settings;
     int action=RECOMP_LAUNCHER_RESULT_LAUNCH;
     if(force || !settings.skip_launcher)
         action=recomp_launcher_run_window("Wii Menu",&settings,&game_info,NULL,image,selected,capacity);
+    menu_mod_finish(&game_info,&before);
     if(action==RECOMP_LAUNCHER_RESULT_QUIT)return 1;
     if(action!=RECOMP_LAUNCHER_RESULT_LAUNCH || !installed_menu_valid(selected,nand,uid,gid,ios_profile) ||
        strlen(selected)>=sizeof boot_image)return 2;
@@ -373,10 +377,12 @@ static bool session_settings(void* user) {
     SDL_GLContext gl_context=SDL_GL_GetCurrentContext();
     RecompLauncherCGameInfo in_session=game_info;in_session.in_session=1;
     in_session.name=game_caption(gx);
+    const RecompLauncherCSettings before=settings;
     wii_launcher_mods_in_session();
     char selected[32768];
     const int action=recomp_launcher_run_window(game_caption(gx),&settings,
         &in_session,NULL,boot_image,selected,sizeof selected);
+    menu_mod_finish(&in_session,&before);
     if(gl_context && !SDL_GL_MakeCurrent(gl_window,gl_context))gx->cpu->halted=true;
     if(action==RECOMP_LAUNCHER_RESULT_UNAVAILABLE)return false;
     wii_launcher_input_reset();

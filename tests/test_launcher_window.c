@@ -61,5 +61,38 @@ int main(int argc,char** argv){
     settings.fullscreen=1;CHECK(wii_launcher_window(&gx) && size_calls==3 && fake.fullscreen);
     settings.aspect_index=0;CHECK(wii_launcher_window(&gx) && size_calls==4 && fake.h==480);
     ++fake.id;CHECK(wii_launcher_window(&gx) && size_calls==5);
+    /* A provider edits independent staged state while the shared launcher
+     * owns its settings copy. Its final copy must not erase the mod choice;
+     * persist with the real capability, despite hiding the duplicate row. */
+    RecompLauncherCGameInfo display=game_info;
+    display.has_supersampling=1;display.num_internal_resolutions=6;
+    display.internal_resolution_values=resolution_values;
+    display.internal_resolution_labels=resolution_labels;
+    settings.internal_resolution=1920;settings.volume=43;
+    menu_mod_prepare(&display);
+    CHECK(display.mods && !display.has_supersampling && display.mods->hide_hidden_features);
+    const RecompLauncherCModProvider* provider=display.mods;
+    CHECK(provider->feature_count(provider->ctx)==1);
+    RecompLauncherCModFeature feature;
+    CHECK(provider->feature_get(provider->ctx,0,&feature) && feature.enabled && !feature.hidden);
+    RecompLauncherCModOption option;
+    CHECK(provider->feature_option_get(provider->ctx,feature.package_id,feature.id,0,&option));
+    CHECK(option.choice_count==6 && !strcmp(option.value,"1920"));
+    CHECK(provider->feature_set_option(provider->ctx,feature.package_id,feature.id,"resolution","3840"));
+    CHECK(!provider->feature_set_option(provider->ctx,feature.package_id,feature.id,"resolution","3840junk"));
+    CHECK(!provider->feature_enable(provider->ctx,"unrelated",feature.id,0));
+    RecompLauncherCSettings before=settings;
+    settings.internal_resolution=1920; /* ordinary model copy returned */
+    menu_mod_finish(&display,&before);
+    CHECK(settings.internal_resolution==3840 && settings.volume==43);
+    CHECK(mod_save_calls==1 && mod_saved_resolution==3840 && mod_before_resolution==1920);
+    CHECK(size_calls==5); /* changing resolution does not recreate/resize a window */
+    before=settings;
+    CHECK(provider->feature_enable(provider->ctx,feature.package_id,feature.id,0));
+    menu_mod_finish(&display,&before);CHECK(settings.internal_resolution==1 && mod_saved_resolution==1);
+    CHECK(provider->feature_enable(provider->ctx,feature.package_id,feature.id,1));
+    menu_mod_finish(&display,&before);CHECK(settings.internal_resolution==3840);
+    menu_mod_prepare(&display); /* hidden display row does not remove the existing provider */
+    CHECK(display.mods==provider && provider->feature_get(provider->ctx,0,&feature) && feature.enabled);
     puts("Window binder: Menu/game/Menu preserves manual geometry; explicit settings and new windows apply");return 0;
 }
