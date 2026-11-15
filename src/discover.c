@@ -88,6 +88,7 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     const u64 gather_rejected=m->gx_cpu_gather_rejected;
     const u64 utc=m->ios.kd_utc,utc_cycles=m->ios.kd_utc_cycles;
     const bool utc_set=m->ios.kd_utc_set;
+    const bool scripted_input=gx->scripted_input;
     void (*sink)(void*,const u8*,u32)=m->dsp.output_sink;
     void* sink_user=m->dsp.output_user;const u32 rate=m->dsp.output_rate;
     const bool dsp=m->dsp.engine!=NULL;
@@ -119,7 +120,12 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     m->ios.operations=operations;m->ios.kd_utc=utc;m->ios.kd_utc_cycles=utc_cycles;m->ios.kd_utc_set=utc_set;
     m->ios.validate_launch=validate_launch;m->ios.launch_user=cpu;
     m->ios.fs=wii_fs_mount(profile,launch.uid,launch.gid);ok=ok && m->ios.fs;
-    if(ok && library)ok=wii_gx_start(gx,m,cpu,library,data,cache);
+    if(ok && library) {
+        ok=wii_gx_start(gx,m,cpu,library,data,cache);
+        /* The setup journal may remain in the environment after review has
+         * handed controls to the player. A title change keeps that owner. */
+        if(ok)gx->scripted_input=scripted_input;
+    }
 #ifdef RECOMP_LAUNCHER
     if(ok && library)ok=wii_launcher_window(gx);
 #endif
