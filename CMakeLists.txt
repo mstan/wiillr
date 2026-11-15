@@ -103,7 +103,7 @@ endif()
 if(NOT WIILLR_IOS MATCHES "^(none|native-development|original)$")
   message(FATAL_ERROR "Unknown IOS provider")
 endif()
-add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/dsp.c src/ios.c src/ave.c src/gx.c src/gx_output.c
+add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/dsp.c src/ios.c src/ave.c src/gx.c src/gx_output.c src/gx_session.c
   external/gc-wii-core/src/resident_memory.c
   src/control.cpp src/pacing.cpp
   external/gc-wii-core/src/host_audio.c
@@ -169,6 +169,13 @@ add_test(NAME wii_remote_host_layout COMMAND test_wii_remote_input)
 add_executable(test_wii_gx_input tests/test_gx_input.c)
 target_link_libraries(test_wii_gx_input PRIVATE wii_boot)
 add_test(NAME wii_gx_input_handoff COMMAND test_wii_gx_input)
+add_library(wii_gx_session_fixture SHARED tests/gx_session_fixture.c)
+target_include_directories(wii_gx_session_fixture PRIVATE external/gc-wii-core/include)
+add_executable(test_wii_gx_session tests/test_gx_session.c src/gx_session.c)
+target_include_directories(test_wii_gx_session PRIVATE include external/gc-wii-core/include external/gc-wii-core/dsp_lle/include)
+target_link_libraries(test_wii_gx_session PRIVATE ${CMAKE_DL_LIBS})
+add_dependencies(test_wii_gx_session wii_gx_session_fixture)
+add_test(NAME wii_gx_session_handoff COMMAND test_wii_gx_session "$<TARGET_FILE:wii_gx_session_fixture>")
 add_executable(test_wii_bluetooth_pairing tests/test_bluetooth_pairing.cpp)
 target_include_directories(test_wii_bluetooth_pairing PRIVATE third_party/dolphin-bluetooth)
 target_link_libraries(test_wii_bluetooth_pairing PRIVATE wii_bluetooth)
