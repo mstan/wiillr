@@ -621,7 +621,7 @@ if(WIILLR_PPC_GENERATED_DIR)
       set_property(TARGET wiillr-native PROPERTY WIN32_EXECUTABLE TRUE)
     endif()
     add_executable(test_wii_launcher_input tests/test_launcher_input.c src/launcher_input.c src/keyboard.c
-      external/recomp-ui/src/common/launcher_input.c)
+      external/recomp-ui/src/common/launcher_input.c external/recomp-ui/src/common/sha256.c)
     target_include_directories(test_wii_launcher_input PRIVATE include
       external/gc-wii-core/include external/recomp-ui/src external/recomp-ui/src/common)
     target_compile_definitions(test_wii_launcher_input PRIVATE LNG_SDL3=1 SDL_MAIN_HANDLED)

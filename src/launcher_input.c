@@ -7,7 +7,7 @@
 #include <stdio.h>
 
 static uint32_t selected_id[4],requested_id[4];
-static char selected_guid[4][40],selected_path[4][4096],requested_guid[4][40];
+static char selected_identity[4][65],requested_identity[4][65],requested_guid[4][40];
 static unsigned player_flags[4];
 static unsigned held_actions;
 
@@ -126,60 +126,32 @@ GcnllrPad wii_launcher_input_map_player(const RecompLauncherCSettings* s,const W
 
 static bool claimed(const RecompLauncherCSettings* s,unsigned player,uint32_t id) {
     for(unsigned n=0;n<player;++n)if(s->player_src[n]==2 && selected_id[n]==id &&
-       requested_id[n]==s->player_gamepad_instance[n] && !strcmp(requested_guid[n],s->player_gamepad_guid[n]))return true;
+       requested_id[n]==s->player_gamepad_instance[n] && !strcmp(requested_guid[n],s->player_gamepad_guid[n]) &&
+       !strcmp(requested_identity[n],s->player_gamepad_identity[n]))return true;
     return false;
 }
 static SDL_Gamepad* selected_gamepad(const RecompLauncherCSettings* s,unsigned player) {
-    LauncherPad pads[LNG_MAX_PADS];
-    int count=launcher_input_poll(pads,LNG_MAX_PADS,0);
+    LauncherPad pads[LNG_MAX_PADS];int count=launcher_input_poll(pads,LNG_MAX_PADS,0);
     if(count<0)count=0;if(count>LNG_MAX_PADS)count=LNG_MAX_PADS;
     const char* guid=s->player_gamepad_guid[player];
-    /* Shared C ABI reserves zero and returns the live SDL ID plus one. */
-    uint32_t encoded_instance=s->player_gamepad_instance[player];
-    uint32_t instance=encoded_instance?encoded_instance-1:0;
-    if(requested_id[player]!=encoded_instance || strcmp(requested_guid[player],guid)) {
-        selected_id[player]=0;selected_guid[player][0]=selected_path[player][0]=0;
-        requested_id[player]=encoded_instance;snprintf(requested_guid[player],sizeof requested_guid[player],"%s",guid);
+    const char* identity=s->player_gamepad_identity[player];
+    const uint32_t instance=s->player_gamepad_instance[player];
+    if(requested_id[player]!=instance || strcmp(requested_guid[player],guid) || strcmp(requested_identity[player],identity)) {
+        selected_id[player]=0;selected_identity[player][0]=0;
+        requested_id[player]=instance;snprintf(requested_guid[player],sizeof requested_guid[player],"%s",guid);
+        snprintf(requested_identity[player],sizeof requested_identity[player],"%s",identity);
     }
-    if(selected_id[player]) {
-        for(int i=0;i<count;++i)
-            if(pads[i].id==selected_id[player] && !strcmp(selected_guid[player],pads[i].guid))
-                return claimed(s,player,pads[i].id)?NULL:SDL_GetGamepadFromID(pads[i].id);
-        SDL_Gamepad* match=NULL;uint32_t matched_id=0;
-        for(int i=0;i<count;++i) {
-            if(strcmp(selected_guid[player],pads[i].guid) || claimed(s,player,pads[i].id))continue;
-            SDL_Gamepad* pad=SDL_GetGamepadFromID(pads[i].id);
-            const char* path=pad?SDL_GetGamepadPath(pad):NULL;
-            if(*selected_path[player] && path && !strcmp(path,selected_path[player])) {
-                if(match)return NULL;
-                match=pad;matched_id=pads[i].id;
-            }
-        }
-        if(match)selected_id[player]=matched_id;
-        return match; /* A different connected pad must not take over. */
-    }
-    for(int i=0;i<count;++i) {
-        if((*guid && strcmp(guid,pads[i].guid)) || claimed(s,player,pads[i].id))continue;
-        if(instance && pads[i].id!=instance)continue;
-        SDL_Gamepad* pad=SDL_GetGamepadFromID(pads[i].id);
-        if(!pad)return NULL;
-        selected_id[player]=pads[i].id;snprintf(selected_guid[player],sizeof selected_guid[player],"%s",pads[i].guid);
-        fprintf(stderr,"[input] Wii Remote %u controller: %s\n",player+1,SDL_GetGamepadName(pad));
-        const char* path=SDL_GetGamepadPath(pad);
-        if(path && snprintf(selected_path[player],sizeof selected_path[player],"%s",path)>=(int)sizeof selected_path[player])
-            selected_path[player][0]=0;
-        /* Some virtual/driver devices have no unique path. Keep their live
-         * instance selection, without guessing after disconnection. */
-        for(int j=0;*selected_path[player] && j<count;++j)if(j!=i && !strcmp(pads[j].guid,selected_guid[player])) {
-            SDL_Gamepad* other=SDL_GetGamepadFromID(pads[j].id);
-            const char* other_path=other?SDL_GetGamepadPath(other):NULL;
-            if(other_path && !strcmp(other_path,selected_path[player]))selected_path[player][0]=0;
-        }
-        return pad;
-    }
-    return NULL;
+    if(!*identity && !instance && !selected_id[player])
+        for(unsigned n=0;n<4;++n)if(n!=player && s->player_src[n]==2 && !strcmp(guid,s->player_gamepad_guid[n]))return NULL;
+    const int index=launcher_input_resolve(pads,count,guid,*identity?identity:selected_identity[player],
+                                           selected_id[player]?selected_id[player]+1:instance);
+    if(index<0 || claimed(s,player,pads[index].id))return NULL;
+    SDL_Gamepad* pad=SDL_GetGamepadFromID(pads[index].id);if(!pad)return NULL;
+    if(selected_id[player]!=pads[index].id)fprintf(stderr,"[input] Wii Remote %u controller: %s\n",player+1,pads[index].name);
+    selected_id[player]=pads[index].id;
+    snprintf(selected_identity[player],sizeof selected_identity[player],"%s",pads[index].identity[0]?pads[index].identity:"manual");
+    return pad;
 }
-
 unsigned wii_launcher_input_poll_player(void* user,unsigned player,GcnllrPad* pad) {
     const RecompLauncherCSettings* s=user;
     if(!pad)return 0;
@@ -218,6 +190,6 @@ void wii_launcher_input_stop(void* user) {
 }
 void wii_launcher_input_reset(void) {
     launcher_input_shutdown();held_actions=0;memset(player_flags,0,sizeof player_flags);
-    memset(selected_id,0,sizeof selected_id);memset(selected_guid,0,sizeof selected_guid);memset(selected_path,0,sizeof selected_path);
+    memset(selected_id,0,sizeof selected_id);memset(selected_identity,0,sizeof selected_identity);memset(requested_identity,0,sizeof requested_identity);
     memset(requested_id,0,sizeof requested_id);memset(requested_guid,0,sizeof requested_guid);
 }

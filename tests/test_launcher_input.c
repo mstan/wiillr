@@ -1,12 +1,30 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/launcher_input.h"
 #include "wiillr/keyboard.h"
+#include "launcher_input.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s (%s)\n",__LINE__,#x,SDL_GetError());return 1;}}while(0)
 
 int main(void) {
+    LauncherPad physical[4]={0};
+    for(int p=0;p<4;++p) {
+        physical[p].id=100+p;snprintf(physical[p].name,sizeof physical[p].name,"Identical Controller");
+        snprintf(physical[p].guid,sizeof physical[p].guid,"same-model");
+        char path[32];snprintf(path,sizeof path,"\\\\?\\hid#device#%d",p);
+        launcher_input_identity(physical[p].identity,physical[p].guid,path,"same-driver-serial");
+        CHECK(strlen(physical[p].identity)==64 && (p==0 || strcmp(physical[p].identity,physical[p-1].identity)));
+    }
+    CHECK(launcher_input_resolve(physical,4,"same-model",physical[2].identity,0)==2);
+    CHECK(launcher_input_resolve(physical,2,"same-model",physical[2].identity,0)==-1); /* Offline never steals a same-model pad. */
+    CHECK(launcher_input_resolve(physical,4,"same-model","",0)==-1);
+    CHECK(launcher_input_resolve(physical,1,"same-model","manual",0)==-1);
+    CHECK(launcher_input_resolve(physical,1,"same-model","manual",101)==0);
+    physical[2].id=900;CHECK(launcher_input_resolve(physical,4,"same-model",physical[2].identity,103)==2);
+    char friendly[96];launcher_input_pad_label(physical,4,2,friendly,sizeof friendly);CHECK(!strcmp(friendly,"Identical Controller (3)"));
+    char slot_a[65],slot_b[65];launcher_input_identity(slot_a,"model","XInput#0",NULL);CHECK(!*slot_a);
+    launcher_input_identity(slot_a,"model","XInput#0","real-serial");launcher_input_identity(slot_b,"model","XInput#3","real-serial");CHECK(!strcmp(slot_a,slot_b));
     RecompLauncherCSettings s={0};wii_launcher_input_defaults(&s);
     bool keys[SDL_SCANCODE_COUNT]={0};WiiLauncherInput input={.keys=keys,.key_count=SDL_SCANCODE_COUNT};
     s.player_src[0]=1;keys[SDL_SCANCODE_X]=true;keys[SDL_SCANCODE_RIGHT]=true;
@@ -121,6 +139,12 @@ int main(void) {
     CHECK(SDL_SetJoystickVirtualAxis(third,SDL_GAMEPAD_AXIS_RIGHTX,16000));
     SDL_UpdateJoysticks();SDL_PumpEvents();
     for(unsigned n=0;n<4;++n) {wii_launcher_input_poll_player(&s,n,&pad);CHECK((pad.substick_x>128)==(n==2));}
+    // A new process cannot restore unidentifiable identical pads from SDL IDs.
+    RecompLauncherCSettings restart=s;
+    for(unsigned n=0;n<4;++n){restart.player_gamepad_instance[n]=0;snprintf(restart.player_gamepad_identity[n],65,"manual");}
+    wii_launcher_input_reset();
+    for(unsigned n=0;n<4;++n)CHECK(!(wii_launcher_input_poll_player(&restart,n,&pad)&WIILLR_INPUT_PRESENT));
+    for(unsigned n=0;n<4;++n)CHECK(wii_launcher_input_poll_player(&s,n,&pad)&WIILLR_INPUT_PRESENT); /* Explicit choices recover all four. */
     // A duplicated physical assignment fails closed for the later slot.
     s.player_gamepad_instance[3]=one+1;
     CHECK(!(wii_launcher_input_poll_player(&s,3,&pad)&WIILLR_INPUT_PRESENT) && !pad.buttons);
