@@ -24,6 +24,98 @@
 #else
 #include <dlfcn.h>
 #endif
+/* One native graphics owner exists per process. Keep optional indexed input
+ * and its per-Remote state private; the public WiiGx ABI remains unchanged. */
+static struct {
+    WiiGx* owner;
+    CPUState* cpu;
+    WiiGxPlayerInput poll;
+    void* user;
+    WiiBluetoothInput input[3];
+    bool sent[3],active;
+} players;
+static bool release_players(WiiGx*,bool);
+bool wii_gx_set_player_input(WiiGx* g,WiiGxPlayerInput poll,void* user) {
+    if(!g || (players.owner && players.owner!=g))return false;
+    if(!poll) {
+        const bool owned=players.owner==g;
+        if(!release_players(g,true))return false;
+        memset(&players,0,sizeof players);
+        if(owned){g->input.present=true;g->input_sent=false;} /* Restore the legacy P1 floor. */
+        return true;
+    }
+    if(!g->api || !g->cpu || !g->machine)return false;
+    if(players.owner==g && players.cpu==g->cpu && players.poll==poll && players.user==user)return true;
+    if(!release_players(g,true))return false;
+    memset(&players,0,sizeof players);players.owner=g;players.cpu=g->cpu;players.poll=poll;players.user=user;
+    g->input_sent=false; /* Rebind publishes P1 even after the legacy poll ran. */
+    for(unsigned i=0;i<3;++i)players.input[i]=(WiiBluetoothInput){0,{512,512,616},512,384,false,false,false};
+    return true;
+}
+static bool release_players(WiiGx* g,bool disconnect) {
+    if(players.owner!=g || players.cpu!=g->cpu)return true;
+    for(unsigned index=0;index<4;++index) {
+        WiiBluetoothInput* input=index?&players.input[index-1]:&g->input;
+        input->buttons=0;input->pointing=false;input->pairing=false;
+        if(disconnect)input->present=false;
+        if(g->machine->ios.bluetooth && !wii_bluetooth_set_input_indexed(g->machine->ios.bluetooth,index,input))return false;
+    }
+    players.active=false;return true;
+}
+static bool poll_players(WiiGx* g,GcnllrNativeGxStatus* status,bool native_keyboard) {
+    bool typing=false;
+#if WIILLR_IOS_NATIVE && WIILLR_MENU_PICTURES
+    typing=wii_menu_frame_keyboard_visible(g);
+#endif
+    wii_keyboard_host_begin(typing);
+    GcnllrPad pads[4];unsigned flags[4];
+    for(unsigned index=0;index<4;++index) {
+        pads[index]=(GcnllrPad){0};pads[index].stick_x=pads[index].stick_y=pads[index].substick_x=pads[index].substick_y=128;
+        flags[index]=players.poll(players.user,index,&pads[index]);
+    }
+    WiiKeyboardReport keyboard;wii_keyboard_host_end(native_keyboard && !g->host_input_capture,&keyboard);
+#if WIILLR_IOS_NATIVE
+    if(wii_ios_native_keyboard_input(&g->machine->ios,&keyboard)<0)return false;
+#else
+    (void)keyboard;
+#endif
+    for(unsigned index=0;index<4;++index) {
+        WiiBluetoothInput* prior=index?&players.input[index-1]:&g->input;
+        bool* sent=index?&players.sent[index-1]:&g->input_sent;
+        const bool present=(flags[index]&WIILLR_GX_INPUT_PRESENT)!=0;
+        const bool focused=present && (flags[index]&WIILLR_GX_INPUT_FOCUSED) && !g->host_input_capture;
+        WiiBluetoothInput next=*prior;next.present=present;next.buttons=0;next.pairing=false;
+        if(focused) {
+            next.buttons=wii_remote_buttons(&pads[index],g->title==0x0001000157523945ull);
+            int x=(int)next.pointer_x-((int)pads[index].substick_x-128)/16;
+            int y=(int)next.pointer_y-((int)pads[index].substick_y-128)/16;
+            next.pointer_x=(u16)(x<0?0:x>1023?1023:x);next.pointer_y=(u16)(y<0?0:y>767?767:y);
+            if(pads[index].substick_x<112 || pads[index].substick_x>144 || pads[index].substick_y<112 || pads[index].substick_y>144) {
+                next.pointing=true;if(!index)g->mouse_active=false;
+            } else if(!index && status->pointer.valid) {
+                const WiiPointerCamera point=wii_pointer_camera(status->pointer.x,status->pointer.y);
+                next.pointer_x=point.x;next.pointer_y=point.y;next.pointing=true;g->mouse_active=true;
+            } else if(!index && g->mouse_active)next.pointing=false;
+            if(!index && status->pointer.valid) {
+                if(status->pointer.buttons&1)next.buttons|=0x800;
+                if(status->pointer.buttons&2)next.buttons|=0x400;
+                if(status->pointer.buttons&4)next.buttons|=0x8000;
+            }
+            next.pairing=(pads[index].buttons&0x20)!=0;
+        } else {next.pointing=false;if(!index)g->mouse_active=false;}
+        if(g->machine->ios.bluetooth) {
+            if(present && (!*sent || !prior->present) && !wii_bluetooth_pair_remote(g->machine->ios.bluetooth,index))return false;
+            if(!*sent || next.buttons!=prior->buttons || next.pointer_x!=prior->pointer_x ||
+               next.pointer_y!=prior->pointer_y || next.pointing!=prior->pointing ||
+               next.present!=prior->present || next.pairing!=prior->pairing) {
+                if(!wii_bluetooth_set_input_indexed(g->machine->ios.bluetooth,index,&next))return false;
+            }
+            if(next.pairing && !prior->pairing && !wii_bluetooth_press_sync(g->machine->ios.bluetooth))return false;
+        }
+        *prior=next;*sent=true;
+    }
+    players.active=true;g->input_field=g->machine->fields;return !status->failed;
+}
 static bool idle_dimming(void* user,bool enabled) {
     WiiGx* g=user;return g->video && g->video->idle_dimming(enabled?1u:0u);
 }
@@ -242,6 +334,14 @@ bool wii_gx_tick(WiiGx* g) {
 #else
     const bool native_keyboard=false; /* Original IOS keeps its own USB bus. */
 #endif
+    if(players.owner==g && players.cpu==g->cpu && players.poll) {
+        if(!live_input) {
+            if(players.active && !release_players(g,false))return false;
+            return !status.failed;
+        }
+        if(players.active && g->input_sent && g->input_field==g->machine->fields)return !status.failed;
+        if(native_keyboard || g->machine->ios.bluetooth)return poll_players(g,&status,native_keyboard);
+    }
     /* Setup owns input until review explicitly hands it to the player. The
      * startup journal remains in the environment after its events finish. */
     if(live_input && (native_keyboard || g->machine->ios.bluetooth) &&
@@ -289,6 +389,8 @@ bool wii_gx_tick(WiiGx* g) {
     return !status.failed;
 }
 void wii_gx_stop(WiiGx* g) {
+    (void)release_players(g,true);
+    if(players.owner==g)memset(&players,0,sizeof players);
     wii_keyboard_host_reset();
     wii_mm9_dlc_bind(NULL);
     wii_mm9_mods_bind(NULL);

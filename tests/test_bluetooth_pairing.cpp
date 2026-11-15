@@ -120,5 +120,45 @@ int main() {
     u8 rejected[]={12,0,1,0,3,2,8,0,0x40,0,0x40,0,3,0,0,0};
     remote->ExecuteL2capCmd(rejected,sizeof rejected);CHECK(!remote->IsConnected());
   }
+  {
+    // Four indexed host sources produce independent real HID wire reports;
+    // assigning them alone must not fabricate four connected controllers.
+    IOS::HLE::BluetoothEmuDevice four(&cpu,nullptr);
+    std::array<WiiBluetoothInput,4> input;
+    std::array<std::vector<u8>,4> reports;
+    std::array<unsigned,4> counts{};
+    for(unsigned i=0;i<4;++i) {
+      input[i]={u16(1u<<i),{u16(512+4*i),512,616},u16(200+140*i),u16(200+60*i),true,true,false};
+      four.PairRemote(i);four.SetInput(i,input[i]);
+      auto* device=four.AccessWiimoteByIndex(i);
+      CHECK(device->IsSourceValid() && !device->IsConnected() && device->IsPairing());
+      CHECK(device->GetBD().back()==i);
+      auto& source=*four.input_sources[i];
+      source.SetInterruptCallback([&,i](u8 kind,const u8* bytes,u32 size) {
+        if(kind==0xa1){reports[i].assign(bytes,bytes+size);++counts[i];}
+      });
+      const u8 ir[]={0x13,4},clock[]={0x1a,4},enable[]={0x16,4,0xb0,0,0x30,1,8},mode[]={0x16,4,0xb0,0,0x33,1,3},report[]={0x12,6,0x33};
+      source.InterruptDataOutput(ir,sizeof ir);source.InterruptDataOutput(clock,sizeof clock);
+      source.InterruptDataOutput(enable,sizeof enable);source.InterruptDataOutput(mode,sizeof mode);source.InterruptDataOutput(report,sizeof report);
+      WiimoteEmu::DesiredWiimoteState desired;
+      source.PrepareInput(&desired,WiimoteCommon::HIDWiimote::SensorBarState::Enabled);source.Update(desired);
+      CHECK(reports[i].size()==18 && reports[i][0]==0x33 && reports[i][1]==(1u<<i) && !reports[i][2]);
+      CHECK(!std::all_of(reports[i].begin()+6,reports[i].end(),[](u8 b){return b==0xff;}));
+      if(i)CHECK(!std::equal(reports[i].begin()+6,reports[i].end(),reports[i-1].begin()+6));
+    }
+    const auto before=counts;input[2].buttons=0;four.SetInput(2,input[2]);
+    WiimoteEmu::DesiredWiimoteState desired;
+    four.input_sources[2]->PrepareInput(&desired,WiimoteCommon::HIDWiimote::SensorBarState::Enabled);four.input_sources[2]->Update(desired);
+    CHECK(!reports[2][1] && !reports[2][2] && counts[2]==before[2]+1);
+    CHECK(counts[0]==before[0] && counts[1]==before[1] && counts[3]==before[3]);
+    input[1].present=false;four.SetInput(1,input[1]);CHECK(!four.AccessWiimoteByIndex(1)->IsSourceValid());
+    CHECK(four.AccessWiimoteByIndex(0)->IsSourceValid() && four.AccessWiimoteByIndex(2)->IsSourceValid() && four.AccessWiimoteByIndex(3)->IsSourceValid());
+    bool invalid=false;try{four.SetInput(4,input[0]);}catch(const std::runtime_error&){invalid=true;}CHECK(invalid);
+    CHECK(!four.AccessWiimoteByIndex(4)->IsSourceValid()); // Balance board is not Remote5.
+    auto* api=wii_bluetooth_create(&cpu,nullptr,nullptr);CHECK(api);
+    for(unsigned i=0;i<4;++i)CHECK(wii_bluetooth_pair_remote(api,i) && wii_bluetooth_set_input_indexed(api,i,&input[i]));
+    CHECK(!wii_bluetooth_pair_remote(api,4) && !wii_bluetooth_set_input_indexed(api,4,&input[0]));
+    CHECK(!wii_bluetooth_set_input_indexed(api,0,nullptr));wii_bluetooth_destroy(api);
+  }
   cpu_free(&cpu);return 0;
 }

@@ -30,6 +30,13 @@ typedef struct {
     bool host_input_capture; /* host menu holds input until its controls release */
     bool scripted_input; /* setup owns input until the explicit review handoff */
 } WiiGx;
+/* Optional four-player host input. The callback returns PRESENT=1/FOCUSED=2;
+ * zero is an unassigned/disconnected Remote. P1 mouse remains renderer-owned.
+ * Registration is private and retired by stop; WiiGx's layout is unchanged. */
+#define WIILLR_GX_INPUT_PRESENT 1u
+#define WIILLR_GX_INPUT_FOCUSED 2u
+typedef unsigned (*WiiGxPlayerInput)(void*,unsigned,GcnllrPad*);
+bool wii_gx_set_player_input(WiiGx*,WiiGxPlayerInput,void*);
 bool wii_gx_start(WiiGx*,WiiMachine*,CPUState*,const char* library,const char* data,const char* cache);
 bool wii_gx_tick(WiiGx*);
 void wii_gx_stop(WiiGx*);
