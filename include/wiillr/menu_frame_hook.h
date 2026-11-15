@@ -15,6 +15,9 @@ extern "C" {
 int wii_menu_frame_current_view(CPUState*,WiiMenuView*);
 int wii_menu_frame_current_model(CPUState*,float output[12]);
 bool wii_menu_frame_keyboard_visible(const WiiGx*);
+/* Retire verified SDK cache setup owned by the native Menu renderer. Other
+ * stores retain the machine's ordinary gather/ownership checks. */
+bool wii_menu_frame_gather(WiiMachine*,CPUState*,uint32_t,uint64_t,unsigned);
 bool wii_menu_frame_start(WiiGx*,const GcWiiNativeRenderApi*,const GcWiiNativeFrameApi*);
 void wii_menu_frame_capture(const GcWiiNativeCaptureApi*);
 void wii_menu_frame_display(const GcWiiNativeDisplayApi*);

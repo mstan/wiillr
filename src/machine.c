@@ -3,6 +3,9 @@
 #include "debug/cost_ring.h"
 #include "cpu/timing.h"
 #include "memory/memory.h"
+#if WIILLR_MENU_PICTURES
+#include "wiillr/menu_frame_hook.h"
+#endif
 #include <stdio.h>
 #include <string.h>
 
@@ -175,6 +178,9 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
 #endif
     if(physical>=0x0c008000u && physical+width<=0x0c008000u+GCN_GP_SIZE &&
        (width==1 || width==2 || width==4 || width==8) && !(address&(width-1))) {
+#if WIILLR_MENU_PICTURES
+        if(wii_menu_frame_gather(m,cpu,address,value,width))return;
+#endif
         ++m->gx_cpu_gather_writes;m->gx_cpu_gather_bytes+=width;
         if(m->gx_native_owner) {
             ++m->gx_cpu_gather_rejected;

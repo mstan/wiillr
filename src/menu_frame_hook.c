@@ -24,6 +24,9 @@ static struct {
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
     bool transform_verified,transform_sampled;u64 transforms,transform_declines;
     bool keyboard_drawn,keyboard_visible;
+    bool sdk_verified,sdk_initializing;u32 sdk_fifo,sdk_size,sdk_thread;
+    struct {u32 word,remaining;u8 command,header;} sdk_setup;
+    u64 sdk_init_writes,sdk_texture_writes;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -38,6 +41,7 @@ static bool identity(CPUState* cpu,u32 address,u32 size,u64 hash) {
     const u8* p=bytes(cpu,address,size);if(!p)return false;u64 h=UINT64_C(14695981039346656037);
     for(u32 i=0;i<size;i++){h^=p[i];h*=UINT64_C(1099511628211);}return h==hash;
 }
+#include "menu_gx_state.inc"
 #if WIILLR_MENU_TRANSFORM
 /* These are the exact original native pages exercised by the certified
  * zero-angle CalculateMtx stage, including its SDK matrix/rotation callees.
@@ -58,6 +62,8 @@ static bool transform_identity(CPUState* cpu) {
 }
 #endif
 void wii_menu_frame_invalidate(u32 address,u32 size) {
+    const u64 sdk_begin=address&0x1fffffffu,sdk_end=sdk_begin+size;
+    if(sdk_begin<0x1540000u+0x10000u && sdk_end>0x1540000u)state.sdk_verified=false;
 #if WIILLR_MENU_TRANSFORM
     const u64 begin=address&0x1fffffffu,end=begin+size;
     for(u32 i=0;i<sizeof transform_pages/sizeof *transform_pages;i++) {
@@ -286,9 +292,18 @@ static int fader(CPUState* cpu,u32 object) {
 }
 static bool fifo_object(CPUState* cpu) {
     const u32 base=cpu->gpr[3],size=cpu->gpr[4];if((base&31) || (size&31) || size<0x4000 || !bytes(cpu,base,size))return false;
+    if(state.sdk_initializing || !sdk_identity(cpu))return false;
+    const u32 thread=word(cpu,0x800000e4);
+    if(!thread || (thread&3) || !bytes(cpu,thread,4))return false;
     if(!wii_machine_claim_native_graphics(state.owner->machine,"ipl43u-frame"))return false;
-    const u32 fields[8]={base,base+size-4,size,size-0x4000,(size/2)&~31u,base,base,0};
-    for(u32 n=0;n<8;n++)mem_write32(cpu,0x81116460+n*4,fields[n]);cpu->gpr[3]=0x81116460;return !state.bad;
+    state.sdk_initializing=true;state.sdk_fifo=base;state.sdk_size=size;state.sdk_thread=thread;
+    memset(&state.sdk_setup,0,sizeof state.sdk_setup);return !state.bad;
+}
+static bool fifo_complete(CPUState* cpu) {
+    if(!state.sdk_initializing || state.sdk_setup.command || cpu->gpr[3]!=0x81116460u ||
+       !bytes(cpu,cpu->gpr[3],128) || word(cpu,cpu->gpr[3])!=state.sdk_fifo ||
+       word(cpu,cpu->gpr[3]+8)!=state.sdk_size)return false;
+    state.sdk_initializing=false;++state.initializers;return !state.bad;
 }
 static int layout_draw(CPUState* cpu,u32 address) {
     const bool explicit_pane=address==0x8136a88c;
@@ -436,7 +451,13 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         const int drawn=fader(cpu,cpu->gpr[3]);if(drawn!=1)return stop(cpu,"fader input/submission",drawn<0);
     } else if(address==0x815f7ca4) {
         if(!identity(cpu,0x815f7c5c,0x68,UINT64_C(0xd6de00181d4af4b3)) || !fifo_object(cpu))return stop(cpu,"graphics initializer storage/identity",false);
-        ++state.initializers;cpu->pc=0x815f7ca8;++cpu->cycles;return 1;
+        /* Execute the original compiled GXInit: callbacks, texture/TLUT
+         * regions, tables and logical SDK state remain the guest's own. */
+        return 0;
+    } else if(address==0x815f7ca8) {
+        if(!sdk_identity(cpu) || !fifo_complete(cpu))
+            return stop(cpu,"graphics initializer completion",false);
+        return 0;
     } else if(address==0x81334328) {
         if(!identity(cpu,0x8133400c,0xac4,UINT64_C(0x08fa40f95bcc1e55)))return stop(cpu,"title graphics initialization identity",false);
         /* The native service owns its surface format; typed draw/copy masks
@@ -505,6 +526,8 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
 void wii_menu_frame_stop(void) {
     if(!state.owner)return;if(state.mesh)state.render->destroy_mesh(state.mesh);
     if(state.display)(void)state.display->set_aspect(0,0);
+    printf("{\"native_menu_sdk_setup\":1,\"retired_initialization_writes\":%llu,\"retired_texture_binding_writes\":%llu}\n",
+        (unsigned long long)state.sdk_init_writes,(unsigned long long)state.sdk_texture_writes);
     printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"isolated_buffers\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.isolated_buffers,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
 #if WIILLR_MENU_TRANSFORM
     printf("{\"native_menu_transforms\":1,\"admitted\":%llu,\"declined\":%llu}\n",(unsigned long long)state.transforms,(unsigned long long)state.transform_declines);

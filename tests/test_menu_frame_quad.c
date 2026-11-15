@@ -16,6 +16,12 @@ static unsigned frontier_order,frontier_completions;
 static bool frontier_drains=true;
 static unsigned display_calls,display_numerator,display_denominator;
 static bool display_ready=true;
+static WiiMachine* gather_machine;
+static unsigned gather_retired,gather_fallthrough;
+static void gather_bridge(CPUState* cpu,u32 address,u64 value,u8 width) {
+    if(wii_menu_frame_gather(gather_machine,cpu,address,value,width))++gather_retired;
+    else ++gather_fallthrough;
+}
 static int display_aspect(u32 numerator,u32 denominator) {
     ++display_calls;if(!display_ready)return 0;
     display_numerator=numerator;display_denominator=denominator;return 1;
@@ -126,5 +132,94 @@ int main(void) {
     put(&cpu,object+0x10,1);display_ready=false;
     CHECK(!set_viewport(&cpu,object) && display_calls==3 && !state.display_aspect);
     display_ready=true;CHECK(set_viewport(&cpu,object) && display_calls==4 && state.display_aspect==1);
+    /* Cache retirement must leave original CPU callbacks and region tables
+     * intact. Public synthetic instructions avoid embedding title code. */
+    memset(&state,0,sizeof state);gx.title=UINT64_C(0x0000000100000002);
+    machine.gx_native_owner="ipl43u-frame";state.owner=&gx;state.sdk_verified=true;
+    const u32 sdk=0x80008000,callbacks=0x80009000;
+    put(&cpu,sdk+0x518,callbacks);put(&cpu,sdk+0x51c,callbacks+4);
+    for(unsigned n=0;n<20;n++)put(&cpu,sdk+600+n*16,0x10000000u+n);
+    u8 logical[0x600];memcpy(logical,cpu.ram+0x8000,sizeof logical);
+    const CPUState unchanged=cpu;
+    for(unsigned slot=0;slot<8;slot++) {
+        const u32 commands[]={0x815460bc,0x815460d4,0x815460e8,0x815460f4,0x815460fc,0x81546104,0x81546150};
+        const u32 payloads[]={0x815460c8,0x815460dc,0x815460f0,0x815460f8,0x81546100,0x81546120,0x81546158};
+        const u32 bases[]={0x80,0x84,0x88,0x8c,0x90,0x94,0x98};
+        cpu.gpr[31]=slot;
+        for(unsigned n=0;n<7;n++) {
+            cpu.pc=commands[n];const CPUState before=cpu;
+            CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));
+            CHECK(!memcmp(&before,&cpu,sizeof cpu));
+            cpu.pc=payloads[n];const u32 value=((bases[n]+slot+(slot<4?0:28))<<24)|0x123456;
+            CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,value,4));
+            CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,value^0x01000000,4));
+        }
+    }
+    CHECK(state.sdk_texture_writes==112 && !memcmp(logical,cpu.ram+0x8000,sizeof logical));
+    const u32 last_pc=cpu.pc;cpu.pc=0x815460cc;
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));cpu.pc=last_pc;
+    WiiMachine foreign={0};CHECK(!wii_menu_frame_gather(&foreign,&cpu,0xcc008000,0x61,1));
+    gx.title=0;CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));gx.title=UINT64_C(0x0000000100000002);
+    machine.gx_native_owner=NULL;CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));machine.gx_native_owner="ipl43u-frame";
+    cpu=unchanged;state.sdk_initializing=true;state.sdk_thread=0x8000a000;
+    put(&cpu,0x800000e4,state.sdk_thread);cpu.pc=0x81540000;
+    put(&cpu,cpu.pc,0x98000000);put(&cpu,cpu.pc+4,0x90000000); /* stb/stw */
+    put(&cpu,0x800000e4,state.sdk_thread+4);
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1) && !state.sdk_setup.command);
+    put(&cpu,0x800000e4,state.sdk_thread);
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));cpu.pc+=4;
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x40000017,4));
+    CHECK(!state.sdk_setup.command && state.sdk_init_writes==2);
+    CHECK(sdk_bp_state(0x5800000f) && !sdk_bp_state(0x58000000));
+    cpu.pc-=4;CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x08,1));
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x20,1));cpu.pc+=4;
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0,4));CHECK(!state.sdk_setup.command);
+    cpu.pc-=4;CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x10,1));cpu.pc+=4;
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x00101000,4)); /* 17 XF words */
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x00001000,4));
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x3f800000,4));CHECK(!state.sdk_setup.command);
+    /* Use the actual PSQ and memory helpers, rather than assuming that a
+     * 64-bit instruction reaches MMIO as one width8 callback. */
+    gather_machine=&machine;cpu.external_write=gather_bridge;
+    put(&cpu,0x81540008,0xf0000000); /* synthetic PSQ_ST f0,0(r0),W0,GQR0 */
+    cpu.gqr[0]=0;cpu.msr|=0x2000u;cpu.hid2|=PPC_HID2_PSE|PPC_HID2_LSQE;cpu.fpr[0]=1;cpu.ps1[0]=2;
+    cpu.pc=0;mem_write8_cia(&cpu,0xcc008000,0x10,0x81540000);
+    mem_write32_cia(&cpu,0xcc008000,0x00011000,0x81540004);
+    const unsigned pair_before=gather_retired;
+    cpu.pc=0x81540008; /* PSQ emitter publishes CIA before the existing helper. */
+    ppc_psq_store(&cpu,0,0xcc008000,false,0,false,0x81540008);
+    CHECK(!cpu.exception && gather_retired==pair_before+2 && !gather_fallthrough && !state.sdk_setup.command);
+    CHECK(cpu.pc==0x81540008);
+    put(&cpu,0x8154000c,0xd8000000); /* synthetic STFD */
+    mem_write8_cia(&cpu,0xcc008000,0x10,0x81540000);
+    mem_write32_cia(&cpu,0xcc008000,0x00011000,0x81540004);
+    const unsigned wide_before=gather_retired;
+    mem_write64_cia(&cpu,0xcc008000,UINT64_C(0x3ff0000000000000),0x8154000c);
+    CHECK(gather_retired==wide_before+1 && !state.sdk_setup.command && cpu.pc==0x8154000c);
+    mem_write32_cia(&cpu,0xcc008004,0,0x81540004);CHECK(gather_fallthrough==1); /* scalar +4 remains raw */
+    put(&cpu,0x800000e4,state.sdk_thread+4);
+    mem_write8_cia(&cpu,0xcc008000,0x61,0x81540000);CHECK(gather_fallthrough==2 && !state.sdk_setup.command);
+    put(&cpu,0x800000e4,state.sdk_thread);
+    cpu.external_write=unchanged.external_write;cpu.pc=0x81540004;
+    cpu.pc-=4;CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x90,1)); /* draw */
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));cpu.pc+=4;
+    const u32 saved_word=state.sdk_setup.word;const u8 saved_header=state.sdk_setup.header;
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x45000002,4)); /* draw-done */
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x52004000,4)); /* EFB copy */
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x65000000,4)); /* palette upload */
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x63000000,4)); /* texture preload */
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x4c000000,4)); /* reserved register */
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x5a000000,4));
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0xff000000,4));
+    CHECK(state.sdk_setup.word==saved_word && state.sdk_setup.header==saved_header);
+    CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x41000000,4));
+    cpu.gpr[3]=0x81116460;state.sdk_fifo=0x80010000;state.sdk_size=0x4000;
+    put(&cpu,cpu.gpr[3],state.sdk_fifo);put(&cpu,cpu.gpr[3]+8,state.sdk_size);
+    CHECK(fifo_complete(&cpu) && !state.sdk_initializing && state.initializers==1);
+    CHECK(!memcmp(logical,cpu.ram+0x8000,sizeof logical));
+    CHECK(word(&cpu,sdk+0x518)==callbacks && word(&cpu,sdk+0x51c)==callbacks+4);
+    cpu=unchanged;state.sdk_verified=true;wii_menu_frame_invalidate(0x81546000,4);CHECK(!state.sdk_verified);
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));
+    wii_menu_frame_stop();CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));
     cpu_free(&cpu);printf("PASS %u RGBA-pointer cases, keyboard lifecycle, Menu completion and display mode\n",cases);return 0;
 }
