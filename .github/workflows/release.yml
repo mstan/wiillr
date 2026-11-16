@@ -67,7 +67,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-SDL3 mingw-w64-x86_64-fmt mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-sdl3 mingw-w64-x86_64-fmt mingw-w64-x86_64-zlib
             mingw-w64-x86_64-xxhash
       - name: Linux dependencies
         if: runner.os == 'Linux'
@@ -76,7 +76,8 @@ jobs:
           sudo apt-get install -y ninja-build libfmt-dev libxxhash-dev zlib1g-dev patchelf \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev \
             libasound2-dev libpulse-dev libwayland-dev libxkbcommon-dev libdrm-dev \
-            libgbm-dev libudev-dev libgl1-mesa-dev libegl1-mesa-dev libvulkan-dev
+            libgbm-dev libudev-dev libgl1-mesa-dev libegl1-mesa-dev libvulkan-dev \
+            libxss-dev libxtst-dev libxv-dev libdecor-0-dev wayland-protocols
       - name: Locate licensed Visual C++ runtime
         if: runner.os == 'Windows'
         shell: pwsh
