@@ -29,7 +29,16 @@ qualified private generated PowerPC catalog and its matching preparation receipt
 The combined Menu/MM9 catalog preserves captured overlay variants; regenerating
 only the boot DOL is insufficient. These inputs stay outside Git. Maintainers
 can obtain the frozen input bundle from the same private repository's release
-assets and extract it with `tools/release_inputs.py --sha256 <archive-sha256>`.
+assets. Download [the frozen maintainer inputs](https://github.com/mstan/wiillr/releases/tag/release-inputs-20261115-2),
+then extract them into a new directory:
+
+```sh
+python tools/release_inputs.py wiillr-release-inputs-20261115-2.zip /path/to/wiillr-inputs --sha256 dce873548de9e01d2c94e7763b491b41f67573e703c2a3476724b67b3f0cb432
+```
+
+The bundle contains `inputs.json`, `deps/` with the exact source providers,
+and `catalog/` with its generated code and preparation receipt. The build driver
+checks every file and the qualified catalog identity before configuring CMake.
 
 ## Commands
 
