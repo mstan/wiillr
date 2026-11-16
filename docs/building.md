@@ -39,11 +39,11 @@ qualified private generated PowerPC catalog and its matching preparation receipt
 The combined Menu/MM9 catalog preserves captured overlay variants; regenerating
 only the boot DOL is insufficient. These inputs stay outside Git. Maintainers
 can obtain the frozen input bundle from the same private repository's release
-assets. Download [the frozen maintainer inputs](https://github.com/mstan/wiillr/releases/tag/release-inputs-20261115-2),
+assets. Download [the frozen maintainer inputs](https://github.com/mstan/wiillr/releases/tag/release-inputs-20261115-3),
 then extract them into a new directory:
 
 ```sh
-python tools/release_inputs.py wiillr-release-inputs-20261115-2.zip /path/to/wiillr-inputs --sha256 dce873548de9e01d2c94e7763b491b41f67573e703c2a3476724b67b3f0cb432
+python tools/release_inputs.py wiillr-release-inputs-20261115-3.zip /path/to/wiillr-inputs --sha256 c00f1a49ff909fd2fe2e754808a68868564413fc3e8749be7a396502fe6e64d7
 ```
 
 The bundle contains `inputs.json`, `deps/` with the exact source providers,
@@ -85,6 +85,10 @@ Windows packages use ZIP, Linux packages use a portable tar archive, and macOS
 games use an application bundle in ZIP. macOS builds use ad-hoc signing where
 available; they are not Developer ID signed or notarized. Follow your system's
 normal approval flow for locally built applications.
+
+The prebuilt Linux archives are built on Ubuntu 24.04 with glibc 2.39.
+They retain the host's glibc and graphics drivers; older distributions may need
+a native build. Gameplay on other Linux distributions has not been qualified.
 
 Packages contain their runtime libraries, launcher assets and license/source
 notices. Builds must pass the platform dependency-closure check and package
