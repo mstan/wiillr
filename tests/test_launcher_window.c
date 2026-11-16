@@ -13,6 +13,7 @@ SDL_Window** SDL_GetWindows(int* count){SDL_Window** p=malloc(sizeof *p);CHECK(p
 const char* SDL_GetWindowTitle(SDL_Window* window){CHECK(window==fake_window());return fake.caption;}
 SDL_WindowID SDL_GetWindowID(SDL_Window* window){CHECK(window==fake_window());return fake.id;}
 bool SDL_SetWindowSize(SDL_Window* window,int w,int h){CHECK(window==fake_window());++size_calls;fake.w=w;fake.h=h;return true;}
+bool SDL_GetWindowSize(SDL_Window* window,int* w,int* h){CHECK(window==fake_window());*w=fake.w;*h=fake.h;return true;}
 bool SDL_SetWindowFullscreen(SDL_Window* window,bool enabled){CHECK(window==fake_window());++fullscreen_calls;fake.fullscreen=enabled;return true;}
 bool SDL_SetWindowFullscreenMode(SDL_Window* window,const SDL_DisplayMode* mode){CHECK(window==fake_window());(void)mode;return true;}
 SDL_DisplayID SDL_GetDisplayForWindow(SDL_Window* window){CHECK(window==fake_window());return 1;}
@@ -89,7 +90,7 @@ int main(int argc,char** argv){
     menu_mod_prepare(&display);
     CHECK(display.mods && !display.has_supersampling && display.mods->hide_hidden_features);
     const RecompLauncherCModProvider* provider=display.mods;
-    CHECK(provider->feature_count(provider->ctx)==1);
+    CHECK(provider->feature_count(provider->ctx)==2);
     RecompLauncherCModFeature feature;
     CHECK(provider->feature_get(provider->ctx,0,&feature) && feature.enabled && !feature.hidden);
     RecompLauncherCModOption option;
@@ -111,5 +112,15 @@ int main(int argc,char** argv){
     menu_mod_finish(&display,&before);CHECK(settings.internal_resolution==3840);
     menu_mod_prepare(&display); /* hidden display row does not remove the existing provider */
     CHECK(display.mods==provider && provider->feature_get(provider->ctx,0,&feature) && feature.enabled);
+    CHECK(provider->feature_get(provider->ctx,1,&feature) && !feature.enabled && !feature.option_count);
+    CHECK(!strcmp(feature.id,"adaptive-channel-grid"));
+    CHECK(provider->feature_enable(provider->ctx,feature.package_id,feature.id,1));
+    before=settings;menu_mod_finish(&display,&before);CHECK(grid_enabled);
+    display.has_supersampling=1;menu_mod_prepare(&display);
+    CHECK(provider->feature_get(provider->ctx,1,&feature) && feature.enabled);
+    CHECK(provider->feature_enable(provider->ctx,feature.package_id,feature.id,0));
+    menu_mod_finish(&display,&before);CHECK(!grid_enabled);
+    char grid_path[32768];snprintf(grid_path,sizeof grid_path,"%s/adaptive-grid.cfg",launcher_directory);
+    CHECK(!remove(grid_path));
     puts("Window binder: Menu/game/Menu preserves manual geometry; explicit settings and new windows apply");return 0;
 }

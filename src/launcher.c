@@ -6,6 +6,7 @@
 #include "wiillr/package.h"
 #include "wiillr/nand_setup.h"
 #include "wiillr/mm9_mods.h"
+#include "wiillr/menu_grid.h"
 #include "wiillr/fs.h"
 #include "wiillr/wad.h"
 #include "recomp_launcher.h"
@@ -104,6 +105,11 @@ static bool session_cursor_event(void* user,SDL_Event* event) {
     /* SDL also pumps window events while guest execution is paused. Synthetic
      * events may originate on other threads; cursor APIs stay on the owner. */
     if(!SDL_IsMainThread())return true;
+    if(event->type==SDL_EVENT_WINDOW_RESIZED) {
+        SDL_Window* window=SDL_GetWindowFromID(event->window.windowID);
+        if(window && !strcmp(SDL_GetWindowTitle(window),"Wii Menu"))
+            wii_menu_grid_extent(event->window.data1,event->window.data2,settings.aspect_index==3);
+    }
     if(event->type==SDL_EVENT_WINDOW_FOCUS_LOST || event->type==SDL_EVENT_WINDOW_MOUSE_LEAVE ||
        event->type==SDL_EVENT_WINDOW_HIDDEN) {
         SDL_Window* window=SDL_GetWindowFromID(event->window.windowID);
@@ -571,6 +577,10 @@ bool wii_launcher_window(WiiGx* gx) {
         if(!strcmp(SDL_GetWindowTitle(windows[i]),game_caption(gx))){window=windows[i];break;}
     SDL_free(windows);
     if(!window)return false;
+    if(menu) {
+        int w=0,h=0;
+        if(SDL_GetWindowSize(window,&w,&h))wii_menu_grid_extent(w,h,settings.aspect_index==3);
+    }
     const SDL_WindowID window_id=SDL_GetWindowID(window);
     if(!window_id)return false;
     /* Title handoffs rebind controls on the retained physical window. Only a
@@ -614,4 +624,16 @@ bool wii_launcher_window(WiiGx* gx) {
     }
     if(!ok)fprintf(stderr,"launcher: unable to apply game window settings: %s\n",SDL_GetError());
     return ok;
+}
+bool wii_launcher_window_extent(WiiGx* gx,unsigned* w,unsigned* h,bool resize) {
+    if(!gx || !w || !h || !SDL_IsMainThread())return false;
+    int count=0;SDL_Window** windows=SDL_GetWindows(&count);SDL_Window* window=NULL;
+    for(int i=0;windows && i<count;++i)
+        if(!strcmp(SDL_GetWindowTitle(windows[i]),game_caption(gx))){window=windows[i];break;}
+    SDL_free(windows);if(!window)return false;
+    if(resize && (*w<240 || *h<240 || *w>8192 || *h>8192 || !SDL_SetWindowSize(window,*w,*h)))return false;
+    int width=0,height=0;if(!SDL_GetWindowSize(window,&width,&height))return false;
+    *w=width;*h=height;
+    if(gx->title==0x100000002ull)wii_menu_grid_extent(*w,*h,settings.aspect_index==3);
+    return true;
 }

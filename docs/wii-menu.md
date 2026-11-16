@@ -68,6 +68,14 @@ options, including internal resolution; game-specific Mega Man 9 mods belong in
 its [separate launcher](mega-man-9.md). Higher internal resolutions increase GPU
 cost and do not create new detail in bitmap artwork.
 
+Development builds with the native Menu layout provider also offer **Adaptive
+channel grid (experimental)**. Enable it in Mods and select **Fit to screen**,
+then resize the window. The grid keeps three rows and adjusts its columns,
+including two in portrait and six or seven in wide desktop windows. It preserves
+the original channel order and saves; channel rearrangement is unavailable while
+this experiment is enabled. Other Menu screens retain their original layouts.
+Portrait desktop testing does not establish Android platform support.
+
 An unconfigured network profile starts as wired Connection 1 with automatic
 IP/DNS. Existing connection settings are preserved. Host IPv4 sockets and DNS
 are available; AOSS, SSL, online WiiConnect24 and Nintendo service availability

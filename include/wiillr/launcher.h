@@ -20,4 +20,6 @@ bool wii_launcher_menu_verify(const void* image,size_t size);
  * The caller has already loaded the original boot image and copied NAND. */
 bool wii_launcher_menu_session(const char* image);
 bool wii_launcher_window(WiiGx*);
+/* Operates on this session's SDL window without activating it. */
+bool wii_launcher_window_extent(WiiGx*,unsigned*,unsigned*,bool resize);
 #endif

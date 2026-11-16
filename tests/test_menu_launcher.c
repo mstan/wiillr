@@ -3,6 +3,7 @@
  * provider, and an observing replacement for the UI window call. No SDL
  * initialization, controller access, window, dialog or original data. */
 #include "wiillr/launcher.h"
+#include "wiillr/menu_grid.h"
 #include "wiillr/launcher_input.h"
 #include "wiillr/fs.h"
 #include "launcher_settings.h"
@@ -17,6 +18,11 @@ static unsigned views=1,ui_calls,pref_calls,settings_calls,init_calls;
 static unsigned mod_save_calls;
 static int mod_saved_resolution,mod_before_resolution;
 static bool rejected,skip;
+static bool grid_enabled;
+static unsigned grid_width,grid_height;
+void wii_menu_grid_configure(bool enabled){grid_enabled=enabled;}
+bool wii_menu_grid_supported(void){return true;}
+void wii_menu_grid_extent(unsigned w,unsigned h,bool fit){(void)fit;grid_width=w;grid_height=h;}
 static bool peripheral_missing;
 static RecompLauncherCPeripheral test_peripheral;
 static int ui_action,launch_status;

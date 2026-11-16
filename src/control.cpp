@@ -14,6 +14,10 @@ constexpr int INVALID_SOCKET=-1,SOCKET_ERROR=-1;
 extern "C" {
 #include "wiillr/control.h"
 #include "wiillr/mm9_mods.h"
+#include "wiillr/menu_grid.h"
+#if WIILLR_LAUNCHER_WINDOW
+#include "wiillr/launcher.h"
+#endif
 #include "memory/memory.h"
 #include "cpu/interpreter.h"
 #include "cpu/aot_module.h"
@@ -171,6 +175,22 @@ struct WiiControl {
   std::string command(const std::string& line) {
     std::istringstream stream(line);std::vector<std::string> args;std::string word;
     while(stream>>word)args.push_back(word);if(args.empty())throw std::runtime_error("command required");
+#if WIILLR_LAUNCHER_WINDOW
+    if(args[0]=="window" && (args.size()==1 || args.size()==3)) {
+      unsigned w=0,h=0;
+      if(args.size()==3){w=unsigned(number(args[1],10));h=unsigned(number(args[2],10));}
+      if(!wii_launcher_window_extent(gx,&w,&h,args.size()==3))throw std::runtime_error("session window unavailable");
+      return "{\"ok\":true,\"width\":"+std::to_string(w)+",\"height\":"+std::to_string(h)+"}";
+    }
+#endif
+    if(args[0]=="menu-grid" && (args.size()==1 || args.size()==2 || args.size()==4)) {
+      if(args.size()>1) {
+        if(gx->title!=0x100000002ull || (args[1]!="on" && args[1]!="off"))throw std::runtime_error("Menu only");
+        if(args.size()==4)wii_menu_grid_extent(unsigned(number(args[2],10)),unsigned(number(args[3],10)),true);
+        wii_menu_grid_configure(args[1]=="on");
+      }
+      char out[1024];wii_menu_grid_status(out,sizeof out);return out;
+    }
     if(args[0]=="status" && args.size()==1) {
       const auto dsp=machine->dsp.engine?gcn_dsp_engine_stats(machine->dsp.engine):GcnDspEngineStats{};
       return "{\"ok\":true,\"title\":"+std::to_string(gx->title)+",\"cycles\":"+std::to_string(cpu->cycles)+",\"pc\":"+std::to_string(cpu->pc)+

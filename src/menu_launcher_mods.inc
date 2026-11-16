@@ -8,6 +8,12 @@ static struct {
 } menu_mods;
 static const char menu_mod_package[]="wii-menu.display";
 static const char menu_mod_feature[]="internal-resolution";
+static const char menu_grid_feature[]="adaptive-channel-grid";
+static bool menu_grid_choice;
+static int menu_mod_feature_count(void* context){(void)context;return wii_menu_grid_supported()?2:1;}
+static bool menu_grid_identity(const char* package,const char* feature) {
+    return package && feature && !strcmp(package,menu_mod_package) && !strcmp(feature,menu_grid_feature);
+}
 
 static bool menu_mod_identity(const char* package,const char* feature) {
     return package && feature && !strcmp(package,menu_mod_package) &&
@@ -22,7 +28,16 @@ static int menu_mod_package_get(void* context,int index,RecompLauncherCModPackag
     out->enabled=menu_mods.enabled;return 1;
 }
 static int menu_mod_get(void* context,int index,RecompLauncherCModFeature* out) {
-    (void)context;if(index || !out)return 0;memset(out,0,sizeof *out);
+    (void)context;if(index<0 || index>1 || !out)return 0;memset(out,0,sizeof *out);
+    if(index==1) {
+        if(!wii_menu_grid_supported())return 0;
+        strcpy(out->id,menu_grid_feature);strcpy(out->package_id,menu_mod_package);
+        strcpy(out->package_name,"Wii Menu display");strcpy(out->package_version,"1.0");
+        strcpy(out->name,"Adaptive channel grid (experimental)");strcpy(out->group,"Display");
+        strcpy(out->description,"Keep three rows and fit the channel columns to the window. Use Fit to screen, then resize the game window. Channel rearrangement is unavailable during this experiment; switch this mod off to rearrange channels.");
+        out->enabled=menu_grid_choice;
+        strcpy(out->status,menu_grid_choice?"Responsive columns with Fit to screen.":"Original channel grid.");return 1;
+    }
     strcpy(out->id,menu_mod_feature);strcpy(out->package_id,menu_mod_package);
     strcpy(out->package_name,"Wii Menu display");strcpy(out->package_version,"1.0");
     strcpy(out->name,"Internal resolution");strcpy(out->group,"Display");
@@ -32,6 +47,10 @@ static int menu_mod_get(void* context,int index,RecompLauncherCModFeature* out) 
     return 1;
 }
 static int menu_mod_enable(void* context,const char* package,const char* feature,int enabled) {
+    if(menu_grid_identity(package,feature)){
+        if(!wii_menu_grid_supported())return 0;
+        menu_grid_choice=enabled!=0;return 1;
+    }
     (void)context;if(!menu_mod_identity(package,feature))return 0;
     menu_mods.enabled=enabled!=0;menu_mods.error[0]=0;return 1;
 }
@@ -72,13 +91,18 @@ static const char* menu_mod_error(void* context){(void)context;return menu_mods.
 static const RecompLauncherCModProvider menu_mod_provider={
     .package_count=menu_mod_count,.package_get=menu_mod_package_get,
     .commit=menu_mod_commit,.last_error=menu_mod_error,
-    .feature_count=menu_mod_count,.feature_get=menu_mod_get,
+    .feature_count=menu_mod_feature_count,.feature_get=menu_mod_get,
     .feature_option_get=menu_mod_option,.feature_choice_get=menu_mod_choice,
     .feature_enable=menu_mod_enable,.feature_set_option=menu_mod_set_option,
     .hide_hidden_features=1
 };
 static void menu_mod_prepare(RecompLauncherCGameInfo* game) {
     if(!game->has_supersampling)return;
+    char path[32768];
+    if(snprintf(path,sizeof path,"%s/adaptive-grid.cfg",launcher_directory)<(int)sizeof path) {
+        FILE* f=fopen(path,"rb");if(f){menu_grid_choice=fgetc(f)=='1';fclose(f);}
+    }
+    wii_menu_grid_configure(menu_grid_choice);
     menu_mods.enabled=false;menu_mods.error[0]=0;
     if(menu_mods.selected<=1)menu_mods.selected=resolution_values[1];
     for(int index=1;index<6;++index)if(settings.internal_resolution==resolution_values[index]) {
@@ -95,6 +119,12 @@ static void menu_mod_finish(const RecompLauncherCGameInfo* game,
     RecompLauncherCSettings resolution_before=settings;
     resolution_before.internal_resolution=before->internal_resolution;
     settings.internal_resolution=menu_mods.enabled?menu_mods.selected:1;
+    char path[32768];
+    if(snprintf(path,sizeof path,"%s/adaptive-grid.cfg",launcher_directory)<(int)sizeof path) {
+        FILE* f=fopen(path,"wb");
+        if(f){fprintf(f,"%d\n",menu_grid_choice?1:0);fclose(f);}
+    }
+    wii_menu_grid_configure(menu_grid_choice);
     RecompLauncherCGameInfo persistent=*game;persistent.has_supersampling=1;
     launcher_settings_save(&settings,&resolution_before,&persistent);
 }

@@ -132,10 +132,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--arch")
     parser.add_argument("--no-package", action="store_true")
+    parser.add_argument("--cmake-definition", action="append", default=[], metavar="NAME=VALUE",
+                        help="Additional CPU build definition supplied by a game consumer")
     parser.add_argument("--common-key", type=Path, help="External MM9 package input; never a compilation input")
     args = parser.parse_args(argv)
     if args.jobs < 1:
         parser.error("--jobs must be positive")
+    for definition in args.cmake_definition:
+        if "=" not in definition or not definition.split("=", 1)[0].replace("_", "").isalnum():
+            parser.error("--cmake-definition requires NAME=VALUE")
     arch = architecture(args.arch)
     build = args.build_dir.resolve()
     inputs = args.inputs_dir.resolve(strict=True) if args.inputs_dir else None
@@ -144,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
     binary = build / "bin"
     binary.mkdir(parents=True, exist_ok=True)
     config = {"product": args.product, "arch": arch, "inputs": str(inputs), "version": args.version}
+    if args.cmake_definition:
+        config["consumer_definitions"] = args.cmake_definition
     marker = build / "build-configuration.json"
     if marker.exists() and json.loads(marker.read_text()) != config:
         raise ValueError("This build directory belongs to a different product/version/input configuration")
@@ -169,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
     initial = ["-DWIILLR_RELEASE_PRODUCT=" + args.product,
                "-DWIILLR_RELEASE_INPUTS=" + (inputs.as_posix() if inputs else ""),
                "-C", str(ROOT / "cmake/ReleaseBuild.cmake")]
-    run(["cmake", "-S", str(ROOT), "-B", str(cpu), *initial, *common])
+    run(["cmake", "-S", str(ROOT), "-B", str(cpu), *initial, *common,
+         *("-D" + definition for definition in args.cmake_definition)])
     targets = ["wiillr-native"] if game else list(TOOLS)
     run(["cmake", "--build", str(cpu), "--config", "Release", "--parallel", str(args.jobs), "--target", *targets])
     extension = ".exe" if os.name == "nt" else ""

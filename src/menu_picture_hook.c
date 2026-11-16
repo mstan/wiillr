@@ -7,6 +7,7 @@
 #include "cpu/native_code.h"
 #include <stdio.h>
 #include <string.h>
+#include <wiillr/menu_grid.h>
 
 #ifndef WIILLR_MENU_PICTURES
 #define WIILLR_MENU_PICTURES 0
@@ -138,7 +139,15 @@ int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
         !strcmp(owner->machine->gx_native_owner,"ipl43u-frame");
     /* A legacy drain may publish CPU-visible memory. Keep its original
      * post-drain preparation; only the exclusive frame reuses this snapshot. */
-    const int result=owned_frame ? wii_menu_native_submit_prepared(renderer,(u64)cpu->gpr[3]<<4,&prepared) :
+    const int grid_tiles=wii_menu_grid_picture_tiles(cpu,cpu->gpr[3]);
+    int result;
+    if(grid_tiles) {
+        result=1;
+        for(int tile=0;tile<grid_tiles && result==1;tile++) {
+            WiiMenuPicture piece=prepared;wii_menu_grid_picture_tile(cpu,cpu->gpr[3],tile,&piece);
+            result=wii_menu_native_submit_prepared(renderer,UINT64_C(0x8000000000000000)|((u64)cpu->gpr[3]<<8)|(unsigned)tile,&piece);
+        }
+    } else result=owned_frame ? wii_menu_native_submit_prepared(renderer,(u64)cpu->gpr[3]<<4,&prepared) :
         wii_menu_native_draw_picture(renderer,cpu->gpr[3],cpu->gpr[4],&view);
     if(result!=1){++failures;WiiMenuNativeStatus status;wii_menu_native_status(renderer,&status);fprintf(stderr,"Native Menu Picture submission failed: %s\n",status.error);cpu->halted=true;return 1;}
     /* Void C++ method: preserve caller-owned registers, return through LR.

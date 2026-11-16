@@ -415,6 +415,11 @@ extern "C" int wii_menu_native_gui_program(WiiMenuNative* renderer,const GcWiiNa
     renderer->program=api;return 1;
 }
 extern "C" void wii_menu_native_forget_picture(WiiMenuNative* renderer,uint32_t pane) {
+    if(renderer)for(auto it=renderer->meshes.begin();it!=renderer->meshes.end();) {
+        if((it->first>>63) && ((it->first&UINT64_C(0x7fffffffffffffff))>>8)==pane) {
+            renderer->backend->destroy_mesh(it->second.handle);it=renderer->meshes.erase(it);
+        } else ++it;
+    }
     if(!renderer)return;for(unsigned slot=0;slot<9;++slot){auto found=renderer->meshes.find((uint64_t(pane)<<4)|slot);if(found==renderer->meshes.end())continue;
     renderer->backend->destroy_mesh(found->second.handle);renderer->meshes.erase(found);}renderer->status.live_meshes=renderer->meshes.size();
 }
