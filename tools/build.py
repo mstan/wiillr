@@ -209,6 +209,9 @@ def main(argv: list[str] | None = None) -> int:
                 if candidate.is_dir():
                     products["dependency_dirs"].append(str(candidate.resolve()))
     if os.name == "nt":
+        redist = os.environ.get("WIILLR_REDIST_DIR")
+        if redist and Path(redist).is_dir():
+            products["dependency_dirs"].append(str(Path(redist).resolve()))
         for value in os.environ.get("PATH", "").split(os.pathsep):
             if value and Path(value).is_dir():
                 products["dependency_dirs"].append(str(Path(value).resolve()))
@@ -226,8 +229,8 @@ def main(argv: list[str] | None = None) -> int:
     licenses.mkdir(exist_ok=True)
     shutil.copy2(ROOT / "LICENSE", licenses / "wiillr-LICENSE")
     if inputs and (inputs / "LICENSES").is_dir():
-        shutil.copytree(inputs / "LICENSES", licenses / "third-party", dirs_exist_ok=True)
-    # The packager also scans exact input-provider roots for their original notices.
+        shutil.copytree(inputs / "LICENSES", licenses, dirs_exist_ok=True)
+    # Record source roots; packaging uses the explicit notices and archives.
     products["source_roots"] = [str(ROOT)] + ([str(inputs / "deps")] if inputs else [])
     products["inputs_dir"] = str(inputs) if inputs else None
     (build / "build-products.json").write_text(json.dumps(products, indent=2) + "\n")
