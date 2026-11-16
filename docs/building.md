@@ -14,10 +14,20 @@ for another compiler, architecture or provider configuration.
 
 ## Prerequisites
 
-Use Python 3.10 or newer, Git, CMake and Ninja, plus a C/C++ compiler. Native
+Use Python 3.10 or newer, Git, CMake and Ninja, plus a C/C++ compiler with a
+C++23 standard library providing `std::expected`. Native
 game builds additionally need SDL3, fmt, zlib, xxHash and the pinned DSP/GX donor
 sources described by the build-input manifest. Windows uses the MinGW-w64
-toolchain; Linux uses GCC or Clang; macOS uses Xcode command-line tools.
+toolchain; Linux uses GCC 13 or newer, or Clang with a compatible C++23 library;
+macOS uses current Xcode command-line tools. Clang 18 with Ubuntu's libstdc++13
+does not provide the required `std::expected`; use GCC 13 for that installation.
+
+The Windows game graphics provider also needs the licensed Visual C++ x64
+runtime files. Set `WIILLR_REDIST_DIR` to the installed Visual Studio
+`VC/Redist/MSVC/<version>/x64/Microsoft.VC143.CRT` directory before packaging.
+The packager copies the required app-local files from that directory; it does
+not take redistributable files from Windows System32. The tool-only product
+does not require this graphics dependency.
 
 Initialize the pinned submodules. The machine and DSP source repositories are
 private; release maintainers may instead materialize their exact source archives

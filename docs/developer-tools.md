@@ -126,8 +126,8 @@ It searches only `bin`, the build root, `Release` and `RelWithDebInfo` for the f
 named native tools. Python sources live in `lib/wiillr/tools`, with the shared
 overlay generator at its original relative path and the applicable source
 licenses beside the payload. A `build-products.json` input-provider location
-resolves the generator and license from `inputs_dir/deps/gc-wii-core`, so CI does
-not need a recursive submodule checkout. Without that metadata, staging uses
+resolves the generator and license from `inputs_dir/deps/gc-wii-core`, so source
+snapshots do not need a recursive submodule checkout. Without that metadata, staging uses
 the checkout's `external/gc-wii-core`. Only those explicit provider source files
 are read; the private catalog and genuine inputs are excluded.
 The release packager adds each platform's native
