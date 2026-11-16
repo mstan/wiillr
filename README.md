@@ -1,10 +1,15 @@
 # wiillr
 
-Wii static recompilation tools and native desktop applications.
+Shared Wii runtime and static recompilation tools.
+
+[Wii Menu Recomp](https://github.com/mstan/wii-menu-recomp) is a separate
+application repository that pins wiillr as a submodule. Its adaptive layout,
+product configuration, platform build scripts and packaging belong to that
+consumer.
 
 | Product | Start here |
 | --- | --- |
-| **Wii Menu Recomp** | [System import, controls and peripherals](docs/wii-menu.md) |
+| **Wii Menu Recomp** | [Application repository and releases](https://github.com/mstan/wii-menu-recomp) |
 | **Mega Man 9 Recomp** | [Game/DLC import, display settings and mods](docs/mega-man-9.md) |
 | **wiillr developer tools** | [Inspection, discovery and native code preparation](docs/developer-tools.md) |
 
@@ -19,15 +24,15 @@ Fresh settings use widescreen **Fit to screen**. The Wii Menu launcher includes
 four Wii Remote assignments and **Wii Peripherals** for USB 1, USB 2 and SD Card.
 Game-specific mods stay in the Mega Man 9 launcher.
 
-| Wii Menu | Mega Man 9 |
-| --- | --- |
-| ![Original Wii Menu channel grid](docs/images/wii-menu-running.png) | ![Mega Man 9 stage selection](docs/images/mega-man-9-running.png) |
+![Original Wii Menu channel grid](docs/images/wii-menu-running.png)
 
 ## Builds and downloads
 
-[Private releases](https://github.com/mstan/wiillr/releases) contain separately
-versioned application and developer-tool packages. [Build instructions](docs/building.md)
-cover Windows, Linux and macOS through a shared driver and platform scripts.
+[Wii Menu releases](https://github.com/mstan/wii-menu-recomp/releases) live with
+the consumer. The engine's [private releases](https://github.com/mstan/wiillr/releases)
+retain developer tools and earlier application packages. [Build instructions](docs/building.md)
+cover Windows, Linux and macOS through the shared driver and platform scripts;
+use the consumer's scripts for new Wii Menu builds.
 Consult each release's notes for its actual platform validation and limitations.
 
 The developer tools build without a title catalog. Native game builds require

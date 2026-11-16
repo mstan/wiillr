@@ -1,6 +1,10 @@
 # Building and releasing wiillr
 
-The repository produces three separate packages:
+New Wii Menu application builds and releases belong to the
+[Wii Menu Recomp consumer](https://github.com/mstan/wii-menu-recomp), which pins
+this engine and supplies its layout provider, product configuration and platform
+scripts. The engine retains the following build presets for consumers and
+earlier standalone workflows:
 
 | Product | Build selection | Contents |
 | --- | --- | --- |
