@@ -40,6 +40,9 @@ python tools/annotate_wii_menu.py fetch --output private/wii-ipl-43u
 python tools/annotate_wii_menu.py annotate --dol /path/to/original-main.dol --annotations private/wii-ipl-43u --output private/wii-menu-43u-listing
 ```
 
+Add `--module src/scene/channelSelect/iplChannelSelect.cpp` for a smaller listing
+of the channel scene, comparable to reading one disassembly source module.
+
 The first command downloads only the three pinned public metadata files and
 checks their hashes. The second verifies your original DOL before writing:
 
@@ -59,6 +62,12 @@ runtime patch or NAND write occurs.
 The original Menu places most executable bytes in an initialized section marked
 as data in the DOL header. Verified function spans identify that code; the
 importer does not assume the header's text/data flag settles classification.
+
+The manifest also records checked structure fields. For example, the original
+`gui::PaneComponent::getPane` at `0x813478FC` loads offset **0x94**, despite an
+upstream header comment saying 0x88. The importer verifies the original accessor
+instruction before accepting this correction. Check binary accessors before
+using source comments as structure offsets.
 
 ## System behavior and formats
 

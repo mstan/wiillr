@@ -128,6 +128,39 @@ def build_index(symbols: list[dict], splits: list[dict], identity: dict) -> list
     return result
 
 
+def module_sections(sections: list[dict], splits: list[dict], module: str | None) -> list[dict]:
+    if module is None:
+        return sections
+    ranges = [item for item in splits if item["source"] == module]
+    if not ranges:
+        raise ValueError("Unknown source module in pinned splits: " + module)
+    result = []
+    for section in sections:
+        for span in ranges:
+            begin = max(section["address"], span["start"])
+            end = min(section["address"] + section["size"], span["end"])
+            if begin < end:
+                result.append(dict(section, address=begin, size=end - begin,
+                                   offset=section["offset"] + begin - section["address"]))
+    return sorted(result, key=lambda item: item["address"])
+
+
+def verify_structure_fields(data: bytes, sections: list[dict], identity: dict) -> None:
+    for field in identity.get("structures", []):
+        proof = field.get("verification")
+        if not proof:
+            continue
+        address = int(proof["pc"], 0)
+        section = next((item for item in sections if item["address"] <= address and
+                        address + 4 <= item["address"] + item["size"]), None)
+        if section is None:
+            raise ValueError("Structure accessor outside original executable")
+        offset = section["offset"] + address - section["address"]
+        word = int.from_bytes(data[offset:offset + 4], "big")
+        if word != int(proof["instruction"], 0) or word & 0xFFFF != int(field["offset"], 0):
+            raise ValueError("Structure field/accessor proof differs: " + field["field"])
+
+
 def annotate(data: bytes, sections: list[dict], symbols: list[dict], output: Path) -> dict:
     try:
         import capstone
@@ -207,6 +240,7 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--dol", type=Path, required=True)
     run.add_argument("--annotations", type=Path, required=True)
     run.add_argument("--output", type=Path, required=True)
+    run.add_argument("--module", help="Limit the instruction listing to one exact source path from splits.txt")
     args = parser.parse_args(argv)
     identity = json.loads(MANIFEST.read_text(encoding="utf-8"))
     if args.output.exists():
@@ -232,9 +266,11 @@ def main(argv: list[str] | None = None) -> None:
         return
     data = args.dol.read_bytes()
     sections = dol_sections(data, identity["original_dol_sha1"])
+    verify_structure_fields(data, sections, identity)
     files = verified_inputs(args.annotations, identity)
-    symbols = build_index(parse_symbols(files["config/43U/symbols.txt"]),
-                          parse_splits(files["config/43U/splits.txt"]), identity)
+    splits = parse_splits(files["config/43U/splits.txt"])
+    symbols = build_index(parse_symbols(files["config/43U/symbols.txt"]), splits, identity)
+    sections = module_sections(sections, splits, args.module)
     args.output.mkdir(parents=True)
     (args.output / "symbols.json").write_text(json.dumps(dict(identity=identity, symbols=symbols), indent=2) + "\n", encoding="utf-8")
     with (args.output / "channel-grid.md").open("x", encoding="utf-8") as index:
@@ -242,8 +278,15 @@ def main(argv: list[str] | None = None) -> None:
         for item in symbols:
             if "comment" in item:
                 index.write(f"- `0x{item['address']:08X}` **{item['display_name']}**: {item['comment']}\n")
+        index.write("\n## Structure notes\n\n")
+        for field in identity.get("structures", []):
+            index.write(f"- **{field['type']}::{field['field']}** at `{field['offset']}`: {field['comment']}\n")
     result = annotate(data, sections, symbols, args.output)
     result.update(symbols=len(symbols), functions=sum(item["kind"] == "function" for item in symbols),
+                  source_module=args.module,
+                  listing_functions=sum(item["kind"] == "function" and any(
+                      section["address"] <= item["address"] < section["address"] + section["size"]
+                      for section in sections) for item in symbols),
                   original_dol_sha1=identity["original_dol_sha1"], source_unchanged=hashlib.sha1(args.dol.read_bytes()).hexdigest() == identity["original_dol_sha1"])
     (args.output / "listing.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))

@@ -40,6 +40,14 @@
     {
       "symbol": "calcCommon__Q33ipl5scene13ChannelSelectFv",
       "comment": "Updates shared channel-scene state. Check its ordering against layout calculation and pointer events before installing a hook."
+    },
+    {
+      "symbol": "isInChannelPaneNames__Q33ipl5scene13ChannelSelectCFPCc",
+      "comment": "Recognizes the central page's twelve pane names. Wider/narrower layouts must route all visible pane identities consistently."
+    },
+    {
+      "symbol": "searchList__Q33ipl5scene13ChannelSelectCFii",
+      "comment": "Resolves the original stock page/index pair to its live channel object. Keep the original slot identity independent from presentation pages."
     }
   ],
   "structures": [
@@ -49,6 +57,49 @@
       "offset": "0xC8",
       "source": "include/scene/channelSelect/iplChannelSelect.h",
       "comment": "Original stock page index; distinguish it from any experimental presentation page."
+    },
+    {
+      "type": "gui::PaneComponent",
+      "field": "mpPane",
+      "offset": "0x94",
+      "source": "include/layout/GUIManager.h",
+      "comment": "The original getPane accessor loads0x94. The upstream header comment0x88 is stale; do not use it for a memory view.",
+      "verification": {
+        "pc": "0x813478FC",
+        "instruction": "0x80630094"
+      }
+    },
+    {
+      "type": "gui::Component",
+      "field": "mbTriggerTarget",
+      "offset": "0x7C",
+      "source": "include/layout/GUIManager.h",
+      "comment": "The original setTriggerTarget accessor stores one byte at this offset.",
+      "verification": {
+        "pc": "0x813691E8",
+        "instruction": "0x9883007c"
+      }
+    },
+    {
+      "type": "gui::PaneManager",
+      "field": "mPaneComponents",
+      "offset": "0x18",
+      "source": "include/layout/GUIManager.h",
+      "comment": "Original pane-to-component list. The list stores object pointers; each object contains pane at0, component at4, previous at8, next at12."
+    },
+    {
+      "type": "nw4r::lyt::Pane",
+      "field": "mName",
+      "offset": "0xB4",
+      "source": "libs/NW4R",
+      "comment": "Seventeen-byte bounded name. Verified across the original channel layout."
+    },
+    {
+      "type": "nw4r::lyt::Pane",
+      "field": "mChildList",
+      "offset": "0x10",
+      "source": "libs/NW4R",
+      "comment": "C++ intrusive list: size at0, next/previous sentinel at4/8; Pane link begins at4. This differs from the C ut::List representation."
     }
   ]
 }

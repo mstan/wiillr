@@ -49,6 +49,23 @@ class MenuAnnotations(unittest.TestCase):
             self.assertEqual(error.exception.code, 2)
             self.assertEqual(note.read_text(), "Keep my annotations")
 
+    def test_focused_module_preserves_original_file_address_mapping(self):
+        sections = [{"index": 7, "address": 0x1000, "offset": 0x100, "size": 0x100, "code": False}]
+        splits = [{"source": "scene.cpp", "start": 0x1020, "end": 0x1040}]
+        selected = annotations.module_sections(sections, splits, "scene.cpp")
+        self.assertEqual((selected[0]["address"], selected[0]["offset"], selected[0]["size"]), (0x1020, 0x120, 0x20))
+        with self.assertRaises(ValueError):
+            annotations.module_sections(sections, splits, "missing.cpp")
+
+    def test_structure_comment_cannot_override_original_accessor(self):
+        sections = [{"address": 0x813478FC, "offset": 0, "size": 4}]
+        identity = {"structures": [{"field": "mpPane", "offset": "0x94",
+            "verification": {"pc": "0x813478FC", "instruction": "0x80630094"}}]}
+        annotations.verify_structure_fields(bytes.fromhex("80630094"), sections, identity)
+        identity["structures"][0]["offset"] = "0x88"
+        with self.assertRaises(ValueError):
+            annotations.verify_structure_fields(bytes.fromhex("80630094"), sections, identity)
+
     def test_changed_annotation_input_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "symbols.txt"; path.write_bytes(b"changed")
