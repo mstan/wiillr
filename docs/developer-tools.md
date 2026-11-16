@@ -61,6 +61,11 @@ startup, and these tools do not synthesize missing hardware or firmware state.
 
 ## Prepare a static catalog
 
+For Wii Menu 4.3U reverse engineering, the [source and annotation guide](wii-menu-references.md)
+describes the version-verified symbol index and addressed disassembly. Its
+`tools/annotate_wii_menu.py` helper runs from a source checkout; it does not
+change catalog coverage or the prepared executable.
+
 `prepare` uses bundled `dolrecomp` unless `--compiler` supplies another path.
 It validates the retained DOL, discovery receipts, journals and code-page hashes,
 then invokes the bundled overlay generator with preserved Broadway execution

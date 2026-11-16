@@ -1,5 +1,10 @@
 # Native Wii Menu pictures
 
+For the packaged applications and screenshots, see the [Wii Menu](../docs/wii-menu.md)
+and [Mega Man 9](../docs/mega-man-9.md) guides. The [Menu annotation guide](../docs/wii-menu-references.md)
+links the pinned symbols/source splits and explains how to generate a private
+named disassembly from the verified original executable.
+
 The experimental `menu_picture` provider replaces the complete 4.3U NW4R
 `Picture::DrawSelf` operation: it reads animated pane geometry, global alpha,
 material values, texture coordinates and transforms and submits an owned native

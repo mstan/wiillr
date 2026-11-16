@@ -19,6 +19,10 @@ Fresh settings use widescreen **Fit to screen**. The Wii Menu launcher includes
 four Wii Remote assignments and **Wii Peripherals** for USB 1, USB 2 and SD Card.
 Game-specific mods stay in the Mega Man 9 launcher.
 
+| Wii Menu | Mega Man 9 |
+| --- | --- |
+| ![Original Wii Menu channel grid](docs/images/wii-menu-running.png) | ![Mega Man 9 stage selection](docs/images/mega-man-9-running.png) |
+
 ## Builds and downloads
 
 [Private releases](https://github.com/mstan/wiillr/releases) contain separately
@@ -38,6 +42,9 @@ execution and misses explicitly. Accepted native routes require zero interpreted
 instructions and unresolved native misses. Original Startup Menu/IOS4, retail
 4.3U and arbitrary Wii title compatibility are separate targets. Wind Waker
 engineering remains deferred.
+
+[Wii Menu source and annotation references](docs/wii-menu-references.md) collect
+the versioned decompilation, symbols and system-format documentation.
 
 [Native runtime reference](docs/native-runtime.md) documents provider selections,
 debug commands, preparation and renderer contracts. Save states are specific to

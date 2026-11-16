@@ -3,7 +3,18 @@
 Run the original Wii Menu with a native desktop launcher, mouse pointing,
 configurable Wii Remotes and image-backed Wii peripherals.
 
-![Wii Menu launcher with system import and peripheral controls](images/wii-menu-launcher.png)
+## Highlights
+
+- The original channel grid, Wii Settings, Message Board and Save Data screens.
+- A dedicated launcher with NAND import and a managed writable system profile.
+- Mouse pointing, four Wii Remote assignments, USB keyboard typing and USB/SD images.
+- Widescreen **Fit to screen**, internal-resolution controls and a consistent
+  window when entering a supported channel and returning through HOME.
+
+![Wii Menu launcher with NAND import, four player assignments, USB ports and SD Card](images/wii-menu-launcher.png)
+
+*The startup launcher keeps system import, controller assignments and Wii
+Peripherals together.*
 
 ## First launch
 
@@ -21,7 +32,10 @@ are preserved. Importing another system creates a separate profile rather than
 merging over existing progress. Other Menu revisions are rejected explicitly.
 No system files, games, NAND backups or console keys are included.
 
-![The original Wii Menu running in wiillr](images/wii-menu-running.png)
+![Original Wii Menu channel grid with Mega Man 9 installed](images/wii-menu-running.png)
+
+*The original Menu with an installed Mega Man 9 channel; channel content is
+supplied by the player.*
 
 The native IOS80 provider does not require the original IOS80 executable.
 Original IOS LLE is a separate development build and is not qualified by this
@@ -30,10 +44,10 @@ release's native-provider checks.
 ## Controls and peripherals
 
 Use the mouse as the pointer, left click for A and right click for B. Keyboard
-**A** is the default HOME binding; change it in **Settings → Controller**.
+**A** is the default HOME binding; change it in **Settings â†’ Controller**.
 **F1** opens settings during play. Controller mappings and window geometry persist.
 
-The launcher has separate Player 1–4 Wii Remote assignments. **Wii Peripherals**
+The launcher has separate Player 1â€“4 Wii Remote assignments. **Wii Peripherals**
 below them provides two USB slots and one SD slot:
 
 | Slot | Choices |
@@ -60,7 +74,7 @@ are available; AOSS, SSL, online WiiConnect24 and Nintendo service availability
 are outside the release's qualified feature set.
 
 Installed supported channels retain their original Menu entry and HOME return
-flow. Wii Menu → Mega Man 9 → HOME → Wii Menu preserves the window and pointer.
+flow. Wii Menu â†’ Mega Man 9 â†’ HOME â†’ Wii Menu preserves the window and pointer.
 This package does not install channel content for you or provide arbitrary Wii
 title compatibility.
 
@@ -72,4 +86,5 @@ managed NAND. Do not copy a fresh template over existing native saves.
 
 See [building and releases](building.md) for Windows, Linux and macOS commands.
 See [developer tools](developer-tools.md) for input inspection and native code
-preparation. wiillr is independent software and is not affiliated with Nintendo.
+preparation, and [Menu source and annotation references](wii-menu-references.md)
+for the versioned decompilation, symbols and system documentation. wiillr is independent software and is not affiliated with Nintendo.

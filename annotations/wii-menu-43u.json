@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "title": "Wii Menu 4.3U",
+  "original_dol_sha1": "26116613f624061ba99c8d1a299aaa6efa85670d",
+  "upstream": {
+    "repository": "https://github.com/koopthekoopa/wii-ipl",
+    "revision": "f4c09f4001c5a0b9af734ad1e3f80a54c5e5723c",
+    "license": "CC0-1.0",
+    "files": {
+      "config/43U/symbols.txt": "f0c043c95eea8152a6da57ade74baa179d8383f36bca1f65af5deafc7f922d8e",
+      "config/43U/splits.txt": "53cf0f28db88896eda3f788513a52e0fa8e5678f6f6fc09df42cca7a0d2cf305",
+      "config/43U/build.sha1": "0de94b654f2a34b78bff7df03a4f2c687dc6b749313c5ff06139015d14ade43a"
+    }
+  },
+  "notes": [
+    {
+      "symbol": "createBaseLayout__Q33ipl5scene13ChannelSelectFv",
+      "comment": "Builds the stock channel pane hierarchy and buttons. Reflow must account for the original named panes and their hit targets."
+    },
+    {
+      "symbol": "drawChannelThumbnails__Q33ipl5scene13ChannelSelectFv",
+      "comment": "Draws channel thumbnails using per-channel transforms and visibility. Preserve the association between a thumbnail and its installed title."
+    },
+    {
+      "symbol": "isChannelInView__Q33ipl5scene13ChannelSelectCFii",
+      "comment": "Determines whether a channel is in the visible scroll window. Layout reflow must update visibility as well as tile positions."
+    },
+    {
+      "symbol": "isChannelInCalc__Q33ipl5scene13ChannelSelectCFiii",
+      "comment": "Selects the channel calculation/loading window. Newly exposed columns need live channel state, not duplicated pictures."
+    },
+    {
+      "symbol": "makeChannelList__Q33ipl5scene13ChannelSelectFib",
+      "comment": "Constructs the channel list for a stock page. Preserve the original channel slot identity and saved ordering."
+    },
+    {
+      "symbol": "startPageScroll__Q33ipl5scene13ChannelSelectFi",
+      "comment": "Begins a stock page scroll. Adaptive columns require a consistent transient page/slot mapping."
+    },
+    {
+      "symbol": "calcCommon__Q33ipl5scene13ChannelSelectFv",
+      "comment": "Updates shared channel-scene state. Check its ordering against layout calculation and pointer events before installing a hook."
+    }
+  ],
+  "structures": [
+    {
+      "type": "ipl::scene::ChannelSelect",
+      "field": "mCurrentPage",
+      "offset": "0xC8",
+      "source": "include/scene/channelSelect/iplChannelSelect.h",
+      "comment": "Original stock page index; distinguish it from any experimental presentation page."
+    }
+  ]
+}

@@ -3,7 +3,19 @@
 A separate desktop launcher for Mega Man 9 (USA), with optional DLC import,
 adaptive display settings and game-specific mods.
 
-![Mega Man 9 running in wiillr](images/mega-man-9-running.png)
+## Highlights
+
+- A dedicated game launcher with game and optional DLC import.
+- Adaptive **Fit to screen**, with layouts for the intro, menus and gameplay.
+- Optional Mega Man/Proto Man switching with the matching DLC, plus quick
+  switching between acquired weapons.
+- Persistent controller/display settings, original native progress and a
+  stable window when opening settings or moving through the supported Wii Menu route.
+
+![Mega Man 9 stage selection with its adaptive widescreen presentation](images/mega-man-9-running.png)
+
+*Stage selection using the adaptive presentation. Bitmap artwork keeps its
+original detail.*
 
 ## First launch
 
