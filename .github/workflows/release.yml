@@ -28,9 +28,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  INPUT_TAG: release-inputs-20261115
-  INPUT_ARCHIVE: wiillr-release-inputs-20261115.zip
-  INPUT_SHA256: 11caa5c79b58c74303d7f8130f234f00016cda1148efd6efe30c8d2d79297075
+  INPUT_TAG: release-inputs-20261115-2
+  INPUT_ARCHIVE: wiillr-release-inputs-20261115-2.zip
+  INPUT_SHA256: dce873548de9e01d2c94e7763b491b41f67573e703c2a3476724b67b3f0cb432
   RELEASE_VERSION: ${{ inputs.version || '0.1.0' }}
   PRODUCTS: ${{ inputs.products || 'all' }}
 
