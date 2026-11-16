@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
 project(wiillr VERSION 0.1.0 LANGUAGES C CXX)
+if(WIILLR_RELEASE_PRODUCT)
+  include(cmake/CompilerRuntime.cmake)
+endif()
 include(CTest)
 find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
 set(CMAKE_CXX_STANDARD 20)

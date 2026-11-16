@@ -16,11 +16,48 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+TITLES = {'wii-menu': 'Wii Menu', 'mega-man-9': 'Mega Man 9'}
 
 
 def run(*arguments: str) -> None:
     print('+ ' + subprocess.list2cmdline(arguments), flush=True)
     subprocess.run(arguments, check=True)
+
+
+def smoke_game(archive: Path, product: str, host: str, output: Path) -> None:
+    # This only checks empty-profile package startup. --launcher-check explicitly
+    # suppresses all windows, dialogs and guest execution; no original data is used.
+    with tempfile.TemporaryDirectory(prefix='wiillr-game-package-smoke-') as temporary:
+        destination = Path(temporary)
+        if archive.suffix == '.zip':
+            with zipfile.ZipFile(archive) as source:
+                source.extractall(destination)
+        else:
+            with tarfile.open(archive) as source:
+                source.extractall(destination, filter='data')
+        title = TITLES[product]
+        base = destination / title
+        binary = (base / (title + '.app') / 'Contents/MacOS' / title if host == 'macos'
+                  else base / (title + ('.exe' if host == 'windows' else '')))
+        if host != 'windows':
+            binary.chmod(binary.stat().st_mode | 0o111)
+        user = destination / 'empty-user-profile'
+        environment = dict(os.environ, WIILLR_USER_DIR=str(user), GCN_AUDIO_MUTE='1',
+                           GCNLLR_RENDER_HIDDEN='1', LNG_TEST_HIDDEN='1')
+        process = subprocess.run([str(binary), '--launcher-check'], cwd=destination,
+                                 env=environment, capture_output=True, text=True, timeout=30)
+        if process.returncode != 2:
+            raise RuntimeError(f'{product}: expected unconfigured-profile result 2, got {process.returncode}: {process.stderr}')
+        if product == 'wii-menu':
+            if process.stderr.strip() or not (user / 'data').is_dir() or not (user / 'cache').is_dir():
+                raise RuntimeError('Wii Menu package resources did not resolve: ' + process.stderr)
+        elif 'import the supported Mega Man 9 (USA) WAD first' not in process.stderr:
+            raise RuntimeError('Mega Man 9 package resources did not resolve: ' + process.stderr)
+        report = {'product': product, 'platform': host, 'returncode': process.returncode,
+                  'stdout': process.stdout, 'stderr': process.stderr,
+                  'profile': 'fresh disposable profile without original content',
+                  'window_opened': False, 'guest_executed': False}
+        (output / f'{product}-{host}-package-smoke.json').write_text(json.dumps(report, indent=2) + '\n')
 
 
 def main() -> None:
@@ -73,6 +110,9 @@ def main() -> None:
         products = json.loads((directory / 'build-products.json').read_text())
         runtime = ['--native-exe', products['native_exe'], '--gx-library', products['gx_library']]
         package('wii-menu', directory, *runtime)
+        prefix = f'WiiMenuRecomp-{host}-{arch}-v{args.version}'
+        smoke_game(args.output_dir / (prefix + ('.tar.gz' if host == 'linux' else '.zip')),
+                   'wii-menu', host, args.output_dir)
         key = os.environ.get('WIILLR_WAD_COMMON_KEY', '')
         with tempfile.TemporaryDirectory(prefix='wiillr-private-package-') as temporary:
             extra: list[str] = []
@@ -84,6 +124,9 @@ def main() -> None:
                 path.write_bytes(value)
                 extra = ['--common-key', str(path)]
             package('mega-man-9', directory, *runtime, *extra)
+        prefix = f'MegaMan9Recomp-{host}-{arch}-v{args.version}'
+        smoke_game(args.output_dir / (prefix + ('.tar.gz' if host == 'linux' else '.zip')),
+                   'mega-man-9', host, args.output_dir)
 
     lines = []
     for archive in sorted(args.output_dir.iterdir()):

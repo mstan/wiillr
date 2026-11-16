@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.25)
 project(wiillr_graphics LANGUAGES C CXX)
+include("${CMAKE_CURRENT_LIST_DIR}/../CompilerRuntime.cmake")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(BUILD_TESTING OFF CACHE BOOL "Build donor tests")
 set(WIILLR_CORE_SOURCE_DIR "" CACHE PATH "Pinned gc-wii-core source")

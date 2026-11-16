@@ -114,6 +114,14 @@ def find_tool(build: Path, name: str, extension: str) -> Path:
     raise ValueError(f"CMake did not produce target {name}")
 
 
+def compiler_runtime_directories(build: Path) -> list[str]:
+    export = build / "release-runtime-directories.txt"
+    if not export.is_file():
+        raise ValueError("CMake compiler runtime directory export is missing: " + str(export))
+    return list(dict.fromkeys(str(path.resolve()) for line in export.read_text().splitlines()
+                             if line.strip() and (path := Path(line.strip())).is_dir()))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--product", choices=PRODUCTS, required=True)
@@ -209,6 +217,11 @@ def main(argv: list[str] | None = None) -> int:
                 candidate = Path(root) / name
                 if candidate.is_dir():
                     products["dependency_dirs"].append(str(candidate.resolve()))
+    # Include compiler-selected multiarch and runtime locations on Debian,
+    # Arch and other native toolchains, after explicit dependency prefixes.
+    products["dependency_dirs"].extend(compiler_runtime_directories(cpu))
+    if game:
+        products["dependency_dirs"].extend(compiler_runtime_directories(graphics))
     if os.name == "nt":
         redist = os.environ.get("WIILLR_REDIST_DIR")
         if redist and Path(redist).is_dir():

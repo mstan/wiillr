@@ -445,16 +445,20 @@ def main(argv=None):
         app = stage / (title + ".app")
         if game:
             runtime = app / "Contents/MacOS" if args.platform == "macos" else stage
+            # SDL's Cocoa base path is NSBundle.resourcePath for bundled apps.
+            # The executable and loader-visible package resources have separate homes.
+            resources = app / "Contents/Resources" if args.platform == "macos" else runtime
             runtime.mkdir(parents=True)
+            resources.mkdir(parents=True, exist_ok=True)
             name = title + (".exe" if args.platform == "windows" else "")
             exe = copy_file(args.native_exe, runtime / name)
-            gx = copy_file(args.gx_library, runtime / args.gx_library.name)
-            assets = path(products.get("assets", "bin/assets")); copy_tree(assets, runtime / "assets")
+            gx = copy_file(args.gx_library, resources / args.gx_library.name)
+            assets = path(products.get("assets", "bin/assets")); copy_tree(assets, resources / "assets")
             menu = args.product == "wii-menu"
             config = (f"[Game]\nName={title}\n" + ("Nand=seed/nand\nBoot=title/00000001/00000002/content/00000098.app\n" if menu else "Import=wad\nBoot=title/00010001/57523945/content/0000000a.app\n") + f"Graphics={gx.name}\nDspRom=hle\nDspCoef=hle\nUid=4096\nGid={1 if menu else 12344}\nIos={80 if menu else 37}\n")
-            (runtime / "game.ini").write_text(config, encoding="utf-8")
+            (resources / "game.ini").write_text(config, encoding="utf-8")
             if args.common_key:
-                copy_file(args.common_key, runtime / "system/wii-common-key.bin")
+                copy_file(args.common_key, resources / "system/wii-common-key.bin")
             seeds = [exe, gx]
             companions = [path(p) for p in products.get("runtime_libraries", [])]
             if args.platform == "windows":
@@ -467,7 +471,7 @@ def main(argv=None):
                 exe.chmod(0o755)
             if args.platform == "macos":
                 import plistlib
-                plist = {"CFBundleName": title, "CFBundleDisplayName": title, "CFBundleExecutable": name, "CFBundleIdentifier": "org.retroportingtoolkit." + args.product, "CFBundlePackageType": "APPL", "CFBundleShortVersionString": args.version, "CFBundleVersion": args.version, "LSMinimumSystemVersion": "11.0", "NSHighResolutionCapable": True}
+                plist = {"CFBundleName": title, "CFBundleDisplayName": title, "CFBundleExecutable": name, "CFBundleIdentifier": "org.retroportingtoolkit." + args.product, "CFBundlePackageType": "APPL", "CFBundleShortVersionString": args.version, "CFBundleVersion": args.version, "NSHighResolutionCapable": True}
                 (app / "Contents/Info.plist").write_bytes(plistlib.dumps(plist, sort_keys=True))
         else:
             module_path = repo / "tools/developer_bundle.py"

@@ -50,6 +50,10 @@ class BuildDriver(unittest.TestCase):
 
             def command(argv):
                 calls.append(argv)
+                if "-S" in argv:
+                    cpu = root / "build/cpu"
+                    cpu.mkdir(parents=True)
+                    (cpu / "release-runtime-directories.txt").write_text(str(root) + "\n")
                 if "--build" in argv:
                     binary = root / "build/bin"
                     binary.mkdir(parents=True, exist_ok=True)
@@ -67,6 +71,16 @@ class BuildDriver(unittest.TestCase):
             self.assertIsNone(products["gx_library"])
             self.assertEqual(len(products["tool_executables"]), 4)
             self.assertFalse(any("catalog" in arg or "cmake/gpu" in arg for call in calls for arg in call))
+            self.assertIn(str(root.resolve()), products["dependency_dirs"])
+
+    def test_runtime_export_filters_missing_directories_and_duplicates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with self.assertRaisesRegex(ValueError, "export is missing"):
+                build.compiler_runtime_directories(root)
+            (root / "release-runtime-directories.txt").write_text(
+                str(root) + "\n" + str(root / "absent") + "\n" + str(root) + "\n\n")
+            self.assertEqual(build.compiler_runtime_directories(root), [str(root)])
 
 
 if __name__ == "__main__":
