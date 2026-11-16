@@ -47,20 +47,60 @@ void BluetoothEmuDevice::SavePairings() {
   }
   if(!store.save(store.user,bytes.data(),u32(bytes.size())))throw std::runtime_error("Bluetooth EEPROM write failed");
 }
-void BluetoothEmuDevice::SetInput(const WiiBluetoothInput& input) {
+void BluetoothEmuDevice::SetInput(const WiiBluetoothInput& input) {SetInput(0,input);}
+void BluetoothEmuDevice::SetInput(unsigned index,const WiiBluetoothInput& input) {
+  if(index>=input_sources.size())throw std::runtime_error("Invalid virtual Remote index");
   if(input.buttons&~WiimoteCommon::ButtonData::BUTTON_MASK || input.pointer_x>1023 || input.pointer_y>767 ||
      std::ranges::any_of(input.accel,[](u16 v){return v>1023;}))throw std::runtime_error("Invalid virtual remote input");
-  if(!input_source && input.present)input_source=std::make_unique<WiimoteCommon::NativeRemote>();
-  if(input_source)input_source->SetInput(input);
-  auto* current=m_wiimotes[0].get();
-  current->SetPairing(input.pairing);
-  if(input.present && !current->IsSourceValid())current->SetSource(input_source.get());
-  if(!input.present && current->IsSourceValid())current->SetSource(nullptr);
+  auto* current=m_wiimotes[index].get();
+  const bool trace=std::getenv("WIILLR_IOS_TRACE")!=nullptr;
+  const bool previous_source=trace && current->IsSourceValid(),previous_pairing=trace && current->IsPairing();
+  auto& source=input_sources[index];
+  if(!source && input.present)source=std::make_unique<WiimoteCommon::NativeRemote>();
+  if(source)source->SetInput(input);
+  m_input_pairing[index]=input.pairing;
+  current->SetPairing(input.pairing || m_pair_remote[index]);
+  if(input.present && !current->IsSourceValid())current->SetSource(source.get());
+  if(!input.present && current->IsSourceValid()) {
+    current->SetSource(nullptr);if(m_pair_remote[index])m_pair_sync_sent[index]=false;
+  }
+  if(trace && (previous_source!=current->IsSourceValid() || previous_pairing!=current->IsPairing()))
+    std::fprintf(stderr,"Bluetooth input transition remote=%u cycles=%llu present=%u pair=%u source_valid=%u connected=%u\n",
+      index,static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(input.present),unsigned(input.pairing),
+      unsigned(current->IsSourceValid()),unsigned(current->IsConnected()));
 }
 void BluetoothEmuDevice::PressSync() {
+  for(unsigned index=0;index<input_sources.size();++index)
+    if(m_pair_remote[index] && m_wiimotes[index]->IsSourceValid())m_pair_sync_sent[index]=true;
   SQueuedEvent event(3,0);
   event.buffer[0]=0xff;event.buffer[1]=1;event.buffer[2]=8;
   AddEventToQueue(event);
+}
+void BluetoothEmuDevice::PairFirstRemote() {
+  if(!stored_keys.empty() || std::ranges::any_of(m_wiimotes,[](const auto& r){return r->HasLinkKey();}))return;
+  PairRemote(0);
+}
+void BluetoothEmuDevice::PairRemote(unsigned index) {
+  if(index>=input_sources.size())throw std::runtime_error("Invalid virtual Remote pairing index");
+  auto* remote=m_wiimotes[index].get();const auto stored=stored_keys.find(remote->GetBD());
+  if(remote->HasLinkKey() && stored!=stored_keys.end() && stored->second==remote->GetLinkKey())return;
+  if(!m_pair_remote[index])m_pair_sync_sent[index]=false;
+  m_pair_remote[index]=true;remote->SetPairing(true);
+}
+void BluetoothEmuDevice::UpdateFirstRemotePairing() {
+  bool sync=false;
+  for(unsigned index=0;index<input_sources.size();++index) {
+    if(!m_pair_remote[index])continue;
+    auto* remote=m_wiimotes[index].get();const auto stored=stored_keys.find(remote->GetBD());
+    if(remote->HasLinkKey() && stored!=stored_keys.end() && stored->second==remote->GetLinkKey()) {
+      m_pair_remote[index]=false;remote->SetPairing(m_input_pairing[index]);continue;
+    }
+    if(!m_pair_sync_sent[index] && remote->IsSourceValid() && m_hci_endpoint && (m_scan_enable&HCI_PAGE_SCAN_ENABLE)) {
+      m_pair_sync_sent[index]=true;sync=true;
+    }
+  }
+  // One physical console Sync event; each Remote negotiates its own keys.
+  if(sync)PressSync();
 }
 void BluetoothEmuDevice::Close() {
   // Release the USB reads that still have no result. Completions already
@@ -70,7 +110,7 @@ void BluetoothEmuDevice::Close() {
   m_event_queue.clear();
   m_acl_pool.Clear();
   m_scan_enable = 0;
-  m_last_ticks = 0;
+  m_last_ticks = 0;m_report_start=0;
   std::fill(std::begin(m_packet_count), std::end(m_packet_count), 0);
 }
 void BluetoothEmuDevice::ResetController() {
@@ -79,6 +119,8 @@ void BluetoothEmuDevice::ResetController() {
   m_scan_enable=0;m_event_queue.clear();m_acl_pool.Clear();link_settings.clear();
   std::fill(std::begin(m_packet_count),std::end(m_packet_count),0);
   for(auto& remote:m_wiimotes)remote->Reset();
+  // Only an actual HCI reset retries an unfinished first-use Sync exchange.
+  for(unsigned index=0;index<input_sources.size();++index)if(m_pair_remote[index])m_pair_sync_sent[index]=false;
   controller_config={{HCI_CMD_WRITE_UNIT_CLASS,{0,0,0}},
     {HCI_CMD_WRITE_LOCAL_NAME,std::vector<u8>(248)},
     {HCI_CMD_WRITE_PIN_TYPE,{0}},{HCI_CMD_WRITE_PAGE_TIMEOUT,{0,0x20}},
@@ -211,37 +253,56 @@ void BluetoothEmuDevice::Update() {
   if(!m_event_queue.empty() && m_hci_endpoint) {
     const auto& event=m_event_queue.front();m_hci_endpoint->FillBuffer(event.buffer,event.size);
     m_kernel.EnqueueIPCReply(m_hci_endpoint->ios_request,event.size);
+    // This is the USB-buffer/IPC-completion boundary; guest consumption is asynchronous.
+    if(event.size>=3 && event.buffer[0]==0xff && event.buffer[2]==8 && std::getenv("WIILLR_IOS_TRACE"))
+      std::fprintf(stderr,"Bluetooth vendor Sync delivered path=deferred cycles=%llu event=%02x subtype=%02x size=%u\n",
+        static_cast<unsigned long long>(m_system.memory.cpu->cycles),unsigned(event.buffer[0]),unsigned(event.buffer[2]),unsigned(event.size));
     m_hci_endpoint.reset();m_event_queue.pop_front();
   }
   if(!m_acl_pool.IsEmpty() && m_acl_endpoint && m_event_queue.empty()) {
     m_acl_pool.WriteToEndpoint(*m_acl_endpoint);m_acl_endpoint.reset();
   }
+  UpdateFirstRemotePairing();
   for(auto& remote:m_wiimotes)remote->Update();
   const auto now=m_system.memory.cpu->cycles;
-  if(now-m_last_ticks>=729000000u/Wiimote::UPDATE_FREQ) {
-    m_last_ticks=now;
-    for(auto& remote:m_wiimotes) {
-      if(remote->IsConnected()) {
-        // The guest can stop posting bulk reads while it changes scenes. Do
-        // not accumulate stale samples or advance a multi-packet HID read
-        // until there is room to deliver its next report. HCI events and
-        // solicited responses still drain ahead of the next sample.
-        if(!m_acl_endpoint || !m_event_queue.empty() || !m_acl_pool.IsEmpty())continue;
-        auto& link=Link(GetConnectionHandle(remote->GetBD()));
-        if(link.mode==2 && now-link.last_input<u64(link.sniff_interval)*455625u)continue;
-        link.last_input=now;
-      }
-      WiimoteEmu::DesiredWiimoteState state;
-      const auto next=remote->PrepareInput(&state);remote->UpdateInput(next,state);
-    }
-    if(std::ranges::any_of(m_packet_count,[](u32 n){return n!=0;}))SendEventNumberOfCompletedPackets();
+  const u64 period=729000000u/Wiimote::UPDATE_FREQ;
+  const bool tick=now-m_last_ticks>=period;if(tick)m_last_ticks=now;
+  const unsigned start=m_report_start;
+  for(unsigned step=0;step<MAX_BBMOTES;++step) {
+    const unsigned index=(start+step)%MAX_BBMOTES;auto& remote=m_wiimotes[index];
+    if(remote->IsConnected()) {
+      // Never queue stale reports behind a blocked guest. Each Remote has
+      // its own cadence; round-robin gives every posted ACL read a fair owner.
+      if(!m_acl_endpoint || !m_event_queue.empty() || !m_acl_pool.IsEmpty())continue;
+      auto& link=Link(GetConnectionHandle(remote->GetBD()));
+      const u64 interval=link.mode==2?std::max(period,u64(link.sniff_interval)*455625u):period;
+      if((!link.last_input && !tick) || (link.last_input && now-link.last_input<interval))continue;
+      link.last_input=now;m_report_start=(index+1)%MAX_BBMOTES;
+    } else if(!tick)continue;
+    WiimoteEmu::DesiredWiimoteState state;
+    const auto next=remote->PrepareInput(&state);remote->UpdateInput(next,state);
   }
+  if(tick && std::ranges::any_of(m_packet_count,[](u32 n){return n!=0;}))SendEventNumberOfCompletedPackets();
+
 }
 u64 BluetoothEmuDevice::Deadline(u64 cycles) const {
   u64 next=m_last_ticks+729000000u/Wiimote::UPDATE_FREQ;
   if(!m_kernel.completions.empty())next=std::min(next,m_kernel.completions.front().ready);
   if((!m_event_queue.empty() && m_hci_endpoint) ||
      (!m_acl_pool.IsEmpty() && m_acl_endpoint && m_event_queue.empty()))return 1;
+  for(unsigned index=0;index<input_sources.size();++index)
+    if(m_pair_remote[index] && !m_pair_sync_sent[index] && m_wiimotes[index]->IsSourceValid() &&
+       m_hci_endpoint && (m_scan_enable&HCI_PAGE_SCAN_ENABLE))return 1;
+  if(m_acl_endpoint && m_event_queue.empty() && m_acl_pool.IsEmpty()) {
+    const u64 period=729000000u/Wiimote::UPDATE_FREQ;
+    for(const auto& remote:m_wiimotes)if(remote->IsConnected()) {
+      const auto found=link_settings.find(GetConnectionHandle(remote->GetBD()));
+      if(found==link_settings.end() || !found->second.last_input)continue;
+      const auto& link=found->second;
+      const u64 interval=link.mode==2?std::max(period,u64(link.sniff_interval)*455625u):period;
+      next=std::min(next,link.last_input+interval);
+    }
+  }
   return next>cycles?next-cycles:1;
 }
 bool BluetoothEmuDevice::Poll(u32* message,s32* result) {
@@ -257,13 +318,22 @@ extern "C" WiiBluetooth* wii_bluetooth_create(CPUState* cpu,const u32* gpio,cons
 }
 extern "C" void wii_bluetooth_destroy(WiiBluetooth* bt){delete bt;}
 extern "C" void wii_bluetooth_close(WiiBluetooth* bt){if(bt)bt->device.Close();}
-extern "C" bool wii_bluetooth_set_input(WiiBluetooth* bt,const WiiBluetoothInput* input) {
-  try{if(!bt || !input)return false;bt->device.SetInput(*input);return true;}
+extern "C" bool wii_bluetooth_set_input(WiiBluetooth* bt,const WiiBluetoothInput* input) {return wii_bluetooth_set_input_indexed(bt,0,input);}
+extern "C" bool wii_bluetooth_set_input_indexed(WiiBluetooth* bt,u32 index,const WiiBluetoothInput* input) {
+  try{if(!bt || !input)return false;bt->device.SetInput(index,*input);return true;}
   catch(const std::exception& e){std::fprintf(stderr,"Bluetooth input: %s\n",e.what());return false;}
 }
 extern "C" bool wii_bluetooth_press_sync(WiiBluetooth* bt) {
   try{if(!bt)return false;bt->device.PressSync();return true;}
   catch(const std::exception& e){std::fprintf(stderr,"Bluetooth Sync: %s\n",e.what());return false;}
+}
+extern "C" bool wii_bluetooth_pair_remote(WiiBluetooth* bt,u32 index) {
+  try{if(!bt)return false;bt->device.PairRemote(index);return true;}
+  catch(const std::exception& e){std::fprintf(stderr,"Bluetooth Remote pairing: %s\n",e.what());return false;}
+}
+extern "C" bool wii_bluetooth_pair_first_remote(WiiBluetooth* bt) {
+  try{if(!bt)return false;bt->device.PairFirstRemote();return true;}
+  catch(const std::exception& e){std::fprintf(stderr,"Bluetooth first pairing: %s\n",e.what());return false;}
 }
 extern "C" bool wii_bluetooth_submit(WiiBluetooth* bt,u32 message) {
   try{bt->device.Submit(message);return true;}catch(const std::exception& e){std::fprintf(stderr,"Bluetooth stopped: %s\n",e.what());return false;}

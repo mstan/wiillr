@@ -17,7 +17,7 @@
 #define MENU_DESTRUCTOR 0x81520d34u
 static WiiGx* owner;
 static WiiMenuNative* renderer;
-static bool verified,layers_ready,mask_ready,effects_ready;
+static bool verified,layers_ready,mask_ready,effects_ready,program_ready;
 static u64 declines,failures,entries,window_entries;
 static bool enclosing_owner(CPUState* cpu){WiiMenuView view;return wii_menu_frame_current_view(cpu,&view)!=0;}
 static const u8* read_memory(void* user,u32 address,u32 size) {
@@ -71,7 +71,7 @@ bool wii_menu_picture_hook_start(WiiGx* gx,const GcWiiNativeRenderApi* api,const
 #if WIILLR_MENU_TEXT
     if(!wii_menu_text_hook_start(gx,api,gui)){wii_menu_native_destroy(renderer);renderer=NULL;return false;}
 #endif
-    owner=gx;verified=false;layers_ready=mask_ready=effects_ready=false;entries=declines=failures=window_entries=0;return true;
+    owner=gx;verified=false;layers_ready=mask_ready=effects_ready=program_ready=false;entries=declines=failures=window_entries=0;return true;
 }
 bool wii_menu_picture_hook_layers(const GcWiiNativeGuiLayersApi* api) {
     layers_ready=renderer && wii_menu_native_gui_layers(renderer,api);return layers_ready;
@@ -81,6 +81,9 @@ bool wii_menu_picture_hook_mask(const GcWiiNativeGuiMaskApi* api) {
 }
 bool wii_menu_picture_hook_effects(const GcWiiNativeGuiEffectsApi* api) {
     effects_ready=renderer && wii_menu_native_gui_effects(renderer,api);return effects_ready;
+}
+bool wii_menu_picture_hook_program(const GcWiiNativeGuiProgramApi* api) {
+    program_ready=renderer && wii_menu_native_gui_program(renderer,api);return program_ready;
 }
 void wii_menu_picture_hook_invalidate(u32 address,u32 size) {
     wii_menu_frame_invalidate(address,size);
@@ -117,6 +120,9 @@ int wii_menu_picture_hook_call(CPUState* cpu,u32 address) {
     WiiMenuPicture prepared;
     if(!wii_menu_picture_prepare(memory,cpu->gpr[3],cpu->gpr[4],&view,&prepared,error,sizeof error)) {
         ++declines;if(WIILLR_MENU_PICTURES==2 || enclosing_owner(cpu)){fprintf(stderr,"Native Menu Picture rejected input: %s\n",error);cpu->halted=true;return 1;}return 0;
+    }
+    if(prepared.needs_program && !program_ready) {
+        ++declines;fprintf(stderr,"Native Menu material program backend unavailable\n");cpu->halted=true;return 1;
     }
     if(prepared.needs_layers && !layers_ready) {
         ++declines;if(WIILLR_MENU_PICTURES==2 || enclosing_owner(cpu)){fprintf(stderr,"Native Menu Picture layered material backend unavailable\n");cpu->halted=true;return 1;}return 0;

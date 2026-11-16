@@ -22,6 +22,7 @@ void sprite(unsigned id,unsigned priority,unsigned x,unsigned y,unsigned tile,bo
 }
 void fixture() {
     std::fill(ram.begin(),ram.end(),0);p32(0x80301280+0x40,config);p32(0x80301280,1u<<24);p32(config,0x100);
+    p16(0x803140c0,0x000a); // Original gameplay scene, with scrolling margins.
     p32(0x8043ca80+0x258,graphics);p32(0x8043ca80+0x25c,sprite_graphics);
     constexpr unsigned ids[]{1,0x12,0x24,0x38};for(unsigned n=0;n<4;++n)p32(0x80281e48+n*4,ids[n]);
     p16(config+8,1);fill(graphics+0x10000,32,0x11);
@@ -165,26 +166,28 @@ void activation_room_contract() {
     require(!prepare(3200,784,343),"Odd activation widths are rejected");
     require(!prepare(INT32_MAX,784,256),"Activation coordinate overflow is rejected");
 }
-void stage_selection_contract() {
+void finite_canvas_contract() {
+  for(unsigned scene:{0x0000u,0x0202u}) {
     fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
-    p16(0x803140c0,0x0202);fill(graphics+0x10000+32,32,0x33);
+    p16(0x803140c0,uint16_t(scene));fill(graphics+0x10000+32,32,0x33);
     for(unsigned row=0;row<32;++row)p16(graphics+(row*32+31)*2,64);
     fill(sprite_graphics,32,0x22);sprite(0,0,16,10,0);sprite(1,0,260,10,0);
     WiiMm9Frame original{},stock{};require(wii_mm9_composite_prepare(memory,&original,error,sizeof error),error);
     const WiiMm9MarginSprite extra{pool+16,0,8,8,0,0,0,-8,30};
     const WiiMm9ViewLayout layout{&extra,1,nullptr,0,32};
-    for(unsigned width:{344u,448u,864u}) {
+    for(unsigned width:{342u,344u,448u,864u}) {
         std::vector<uint8_t> view(width*240*4);const unsigned left=(width-256)/2;
         require(wii_mm9_composite_layout_prepare(memory,width,&layout,&stock,view.data(),unsigned(view.size()),error,sizeof error),error);
-        require(!std::memcmp(&stock,&original,sizeof stock),"Stage selection retains its original centered menu and counters");
+        require(!std::memcmp(&stock,&original,sizeof stock),"Finite scenes retain every original center pixel and counter");
         for(unsigned y=8;y<232;++y)for(unsigned x=0;x<width;++x) {
             if(x>=left && x<left+256)continue;
             const auto* p=view.data()+(y*width+x)*4;
             const uint32_t color=uint32_t(p[0])<<16|uint32_t(p[1])<<8|p[2];
             require(color==(x<left?0xff0000u:0x0000ffu),
-                    "Stage selection extends each background edge without wrapping map or sprite contents");
+                    "Finite intro and menu backgrounds extend edge columns without repeating maps or sprites");
         }
     }
+  }
 }
 void hud_layout_contract() {
     fixture();const WiiMm9Memory memory{nullptr,read};char error[192];
@@ -336,7 +339,7 @@ int main() {
         require(!std::memcmp(&combined,&modal_stock,sizeof combined),"Weapon panel preserves its original stock layout and counters");
         for(unsigned y=0;y<240;++y)for(unsigned x=0;x<344;++x)
             if(x<44 || x>=300)require(view_pixel(x,y)==0,"Weapon panel cannot repeat maps or sprites into host margins");
-        p16(0x803140c0,0);
+        p16(0x803140c0,0x000a);
         p16(config+0x10,16);
         require(wii_mm9_composite_present_prepare(memory,344,&combined,wide.data(),unsigned(wide.size()),error,sizeof error) && wide==gameplay_view,"World source rebinds when gameplay restores its published origin");
         require(view_pixel(44-16,8)==0xf800 && view_pixel(44-16,16)==0x07e0 &&
@@ -358,7 +361,7 @@ int main() {
         sprite_emitter_contract();
         camera_room_contract();
         activation_room_contract();
-        stage_selection_contract();
+        finite_canvas_contract();
         hud_layout_contract();
         background_span_contract();
         std::cout<<"MM9 logical tile/sprite compositor contracts passed; live copy/queue qualification pending\n";return 0;

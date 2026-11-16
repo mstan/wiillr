@@ -74,6 +74,16 @@ submission failure always stops rather than rendering the original a second
 time. This text adapter has frontend and portable contract checks; live GPU
 image qualification remains pending.
 
+The standalone 4.3U `CharWriter::SetupGX` and `DrawGlyph` service shares this
+bitmap/material frontend. Setup snapshots color mapping and font intensity;
+DrawGlyph reads the original 20-byte glyph, live scale, cached corner colors
+and the frame owner's tracked model/view. Original glyph lookup, control handling
+and cursor advancement remain with the guest callers. Geometry retention is bounded, and
+unsupported formats or unequal/non-base texture filters reject explicitly.
+Derived entry seams cover direct same-page calls and participate in native
+chain barriers. Portable geometry/material tests do not establish runtime
+keyboard appearance or whole-settings acceptance.
+
 ## Menu frame owner candidate
 
 `WIILLR_MENU_FRAME=none|reference|native` selects the enclosing 4.3U graphics
@@ -178,8 +188,8 @@ match the original. Two earlier scanouts have small shading precision
 differences (RGB8 maximum 4 and 3; mean absolute differences 0.0391 and 0.0198).
 The matched normal draw-slice timing replay passed three exact output/audio
 pairs: median throughput improved 82.0% and CPU time per field fell 50.3% on
-the measured host. The AOT-DSP reference ran at 27.1–27.5 fields/s and the
-candidate at 47.8–52.3 fields/s. These results do not meet the wider campaign's
+the measured host. The AOT-DSP reference ran at 27.1Ã¢â‚¬â€œ27.5 fields/s and the
+candidate at 47.8Ã¢â‚¬â€œ52.3 fields/s. These results do not meet the wider campaign's
 throughput target or establish per-thread phase budgets.
 
 `WIILLR_MM9_FRAME=native` extends that provider into one scoped frame owner
@@ -247,7 +257,7 @@ match the original exactly. The two earlier pictures are byte-identical to the
 draw-slice candidate, retaining its bounded shading precision differences.
 The preceding frame-owner comparison passed three matched output/audio
 pairs. Its median throughput improved 81.0% and CPU time per field fell 51.9%
-against the original renderer: 50.8–55.9 versus 28.6–29.0 fields/s on that host.
+against the original renderer: 50.8Ã¢â‚¬â€œ55.9 versus 28.6Ã¢â‚¬â€œ29.0 fields/s on that host.
 This is a separate whole-application comparison, not an incremental timing win
 over the preceding draw-slice candidate.
 

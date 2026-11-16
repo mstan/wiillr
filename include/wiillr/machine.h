@@ -47,6 +47,8 @@ typedef struct {
     u64 gx_cpu_gather_writes,gx_cpu_gather_bytes,gx_cpu_gather_rejected;
     const char* gx_native_owner;
     int (*gx_fifo)(void* user,const u8* bytes,u32 size);
+    /* Ordered raw ARGB/depth sample from the selected provider; NULL stops. */
+    int (*gx_peek)(void* user,u32 depth,u16 x,u16 y,u32* value);
     void* gx_user;
     CPUState* cpu;
     GcnDeviceDomains domains;

@@ -143,3 +143,37 @@ extern "C" int wii_resource_font_glyph(WiiMenuMemory memory,uint32_t info,uint16
     try{const auto prepared=glyph(Reader{memory},info,code,offsets);*out=prepared;message("");return 1;}
     catch(const std::exception& e){message(e.what());return 0;}
 }
+
+extern "C" int wii_menu_charwriter_glyph(WiiMenuMemory memory,uint32_t value,
+    WiiMenuFontGlyph* out,char* error,uint32_t size) {
+    const auto message=[&](const char* text){if(error && size)std::snprintf(error,size,"%s",text);};
+    try {
+        need(memory.read && out,"Missing CharWriter glyph input");const Reader r{memory};r.bytes(value,20);
+        WiiMenuFontGlyph g{};g.left=r.s8(value+4);g.glyph_width=r.u8(value+5);
+        g.advance=r.s8(value+6);g.glyph_height=r.u8(value+7);
+        g.cell_x=r.u16(value+0x10);g.cell_y=r.u16(value+0x12);
+        auto& t=g.texture;t.format=r.u32(value+8);t.width=r.u16(value+12);t.height=r.u16(value+14);
+        need(t.width && t.height && t.width<=1024 && t.height<=1024,"Invalid CharWriter texture dimensions");
+        need(g.cell_x+g.glyph_width<=t.width && g.cell_y+g.glyph_height<=t.height,"CharWriter glyph outside sheet");
+        t.size=image_size(t.format,t.width,t.height);const auto address=r.u32(value);r.bytes(address,t.size);
+        t.address=address&0x1fffffffu;t.linear=1;*out=g;message("");return 1;
+    }catch(const std::exception& e){message(e.what());return 0;}
+}
+
+extern "C" int wii_menu_charwriter_style(WiiMenuMemory memory,uint32_t writer,
+    WiiMenuCharWriterStyle* out,char* error,uint32_t size) {
+    try {
+        need(memory.read && out,"Missing CharWriter setup input");const Reader r{memory};r.bytes(writer,0x4c);
+        WiiMenuCharWriterStyle style{};bool plain=true;
+        for(uint32_t ch=0;ch<4;ch++){style.color.low[ch]=r.u8(writer+ch);style.color.high[ch]=r.u8(writer+4+ch);plain &= style.color.low[ch]==0 && style.color.high[ch]==255;}
+        const auto font=r.u32(writer+0x48);
+        if(plain && font) {
+            const auto classes=wii_menu_classes(memory);const auto type=r.u32(font);
+            need(type==classes->resource_font || (classes->archive_font && type==classes->archive_font),"Unbound CharWriter font class");
+            const auto info=r.u32(r.at(font,0x14)),texture=r.u32(r.at(info,8));
+            const auto format=r.u16(r.at(texture,10));style.intensity=format<=1;
+        }
+        if(style.intensity)for(uint32_t ch=0;ch<3;ch++)style.color.low[ch]=style.color.high[ch]=255;
+        *out=style;if(error && size)*error=0;return 1;
+    }catch(const std::exception& e){if(error && size)std::snprintf(error,size,"%s",e.what());return 0;}
+}

@@ -12,11 +12,96 @@ static bool set_idle_dimming(void* user,bool enabled) {
     VideoTest* video=user;++video->calls;if(video->reject)return false;
     video->enabled=enabled;return true;
 }
+static int x2_receipt(CPUState* cpu,WiiIpc* ipc,WiiIosNative* ios) {
+    const u32 message=0x10000200,path=0x800;u32 ppc,arm,mask;
+    wii_ipc_init(ipc);wii_ios_native_init(ios);
+    wii_ipc_write(ipc,12,0x30,cpu->cycles);
+    wii_ipc_write(ipc,0x34,0x40000001u,cpu->cycles);
+    wii_ipc_write(ipc,0x3c,0x80000001u,cpu->cycles);
+    wii_ipc_write(ipc,4,0x28,cpu->cycles);
+    mem_write32_cia(cpu,message+4,0x11223344,0);
+    CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(wii_ipc_read(ipc,4,&ppc) && ppc==0x20); /* idle X2 received, no ACK */
+    CHECK(wii_ipc_read(ipc,12,&arm) && arm==0x30);
+    CHECK(wii_ipc_read(ipc,0x34,&mask) && mask==0x40000001u);
+    CHECK(wii_ipc_read(ipc,0x3c,&mask) && mask==0x80000001u);
+    CHECK(!wii_ipc_ppc_interrupt(ipc) && !ios->phase && !ios->operations);
+    CHECK(mem_read32_cia(cpu,message+4,0)==0x11223344);
+
+    /* X2 can arrive while a real Open is waiting for its request deadline,
+     * ACK retirement, or reply retirement. It must not create/lose a reply. */
+    wii_ipc_init(ipc);wii_ios_native_init(ios);
+    memcpy(cpu->ram+path,"/dev/stm/immediate",sizeof "/dev/stm/immediate");
+    mem_write32_cia(cpu,message,1,0);mem_write32_cia(cpu,message+12,path,0);
+    mem_write32_cia(cpu,message+16,0,0);mem_write32_cia(cpu,message+4,0x11223344,0);
+    wii_ipc_write(ipc,0,message,cpu->cycles);wii_ipc_write(ipc,4,0x31,cpu->cycles);
+    CHECK(wii_ios_native_tick(ios,ipc,cpu) && ios->phase==1);
+    const u64 ready=ios->ready_at;
+    wii_ipc_write(ipc,4,0x39,cpu->cycles); /* simultaneous new-request X1 + X2 */
+    CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(wii_ipc_read(ipc,4,&ppc) && ppc==0x31);
+    CHECK(ios->phase==1 && ios->ready_at==ready && !ios->operations);
+    cpu->cycles=ready;CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    cpu->cycles+=1200;
+    wii_ipc_write(ipc,12,0x38,cpu->cycles); /* retain real ACK Y2, nonzero ix */
+    wii_ipc_write(ipc,0x34,0x40000001u,cpu->cycles);
+    wii_ipc_write(ipc,0x3c,0x80000001u,cpu->cycles);
+    wii_ipc_write(ipc,4,0x38,cpu->cycles); /* Y2 and delivered IRQ still pending */
+    const u64 reply_at=ios->ready_at;
+    CHECK(!wii_ipc_ready(ipc) && wii_ipc_ppc_interrupt(ipc));
+    CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(wii_ipc_read(ipc,4,&ppc) && ppc==0x32);
+    CHECK(wii_ipc_read(ipc,12,&arm) && arm==0x38);
+    CHECK(ios->phase==2 && ios->ready_at==reply_at && !ios->operations);
+    CHECK(wii_ipc_ppc_interrupt(ipc) && ipc->arm_message==0);
+    CHECK(mem_read32_cia(cpu,message,0)==1 && mem_read32_cia(cpu,message+4,0)==0x11223344);
+    consume_mailbox(ipc,0x32,cpu->cycles);cpu->cycles=reply_at;
+    CHECK(wii_ios_native_tick(ios,ipc,cpu) && ios->operations==1);
+    cpu->cycles+=1200;wii_ipc_write(ipc,4,0x38,cpu->cycles);
+    CHECK(wii_ipc_ppc_interrupt(ipc) && !wii_ipc_ready(ipc));
+    CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(wii_ipc_read(ipc,4,&ppc) && ppc==0x34); /* Y1 reply preserved */
+    CHECK(ipc->arm_message==message && ios->operations==1 && !ios->phase);
+    CHECK(mem_read32_cia(cpu,message,0)==8 && !mem_read32_cia(cpu,message+4,0));
+    CHECK(wii_ipc_read(ipc,0x34,&mask) && mask==0x40000001u);
+    CHECK(wii_ipc_read(ipc,0x3c,&mask) && mask==0x80000001u);
+    consume_mailbox(ipc,0x34,cpu->cycles);
+
+    /* Receiving X2 must leave a captured request queued until its own due
+     * time, even when the current PPC mailbox points somewhere else. */
+    wii_ipc_init(ipc);wii_ios_native_init(ios);
+    mem_write32_cia(cpu,message,1,0);mem_write32_cia(cpu,message+12,path,0);
+    CHECK(wii_ios_native_request(ios,message,cpu->cycles));
+    wii_ipc_write(ipc,0,message+64,cpu->cycles);wii_ipc_write(ipc,4,0x39,cpu->cycles);
+    CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(wii_ipc_read(ipc,4,&ppc) && ppc==0x31);
+    CHECK(wii_ios_native_request_deadline(ios,cpu->cycles)==6000 && !ios->phase);
+    cpu->cycles+=6000;CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(ios->message==message && ios->descriptors[0]==1);
+    consume_mailbox(ipc,0x32,cpu->cycles);cpu->cycles+=6000;
+    CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(ipc->arm_message==message && mem_read32_cia(cpu,message,0)==8);
+    consume_mailbox(ipc,0x34,cpu->cycles);
+    CHECK(wii_ios_native_request_deadline(ios,cpu->cycles)==UINT64_MAX);
+
+    /* Launch owns its handoff/reload protocol; ordinary receipt must not
+     * touch any mailbox, interrupt, request, or provider state in that path. */
+    wii_ipc_init(ipc);wii_ios_native_init(ios);
+    ios->launch_pending=true;
+    wii_ipc_write(ipc,4,0x39,cpu->cycles);wii_ipc_write(ipc,12,0x31,cpu->cycles);
+    const WiiIpc before=*ipc;const WiiIosNative owner=*ios;
+    CHECK(wii_ios_native_tick(ios,ipc,cpu));
+    CHECK(!memcmp(&before,ipc,sizeof before) && !memcmp(&owner,ios,sizeof owner));
+    CHECK(wii_ipc_read(ipc,4,&ppc) && ppc==0x3d);
+    ios->launch_pending=false;wii_ios_native_init(ios);wii_ipc_init(ipc);
+    cpu->cycles=0;return 0;
+}
 int main(void) {
     CPUState cpu;WiiIpc ipc;WiiIosNative ios;
     CHECK(cpu_init(&cpu) && cpu_alloc_mem2(&cpu,0x4000000));
     cpu.spr[287]=PPC_BROADWAY_PVR;
     wii_ipc_init(&ipc);wii_ios_native_init(&ios);
+    CHECK(!x2_receipt(&cpu,&ipc,&ios));
     const u32 message=0x10000200,path=0x800;
     memcpy(cpu.ram+path,"/dev/stm/immediate",19);
     mem_write32_cia(&cpu,message,1,0);
@@ -356,6 +441,19 @@ int main(void) {
     wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.result && !ios.descriptors[0]);
+    /* The virtual WD is present only when a host IPv4 interface exists. Its
+     * exact WD_Startup open mode remains ENOENT on an unavailable host. */
+    wii_ios_native_init(&ios);wii_ipc_init(&ipc);
+    memcpy(cpu.ram+path,"/dev/net/wd/command",sizeof "/dev/net/wd/command");
+    mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,path,0);mem_write32_cia(&cpu,message+16,0x10003,0);
+    wii_ipc_write(&ipc,0,message,cpu.cycles);wii_ipc_write(&ipc,4,0x31,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu));
+    const bool host_available=wii_network_link(ios.network);
+    CHECK(ios.result==(host_available?0:-6) && ios.descriptors[0]==(host_available?14:0));
+    consume_mailbox(&ipc,0x32,cpu.cycles);cpu.cycles+=6000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && mem_read32_cia(&cpu,message,0)==8 &&
+          (s32)mem_read32_cia(&cpu,message+4,0)==(host_available?0:-6));
     /* The SD slot can be queried while physically empty. Both status and
      * reset report no card; a short output cannot modify the buffer. */
     wii_ios_native_init(&ios);wii_ipc_init(&ipc);

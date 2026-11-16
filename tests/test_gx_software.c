@@ -111,6 +111,35 @@ int main(void) {
           gx.scanout_height==4 && gx.scanout_stride==64);
     GcnllrNativeGxStatus status;gx.api->status(&status);
     CHECK(!status.failed && status.display_copies==3 && status.texture_copies==5 && status.presents==1);
-    CHECK(gx.api->drain());wii_gx_stop(&gx);cpu_free(&cpu);
+    /* Actual CPU bus peeks must reach the same ordered EFB as FIFO copies.
+     * Alpha policy is separate from the provider's raw ARGB sample. */
+    CHECK(bp(&gx,0x40,1u<<4));
+    CHECK(bp(&gx,0x41,(1u<<3)|(1u<<4)));CHECK(bp(&gx,0x43,1));
+    CHECK(bp(&gx,0x49,0));CHECK(bp(&gx,0x4a,3u|(3u<<10)));
+    CHECK(bp(&gx,0x4b,0x10002000u>>5));CHECK(bp(&gx,0x4d,2));
+    CHECK(bp(&gx,0x4f,0x7f25));CHECK(bp(&gx,0x50,0x63d2));CHECK(bp(&gx,0x51,0x123456));
+    CHECK(bp(&gx,0x52,(1u<<14)|(1u<<11)));
+    u32 peeked=0;CHECK(gx.api->peek(0,0,0,&peeked) && peeked==0x7d2461d3u);
+    CHECK(mem_read32_cia(&cpu,0xc8000000,0x100)==0x002461d3u && !cpu.halted);
+    mem_write16_cia(&cpu,0xcc001008,1,0x104);
+    CHECK(mem_read32_cia(&cpu,0x08000000,0x108)==0xff2461d3u && !cpu.halted);
+    mem_write16_cia(&cpu,0xcc001008,2,0x10c);
+    CHECK(mem_read32_cia(&cpu,0x88000000,0x110)==0x7d2461d3u && !cpu.halted);
+    CHECK(mem_read32_cia(&cpu,0xc8400000,0x114)==0x123456u && !cpu.halted);
+    CHECK(mem_read32_cia(&cpu,0x08400000,0x118)==0x123456u && !cpu.halted);
+    CHECK(mem_read32_cia(&cpu,0xc8000a00,0x11c)==0 && !cpu.halted); /* x640 */
+    CHECK(mem_read32_cia(&cpu,0xc8210000,0x120)==0 && !cpu.halted); /* y528 */
+    /* A format change without another draw must affect a subsequent peek. */
+    CHECK(bp(&gx,0x43,0));
+    CHECK(gx.api->peek(0,0,0,&peeked) && peeked==0xff258d1fu);
+    CHECK(!gx.api->peek(2,0,0,&peeked)); /* no fabricated scanout-as-depth */
+    mem_write16_cia(&cpu,0xcc001008,3,0x124);
+    (void)mem_read32_cia(&cpu,0xc8000000,0x128);CHECK(cpu.halted);cpu.halted=false;
+    (void)mem_read32_cia(&cpu,0xc8800000,0x12c);CHECK(cpu.halted);cpu.halted=false;
+    (void)mem_read16_cia(&cpu,0xc8000000,0x130);CHECK(cpu.halted);cpu.halted=false;
+    CHECK(gx.api->drain());wii_gx_stop(&gx);
+    CHECK(!m.gx_peek && !m.gx_user);
+    (void)mem_read32_cia(&cpu,0xc8400000,0x134);CHECK(cpu.halted);
+    cpu_free(&cpu);
     return 0;
 }

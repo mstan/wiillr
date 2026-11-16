@@ -153,6 +153,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
     // Keep its layout centered instead of repeating its maps into the margins.
     const auto scene=r.u16(0x803140c0);
     const bool centered_panel=scene==0x0101,stage_selection=scene==0x0202;
+    const bool finite_canvas=scene==0x0000 || stage_selection;
     const auto config=r.u32(world+0x40),flags=r.u32(world),enabled=r.u32(config)>>8;
     const auto graphics=r.u32(resources+0x258);
     for(unsigned order=0;order<4;++order) {
@@ -167,7 +168,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
         need(layer.mode<=3 && (!layer.mode || layer.scroll),"Unbound MM9 per-line scroll mode");
         layer.map_data=r.bytes(layer.map,(layer.width/8)*(layer.height/8)*2);
         layer.tile_data=r.bytes(layer.tiles,256*256/2);
-        if(width>256 && !centered_panel && !stage_selection)world_source(r,id,layer);
+        if(width>256 && !centered_panel && !finite_canvas)world_source(r,id,layer);
     }
     const auto room=room_view(r,layers);
     std::array<bool,WII_MM9_VIEW_MAX_WIDTH> world_visible{};
@@ -238,10 +239,10 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 const unsigned stop=centered_panel?unsigned(left+256):width;
                 for(unsigned x=centered_panel?unsigned(left):0;x<stop;) {
                     if(!world_visible[x]){++x;continue;}
-                    // Stage selection is a finite canvas. Its quiet edge
-                    // columns extend the background stripes, while wrapping
-                    // the map would repeat portraits and menu labels.
-                    const int column=stage_selection?std::clamp(int(x)-left,0,255):int(x)-left;
+                    // Intro/title and stage selection are finite canvases.
+                    // Extend their visible edge columns instead of wrapping
+                    // dialogue, portraits or labels into the new margins.
+                    const int column=finite_canvas?std::clamp(int(x)-left,0,255):int(x)-left;
                     unsigned source_x=(u+unsigned(column))&(layer.width-1),source_y=v;
                     const unsigned page_x=source_x/256,page_y=v/256;
                     const unsigned tile=(page_y*(layer.width/256)+page_x)*1024+((v%256)/8)*32+(source_x%256)/8;
@@ -257,7 +258,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                     // Resolve the map/metatile and palette once for a tile
                     // row. Stop at the original center's cache boundary;
                     // finite menu margins repeat one edge pixel, not a tile.
-                    const bool edge=stage_selection && (x<unsigned(left) || x>=unsigned(left+256));
+                    const bool edge=finite_canvas && (x<unsigned(left) || x>=unsigned(left+256));
                     const unsigned boundary=x<unsigned(left)?unsigned(left):x<unsigned(left+256)?unsigned(left+256):stop;
                     const unsigned span=std::min(std::min(stop,boundary)-x,edge?stop-x:8u-(source_x&7));
                     const unsigned tx=(item>>6)&31,ty=item>>11;
@@ -287,7 +288,7 @@ template<class Put> WiiMm9Frame compose(const Reader& r,unsigned width,Put put,
                 const auto sy=unsigned(int(y)-sprite.y);const auto py=sprite.flip_y?sprite.height-1-sy:sy;
                 for(unsigned sx=0;sx<sprite.width;++sx) {
                     const int x=sprite.x+int(sx)+left;if(x<0 || x>=int(width))continue;
-                    if((centered_panel || stage_selection) && (x<left || x>=left+256))continue;
+                    if((centered_panel || finite_canvas) && (x<left || x>=left+256))continue;
                     if(!sprite.anchored && !world_visible[unsigned(x)])continue;
                     if(sprite.margin && x>=left && x<left+256)continue;
                     const auto px=sprite.flip_x?sprite.width-1-sx:sx;const auto index=nibble(sprite.tile_data,sprite.width,px,py);if(!index)continue;

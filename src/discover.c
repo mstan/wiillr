@@ -7,11 +7,14 @@
 #include "wiillr/boot.h"
 #include "wiillr/gx.h"
 #include "wiillr/gx_output.h"
+#include "wiillr/gx_session.h"
 #include "wiillr/control.h"
+#include "wiillr/host_session.h"
 #ifdef RECOMP_LAUNCHER
 #include "wiillr/launcher.h"
 #include "wiillr/package.h"
 #include <SDL3/SDL.h>
+static WiiPackage* package;
 #ifdef _WIN32
 /* Reuse SDL's supported Windows entry shim for the GUI subsystem. Explicit
  * command-line QA still receives its inherited stdout/stderr pipes. */
@@ -86,10 +89,14 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     const u64 gather_rejected=m->gx_cpu_gather_rejected;
     const u64 utc=m->ios.kd_utc,utc_cycles=m->ios.kd_utc_cycles;
     const bool utc_set=m->ios.kd_utc_set;
+    const GcnRtc rtc=m->exi.rtc;
+    const bool scripted_input=gx->scripted_input;
     void (*sink)(void*,const u8*,u32)=m->dsp.output_sink;
     void* sink_user=m->dsp.output_user;const u32 rate=m->dsp.output_rate;
     const bool dsp=m->dsp.engine!=NULL;
     if(gx->api && !gx->api->drain()){wii_es_release_launch(&launch);return false;}
+    WiiGxHandoff handoff={0};
+    if(wii_gx_handoff_begin(gx,library,&handoff)<0) {wii_es_release_launch(&launch);return false;}
     GcnllrNativeGxStatus graphics={0};if(gx->api)gx->api->status(&graphics);
     GcnDspEngineStats sound={0};if(dsp)sound=gcn_dsp_engine_stats(m->dsp.engine);
     printf("{\"native_title_retire\":1,\"cycles\":%llu,\"gx_fifo_bytes\":%llu,"
@@ -100,13 +107,17 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
         (unsigned long long)sound.interpreter_instructions,(unsigned long long)sound.misses,sound.failed);
     /* The old title never receives a success reply: ES_Launch bootstraps PPC.
      * Retire all old GPU ownership before replacing RAM, descriptors or DSP. */
-    wii_gx_stop(gx);if(cpu->halted){wii_es_release_launch(&launch);return false;}
+    wii_gx_stop(gx);if(cpu->halted){wii_gx_handoff_end(&handoff,false);wii_es_release_launch(&launch);return false;}
     wii_dsp_stop(&m->dsp);wii_ios_native_destroy(&m->ios);wii_fs_unmount(m->ios.fs);
     cpu_reset(cpu);cpu->cycles=cycles;cpu->timebase=timebase;cpu->spr[287]=PPC_BROADWAY_PVR;
     u32 entry;
     bool ok=wii_native_ios_boot_memory(cpu,(u32)launch.ios) &&
         wii_dol_load(cpu,launch.image,launch.size,&entry);
     wii_machine_init(m,cpu);
+    m->exi.rtc=rtc;
+#ifdef RECOMP_LAUNCHER
+    wii_host_session_bind(wii_package_standalone(package)?&m->ios:NULL);
+#endif
     m->fields=fields;m->mmio_reads=reads;m->mmio_writes=writes;
     m->gx_cpu_gather_writes=gather_writes;m->gx_cpu_gather_bytes=gather_bytes;
     m->gx_cpu_gather_rejected=gather_rejected;
@@ -114,7 +125,12 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     m->ios.operations=operations;m->ios.kd_utc=utc;m->ios.kd_utc_cycles=utc_cycles;m->ios.kd_utc_set=utc_set;
     m->ios.validate_launch=validate_launch;m->ios.launch_user=cpu;
     m->ios.fs=wii_fs_mount(profile,launch.uid,launch.gid);ok=ok && m->ios.fs;
-    if(ok && library)ok=wii_gx_start(gx,m,cpu,library,data,cache);
+    if(ok && library) {
+        ok=wii_gx_start(gx,m,cpu,library,data,cache);
+        /* The setup journal may remain in the environment after review has
+         * handed controls to the player. A title change keeps that owner. */
+        if(ok)gx->scripted_input=scripted_input;
+    }
 #ifdef RECOMP_LAUNCHER
     if(ok && library)ok=wii_launcher_window(gx);
 #endif
@@ -124,32 +140,47 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     if(ok)wii_native_install();
 #endif
     if(ok)cpu->pc=entry;
+    if(handoff.library) {
+        const u64 next_window=handoff.api->window_identity();
+        printf("{\"native_title_window\":1,\"before\":%llu,\"after\":%llu,\"same\":%s}\n",
+            (unsigned long long)handoff.window_identity,(unsigned long long)next_window,
+            next_window==handoff.window_identity?"true":"false");
+    }
+    if(!wii_gx_handoff_end(&handoff,ok))ok=false;
     printf("{\"native_title_bootstrap\":\"%016llx\",\"ios\":%u,\"cycles\":%llu,\"success\":%s}\n",
         (unsigned long long)launch.title,(u32)launch.ios,(unsigned long long)cycles,ok?"true":"false");
     fflush(stdout);
     wii_es_release_launch(&launch);return ok;
 }
 #ifdef RECOMP_LAUNCHER
-static WiiPackage* package;
 static char package_error[512];
+static bool package_menu_request;
 static void close_package(void){wii_package_close(package);package=NULL;}
 static bool package_validate(const char* image,const char* nand,unsigned uid,unsigned gid) {
-    char selected[32768];return wii_launcher_start(image,nand,uid,gid,false,true,selected,sizeof selected)==0;
+    char selected[32768];return (package_menu_request?
+        wii_launcher_menu_start(image,nand,uid,gid,false,true,selected,sizeof selected,0):
+        wii_launcher_start(image,nand,uid,gid,false,true,selected,sizeof selected))==0;
 }
+static bool restart_launcher;
 static bool package_request(int argc,char** argv) {
     return argc==1 || (argc==2 && (!strcmp(argv[1],"--launcher") ||
-        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check")));
+        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check") ||
+        !strcmp(argv[1],"--menu-launcher") || !strcmp(argv[1],"--menu-launcher-settings") ||
+        !strcmp(argv[1],"--menu-launcher-check")));
 }
 #endif
 static int run(int argc, char** argv) {
-    bool launcher=false,launcher_force=false,launcher_check=false;
+    bool launcher=false,launcher_force=false,launcher_check=false,menu_launcher=false;
 #ifdef RECOMP_LAUNCHER
     if(package_request(argc,argv)) {
         const char* action=argc==1?"--launcher":argv[1];
-        const bool check=!strcmp(action,"--launcher-check");
+        const bool check=!strcmp(action,"--launcher-check") || !strcmp(action,"--menu-launcher-check");
+        const char* base=SDL_GetBasePath();const char* name=wii_package_name(base);
+        package_menu_request=!strcmp(name,"Wii Menu");
+        if(!strncmp(action,"--menu-launcher",15) && !package_menu_request)return 2;
         const char* user=getenv("WIILLR_USER_DIR");char* allocated=NULL;
-        if(!user || !*user){allocated=SDL_GetPrefPath("RetroPortingToolKit","Mega Man 9");user=allocated;}
-        package=wii_package_open(SDL_GetBasePath(),user,package_validate,package_error,sizeof package_error);
+        if(!user || !*user){allocated=SDL_GetPrefPath("RetroPortingToolKit",name);user=allocated;}
+        package=wii_package_open(base,user,package_validate,package_error,sizeof package_error);
         SDL_free(allocated);
         if(!package){fprintf(stderr,"launcher: %s\n",package_error);return 2;}
         atexit(close_package);
@@ -159,12 +190,21 @@ static int run(int argc, char** argv) {
             fclose(log);
             if(!freopen(wii_package_log(package),"ab",stdout) || !freopen(wii_package_log(package),"ab",stderr))return 2;
         }
+        if(package_menu_request) {
+            const bool force=!strcmp(action,"--launcher-settings") ||
+                             !strcmp(action,"--menu-launcher-settings");
+            const int setup=wii_launcher_menu_package(package,force,check);
+            if(setup)return setup==1?0:setup;
+        }
         wii_package_arguments(package,argv[0],action,&argc,&argv);
     }
     if(argc>1 && (!strcmp(argv[1],"--launcher") ||
-        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check"))) {
-        launcher=true;launcher_force=!strcmp(argv[1],"--launcher-settings");
-        launcher_check=!strcmp(argv[1],"--launcher-check");
+        !strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--launcher-check") ||
+        !strcmp(argv[1],"--menu-launcher") || !strcmp(argv[1],"--menu-launcher-settings") ||
+        !strcmp(argv[1],"--menu-launcher-check"))) {
+        menu_launcher=!strncmp(argv[1],"--menu-launcher",15);
+        launcher=true;launcher_force=!strcmp(argv[1],"--launcher-settings") || !strcmp(argv[1],"--menu-launcher-settings");
+        launcher_check=!strcmp(argv[1],"--launcher-check") || !strcmp(argv[1],"--menu-launcher-check");
         for(int i=1;i<argc;++i)argv[i]=argv[i+1];
         --argc;
     }
@@ -218,8 +258,11 @@ static int run(int argc, char** argv) {
         if(errno || !*argv[argc-2] || *end || uid>0xfffffffful)return 2;
         errno=0;unsigned long gid=strtoul(argv[argc-1],&end,10);
         if(errno || !*argv[argc-1] || *end || gid>0xfffful)return 2;
-        int action=wii_launcher_start(argv[1],argv[argc-3],(unsigned)uid,(unsigned)gid,
-            launcher_force,launcher_check,launcher_image,sizeof launcher_image);
+        int action=menu_launcher?
+            wii_launcher_menu_start(argv[1],argv[argc-3],(unsigned)uid,(unsigned)gid,
+                launcher_force,launcher_check,launcher_image,sizeof launcher_image,ios_profile):
+            wii_launcher_start(argv[1],argv[argc-3],(unsigned)uid,(unsigned)gid,
+                launcher_force,launcher_check,launcher_image,sizeof launcher_image);
         if(action || launcher_check)return action==1?0:action;
         argv[1]=launcher_image;
     }
@@ -236,7 +279,8 @@ static int run(int argc, char** argv) {
     size_t got = fread(image, 1, (size_t)length, input);
     fclose(input);
 #ifdef RECOMP_LAUNCHER
-    if(launcher && (got!=(size_t)length || !wii_launcher_verify(image,got))) {
+    if(launcher && (got!=(size_t)length ||
+       !(menu_launcher?wii_launcher_menu_verify(image,got):wii_launcher_verify(image,got)))) {
         fprintf(stderr,"launcher: boot content changed after selection\n");free(image);return 2;
     }
 #endif
@@ -259,6 +303,12 @@ static int run(int argc, char** argv) {
     cpu.spr[287] = PPC_BROADWAY_PVR;
     WiiMachine machine;
     wii_machine_init(&machine, &cpu);
+#ifdef RECOMP_LAUNCHER
+    /* Actual Menu packages seed host-local time once at process startup.
+     * Direct CLI QA keeps its fixed RTC. Title handoffs preserve this state. */
+    if(package && wii_package_menu(package))gcn_exi_sync_rtc_from_host(&machine.exi,cpu.cycles);
+    wii_host_session_bind(wii_package_standalone(package)?&machine.ios:NULL);
+#endif
     if(argc==8 || argc==10) {
         errno=0;unsigned long uid=strtoul(argv[argc-2],&end,10);
         if(errno || *end || uid>0xfffffffful) {cpu_free(&cpu);return 2;}
@@ -272,6 +322,20 @@ static int run(int argc, char** argv) {
         fprintf(stderr,"filesystem needs the build-selected native IOS provider\n");cpu_free(&cpu);return 2;
 #endif
     }
+#ifdef RECOMP_LAUNCHER
+    if(package && wii_package_menu(package) && machine.ios.fs) {
+        const uint32_t rtc=gcn_exi_rtc_latch_clock(&machine.exi,cpu.cycles,GCN_RTC_WII_CORE_CLOCK_HZ);
+        const WiiMenuWelcomeResult welcome=wii_fs_menu_welcome(machine.ios.fs,rtc);
+        printf("{\"menu_welcome_result\":%d,\"guest_started\":false}\n",(int)welcome);
+    }
+    u64 session_title=0;
+    if(!launcher && visible_window && !strcmp(visible_window,"1") && machine.ios.fs &&
+       wii_fs_boot_title(machine.ios.fs,&session_title) && session_title==0x0000000100000002ull &&
+       !wii_launcher_menu_session(argv[1])) {
+        fprintf(stderr,"Wii Menu controls/settings setup failed\n");
+        wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+    }
+#endif
     WiiGx gx={0};
     if(gx_library) {
 #if WIILLR_GX_NATIVE || WIILLR_GX_SOFTWARE
@@ -286,8 +350,16 @@ static int run(int argc, char** argv) {
         fprintf(stderr,"GX needs a build-selected provider\n");wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
 #endif
     }
-    u8 irom[8192], coef[4096];
+    u8 irom[8192], coef[4096];const u8* selected_irom=NULL;const u8* selected_coef=NULL;
     if (argc == 7 || argc==10) {
+        const bool hle=!strcmp(argv[5],"@hle") && !strcmp(argv[6],"@hle");
+        if(hle) {
+#if WIILLR_PACKAGE_DSP_HLE
+            if(!wii_dsp_start(&machine.dsp,&cpu,NULL,NULL)) {wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
+#else
+            fprintf(stderr,"This build requires original DSP resources\n");wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
+#endif
+        } else {
         FILE* rom=fopen(argv[5], "rb");
         FILE* co=fopen(argv[6], "rb");
         bool loaded=rom && co && fread(irom,1,sizeof irom,rom)==sizeof irom &&
@@ -295,12 +367,15 @@ static int run(int argc, char** argv) {
         if (rom) fclose(rom);
         if (co) fclose(co);
         if (!loaded || !wii_dsp_start(&machine.dsp,&cpu,irom,coef)) {wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
+        selected_irom=irom;selected_coef=coef;
+        }
     }
     gcn_interpreter_set_cache_loop_batch_enabled(false);
     if(machine.dsp.engine && gcn_host_audio_start(32000u)) {
         machine.dsp.output_sink=gcn_host_audio_submit_be_s16;machine.dsp.output_rate=32000u;
     }
 #if WIILLR_PPC_STATIC
+    wii_native_set_stop_pc((u32)stop);
     wii_native_install();
     const GcnOverlayModule* native_module=wii_native_module();
 #else
@@ -366,7 +441,11 @@ static int run(int argc, char** argv) {
             cpu.halted=true;break;
 #endif
         }
+#if WIILLR_NATIVE_CHAIN
+        steps+=1+wii_native_chained_dispatches();
+#else
         ++steps;
+#endif
 #if WIILLR_SCHED_DEADLINE
         } while(cpu.cycles<cpu.cycle_deadline && !cpu.halted && !cpu.exception &&
                 (!stop || cpu.pc!=stop));
@@ -389,8 +468,13 @@ static int run(int argc, char** argv) {
 #endif
         gcn_cost_enter(GCN_COST_TIME);
         wii_machine_tick(&machine, &cpu);
+#ifdef RECOMP_LAUNCHER
+        if(wii_host_session_menu_requested(&machine.ios)) {
+            restart_launcher=true;printf("{\"host_menu_return\":\"launcher\"}\n");break;
+        }
+#endif
         if(machine.ios.launch_pending && !cpu.halted) {
-            if(!bootstrap_launch(&cpu,&machine,&gx,argv[argc-3],gx_library,gx_data,gx_cache,irom,coef)) {
+            if(!bootstrap_launch(&cpu,&machine,&gx,argv[argc-3],gx_library,gx_data,gx_cache,selected_irom,selected_coef)) {
                 fprintf(stderr,"native title bootstrap failed\n");cpu.halted=true;
             }
             input_pending=true;
@@ -514,14 +598,28 @@ int main(int argc,char** argv) {
     fprintf(stderr,"Original IOS requires a firmware context; the native NAND-title handoff is unavailable in this build.\n");
     return 2;
 #endif
-    const int result=run(argc,argv);
+    int result;
+#ifdef RECOMP_LAUNCHER
+    char* return_argv[]={argv[0],"--launcher-settings",NULL};bool returning=false;
+    do {
+        restart_launcher=false;
+        result=run(returning?2:argc,returning?return_argv:argv);
+        returning=restart_launcher && result==0;
+        if(returning)close_package();
+    } while(returning);
+#else
+    result=run(argc,argv);
+#endif
 #ifdef RECOMP_LAUNCHER
     const char* hidden=getenv("GCNLLR_RENDER_HIDDEN");const char* test=getenv("LNG_TEST_HIDDEN");
-    const bool check=argc==2 && !strcmp(argv[1],"--launcher-check");
+    const bool check=argc==2 && (!strcmp(argv[1],"--launcher-check") ||
+                                !strcmp(argv[1],"--menu-launcher-check"));
     if(result && package_request(argc,argv) && !check &&
        !(hidden && !strcmp(hidden,"1")) && !(test && !strcmp(test,"1")))
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Mega Man 9",
-            *package_error?package_error:"Mega Man 9 could not start. See game.log in the game preferences folder for details.",NULL);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,package_menu_request?"Wii Menu":"Mega Man 9",
+            *package_error?package_error:package_menu_request?
+                "Wii Menu could not start. See game.log in the Wii Menu preferences folder for details.":
+                "Mega Man 9 could not start. See game.log in the game preferences folder for details.",NULL);
 #endif
     return result;
 }

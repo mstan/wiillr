@@ -109,6 +109,21 @@ int main(void) {
     cpu.cycles+=729000000u;wii_machine_tick(&m,&cpu);CHECK(m.ai.sample_counter==samples+32000);
     mem_write32_cia(&cpu,0xcd800180,0x53102,0);CHECK(!wii_hollywood_audio_clock(&m.hollywood));
     mem_write32_cia(&cpu,0xcd8001cc,wii_audio_pll_preset(true),0);CHECK(wii_hollywood_audio_clock(&m.hollywood));
+    /* Real Wii MMIO -> CPU EXI adapter -> shared RTC. Keep the original
+     * timebase/domain tests above intact; advance monotonically from here.
+     * Explicit seeding does not exercise the host-time boot policy. */
+    const u64 rtc_cycles=cpu.cycles;
+    gcn_rtc_start(&m.exi.rtc,100u,rtc_cycles);
+    cpu.cycles=rtc_cycles+729000000ull-1;
+    mem_write32_cia(&cpu,0xcd006800,0x100,0);
+    mem_write32_cia(&cpu,0xcd006810,0x20000000,0);
+    mem_write32_cia(&cpu,0xcd00680c,0x35,0);
+    mem_write32_cia(&cpu,0xcd00680c,0x31,0);
+    CHECK(mem_read32_cia(&cpu,0xcd006810,0)==100u);
+    cpu.cycles=rtc_cycles+729000000ull;
+    mem_write32_cia(&cpu,0xcd00680c,0x31,0);
+    CHECK(mem_read32_cia(&cpu,0xcd006810,0)==101u);
+    CHECK(gcn_exi_rtc_latch_clock(&m.exi,cpu.cycles,GCN_RTC_WII_CORE_CLOCK_HZ)==101u);
     mem_write32_cia(&cpu,0xcd800018,1,0);CHECK(cpu.halted && m.unsupported_address==0xcd800018);
     cpu_free(&cpu);
     return 0;

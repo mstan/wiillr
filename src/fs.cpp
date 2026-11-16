@@ -1,8 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/fs.h"
+#include "wiillr/sha1.hpp"
 #include "FS.h"
 #include "NWC24Identity.h"
 #include <fstream>
+#include "wiillr/network_profile.h"
+#include "wiillr/menu_profile.h"
 #include <cstdlib>
 #include <random>
 #include <sstream>
@@ -23,6 +26,8 @@ struct WiiFs {
   const uint32_t boot_uid;
   const uint16_t boot_gid;
   uint32_t content_handles=0;
+  struct FileContext {uint32_t uid=0;uint16_t gid=0;bool valid=false;};
+  std::array<FileContext,16> file_contexts{};
   WiiFs(const fs::path& p,uint32_t u,uint16_t g):root(p),backend(p.generic_string()),uid(u),gid(g),boot_uid(u),boot_gid(g){}
 };
 static int32_t result(nand::ResultCode code){return code==nand::ResultCode::Success?0:-100-int32_t(code);}
@@ -99,6 +104,23 @@ static bool profile_write(WiiFs* s,const char* name,const uint8_t* data,uint32_t
     fs::rename(temporary,path);return true;
 #endif
   }catch(...){return false;}
+}
+static constexpr char menu_mod_settings[]="wiillr-menu-mods-v1\nwelcome-letter=1\n";
+extern "C" bool wii_fs_menu_welcome_enabled(WiiFs* s,bool* enabled) {
+  if(!s || !enabled)return false;
+  uint8_t data[sizeof menu_mod_settings];uint32_t size=0;
+  if(!profile_read(s,".wiillr-menu-mods",data,sizeof data,&size))return false;
+  if(!size){std::error_code error;if(fs::exists(s->root/".wiillr-menu-mods",error) || error)return false;*enabled=true;return true;}
+  constexpr size_t flag=sizeof menu_mod_settings-3;
+  if(size!=sizeof menu_mod_settings-1 || (data[flag]!='0' && data[flag]!='1'))return false;
+  auto expected=std::to_array(menu_mod_settings);expected[flag]=char(data[flag]);
+  if(std::memcmp(data,expected.data(),size))return false;
+  *enabled=data[flag]=='1';return true;
+}
+extern "C" bool wii_fs_menu_welcome_set_enabled(WiiFs* s,bool enabled) {
+  bool prior;if(!wii_fs_menu_welcome_enabled(s,&prior))return false;
+  auto data=std::to_array(menu_mod_settings);data[sizeof menu_mod_settings-3]=enabled?'1':'0';
+  return profile_write(s,".wiillr-menu-mods",reinterpret_cast<const uint8_t*>(data.data()),data.size()-1);
 }
 extern "C" bool wii_fs_bt_read(void* user,uint8_t* data,uint32_t capacity,uint32_t* size) {
   return profile_read(static_cast<WiiFs*>(user),".wiillr-bluetooth",data,capacity,size);
@@ -212,9 +234,10 @@ extern "C" int32_t wii_fs_network_config(WiiFs* s,uint8_t* data) {
       if(!file)return -117;
       const auto info=file->GetStatus();if(!info || info->size!=bytes.size())return -117;
       const auto got=file->Read(bytes.data(),bytes.size());if(!got || *got!=bytes.size())return -117;
-    }else {
-      // A new offline profile has no selected connection (IF_NONE). Never
-      // manufacture a successful connection test or replace existing settings.
+    }
+    if(wii_network_seed_config(bytes.data(),bytes.size())) {
+      // Provision only a missing/old empty generated default. Existing owner
+      // connections, including disabled profiles and credentials, stay exact.
       const nand::Modes modes{nand::Mode::ReadWrite,nand::Mode::ReadWrite,nand::Mode::ReadWrite};
       const auto created=s->backend.CreateFullPath(0,0,path,0,modes);if(created!=nand::ResultCode::Success)return result(created);
       const auto file=s->backend.CreateAndOpenFile(0,0,path,modes);
@@ -491,10 +514,17 @@ extern "C" int32_t wii_fs_open(WiiFs* s,const char* path,uint32_t mode) {
     const auto allowed=s->uid==0?3:uint8_t(metadata->uid==s->uid?metadata->modes.owner:metadata->gid==s->gid?metadata->modes.group:metadata->modes.other);
     if((allowed&mode)!=mode)return -102;
     auto opened=s->backend.OpenFile(s->uid,s->gid,path,nand::Mode(mode));
-    return opened?int32_t(opened->Release()):result(opened.error());
+    if(!opened)return result(opened.error());
+    const auto fd=opened->Release();
+    if(fd>=s->file_contexts.size()){s->backend.Close(fd);return -109;}
+    s->file_contexts[fd]={s->uid,s->gid,true};return int32_t(fd);
   }catch(const std::invalid_argument&){return -101;}catch(const std::exception&){return -117;}
 }
-extern "C" int32_t wii_fs_close(WiiFs* s,uint32_t fd){try{return result(s->backend.Close(fd));}catch(...){return -117;}}
+extern "C" int32_t wii_fs_close(WiiFs* s,uint32_t fd){try{
+  const auto closed=s->backend.Close(fd);
+  if(closed==nand::ResultCode::Success && fd<s->file_contexts.size())s->file_contexts[fd]={};
+  return result(closed);
+}catch(...){return -117;}}
 extern "C" int32_t wii_fs_read(WiiFs* s,uint32_t fd,uint8_t* p,uint32_t n){try{return result(s->backend.ReadBytesFromFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_write(WiiFs* s,uint32_t fd,const uint8_t* p,uint32_t n){try{return result(s->backend.WriteBytesToFile(fd,p,n));}catch(...){return -117;}}
 extern "C" int32_t wii_fs_seek(WiiFs* s,uint32_t fd,uint32_t at,uint32_t mode){try{return result(s->backend.SeekFile(fd,at,nand::SeekMode(mode)));}catch(...){return -117;}}
@@ -580,7 +610,7 @@ extern "C" int32_t wii_es_title_content_open(WiiFs* s,uint64_t title,const uint8
 static bool content_handle(WiiFs* s,uint32_t handle){return handle<32 && (s->content_handles&(1u<<handle));}
 
 static std::array<uint8_t,20> content_sha1(const std::vector<uint8_t>& bytes) {
-  uint32_t h[]{0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
+  std::array<uint32_t,5> h{0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
   const size_t padded=(bytes.size()+9+63)&~size_t(63);
   for(size_t offset=0;offset<padded;offset+=64) {
     std::array<uint8_t,64> block{};
@@ -592,17 +622,35 @@ static std::array<uint8_t,20> content_sha1(const std::vector<uint8_t>& bytes) {
       uint64_t bits=uint64_t(bytes.size())*8;
       for(int n=63;n>=56;--n){block[n]=uint8_t(bits);bits>>=8;}
     }
-    uint32_t w[80];for(unsigned n=0;n<16;n++)w[n]=be32(block.data()+4*n);
-    for(unsigned n=16;n<80;n++)w[n]=std::rotl(w[n-3]^w[n-8]^w[n-14]^w[n-16],1);
-    uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4];
-    for(unsigned n=0;n<80;n++) {
-      const uint32_t f=n<20 ? (b&c)|(~b&d):n<40 ? b^c^d:n<60 ? (b&c)|(b&d)|(c&d):b^c^d;
-      const uint32_t k=n<20?0x5a827999:n<40?0x6ed9eba1:n<60?0x8f1bbcdc:0xca62c1d6;
-      const uint32_t t=std::rotl(a,5)+f+e+k+w[n];e=d;d=c;c=std::rotl(b,30);b=a;a=t;
-    }
-    h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;
+    wiillr::sha1_compress(h,block.data());
   }
   std::array<uint8_t,20> hash{};for(unsigned n=0;n<5;n++)put32(hash.data()+4*n,h[n]);return hash;
+}
+extern "C" WiiMenuWelcomeResult wii_fs_menu_welcome(WiiFs* s,uint32_t rtc_seconds) {
+  try {
+    bool enabled;if(!wii_fs_menu_welcome_enabled(s,&enabled))return WII_MENU_WELCOME_INVALID;
+    if(!enabled)return WII_MENU_WELCOME_DISABLED;
+    uint64_t title=0;if(!wii_fs_boot_title(s,&title) || title!=0x100000002ull)return WII_MENU_WELCOME_INVALID;
+    check_path(s,"/title/00000001/00000002/data/cdb.vff");
+    if(!fs::exists(s->root/"title/00000001/00000002/data/cdb.vff"))return WII_MENU_WELCOME_NOT_READY;
+    check_path(s,"/shared2/sys/SYSCONF");const auto settings=s->root/"shared2/sys/SYSCONF";
+    if(!fs::is_regular_file(settings) || fs::file_size(settings)!=16384)return WII_MENU_WELCOME_INVALID;
+    std::array<uint8_t,16384> config{};
+    {std::ifstream f(settings,std::ios::binary);f.read(reinterpret_cast<char*>(config.data()),config.size());if(!f)return WII_MENU_WELCOME_IO_ERROR;}
+    uint32_t local_seconds;if(!wii_menu_profile_local_seconds(config.data(),config.size(),rtc_seconds,&local_seconds))return WII_MENU_WELCOME_INVALID;
+    check_path(s,"/title/00000001/00000002/data/nocopy/cdbwiiid.dat");
+    const auto identity=s->root/"title/00000001/00000002/data/nocopy/cdbwiiid.dat";
+    std::array<uint8_t,8> id{};
+    if(fs::exists(identity)) {
+      if(!fs::is_regular_file(identity) || fs::file_size(identity)!=40)return WII_MENU_WELCOME_INVALID;
+      std::ifstream f(identity,std::ios::binary);f.read(reinterpret_cast<char*>(id.data()),id.size());if(!f)return WII_MENU_WELCOME_IO_ERROR;
+    } else {
+      std::vector<uint8_t> input(9);if(!wii_fs_network_mac(s,input.data()))return WII_MENU_WELCOME_IO_ERROR;
+      input[6]=0x75;input[7]=0x79;input[8]=0x79;const auto hash=content_sha1(input);std::copy_n(hash.begin(),id.size(),id.begin());
+    }
+    const uint64_t wii_id=uint64_t(be32(id.data()))<<32|be32(id.data()+4);
+    return wii_menu_welcome(s->root.string().c_str(),local_seconds,wii_id,true);
+  }catch(const std::exception&){return WII_MENU_WELCOME_IO_ERROR;}
 }
 extern "C" bool wii_es_verify_content(WiiFs* s,uint64_t title,uint32_t index) {
   try {
@@ -689,7 +737,15 @@ extern "C" bool wii_fs_ioctl(WiiFs* s,int32_t fd,uint32_t command,const uint8_t*
       auto status=s->backend.GetFileStatus(uint32_t(fd));if(!status){*r=result(status.error());return true;}
       put32(out,status->size);put32(out+4,status->offset);*r=0;return true;
     }
-    if(fd>=0)return false;
+    uint32_t caller_uid=s->uid;uint16_t caller_gid=s->gid;
+    if(fd>=0) {
+      if(command!=7)return false;
+      if(uint32_t(fd)>=s->file_contexts.size() || !s->file_contexts[fd].valid ||
+         !s->backend.GetFileStatus(uint32_t(fd)))return true;
+      // Global FS operations use the valid handle's opener, including after
+      // SetUID changes the identity used for subsequent opens.
+      caller_uid=s->file_contexts[fd].uid;caller_gid=s->file_contexts[fd].gid;
+    }
     if(command==2) {
       if(no<28 || !out)return true;
       auto stats=s->backend.GetNandStats();if(!stats){*r=result(stats.error());return true;}
@@ -714,7 +770,7 @@ extern "C" bool wii_fs_ioctl(WiiFs* s,int32_t fd,uint32_t command,const uint8_t*
       std::memset(out,0,74);put32(out,m->uid);out[4]=uint8_t(m->gid>>8);out[5]=uint8_t(m->gid);
       out[70]=uint8_t(m->modes.owner);out[71]=uint8_t(m->modes.group);out[72]=uint8_t(m->modes.other);out[73]=m->attribute;*r=0;return true;
     }
-    if(command==7){*r=result(s->backend.Delete(s->uid,s->gid,path_param(s,in,ni)));return true;}
+    if(command==7){*r=result(s->backend.Delete(caller_uid,caller_gid,path_param(s,in,ni)));return true;}
     if(command==8){if(ni<128)return true;auto a=path_param(s,in,ni);auto b=path_param(s,in+64,ni-64);*r=result(s->backend.Rename(s->uid,s->gid,a,b));return true;}
     return false;
   } catch(const std::invalid_argument&){return true;}catch(const std::exception& e){std::fprintf(stderr,"NAND operation: %s\n",e.what());*r=-117;return true;}

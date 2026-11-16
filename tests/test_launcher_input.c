@@ -1,15 +1,39 @@
 /* SPDX-License-Identifier: MIT */
 #include "wiillr/launcher_input.h"
+#include "wiillr/keyboard.h"
+#include "launcher_input.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s (%s)\n",__LINE__,#x,SDL_GetError());return 1;}}while(0)
 
 int main(void) {
+    LauncherPad physical[4]={0};
+    for(int p=0;p<4;++p) {
+        physical[p].id=100+p;snprintf(physical[p].name,sizeof physical[p].name,"Identical Controller");
+        snprintf(physical[p].guid,sizeof physical[p].guid,"same-model");
+        char path[32];snprintf(path,sizeof path,"\\\\?\\hid#device#%d",p);
+        launcher_input_identity(physical[p].identity,physical[p].guid,path,"same-driver-serial");
+        CHECK(strlen(physical[p].identity)==64 && (p==0 || strcmp(physical[p].identity,physical[p-1].identity)));
+    }
+    CHECK(launcher_input_resolve(physical,4,"same-model",physical[2].identity,0)==2);
+    CHECK(launcher_input_resolve(physical,2,"same-model",physical[2].identity,0)==-1); /* Offline never steals a same-model pad. */
+    CHECK(launcher_input_resolve(physical,4,"same-model","",0)==-1);
+    CHECK(launcher_input_resolve(physical,1,"same-model","manual",0)==-1);
+    CHECK(launcher_input_resolve(physical,1,"same-model","manual",101)==0);
+    physical[2].id=900;CHECK(launcher_input_resolve(physical,4,"same-model",physical[2].identity,103)==2);
+    char friendly[96];launcher_input_pad_label(physical,4,2,friendly,sizeof friendly);CHECK(!strcmp(friendly,"Identical Controller (3)"));
+    char slot_a[65],slot_b[65];launcher_input_identity(slot_a,"model","XInput#0",NULL);CHECK(!*slot_a);
+    launcher_input_identity(slot_a,"model","XInput#0","real-serial");launcher_input_identity(slot_b,"model","XInput#3","real-serial");CHECK(!strcmp(slot_a,slot_b));
     RecompLauncherCSettings s={0};wii_launcher_input_defaults(&s);
     bool keys[SDL_SCANCODE_COUNT]={0};WiiLauncherInput input={.keys=keys,.key_count=SDL_SCANCODE_COUNT};
     s.player_src[0]=1;keys[SDL_SCANCODE_X]=true;keys[SDL_SCANCODE_RIGHT]=true;
     CHECK(wii_launcher_input_map(&s,&input).buttons==0x102);
+    wii_keyboard_host_begin(true);wii_keyboard_host_keys(keys,SDL_SCANCODE_COUNT,true);
+    CHECK(!wii_launcher_input_map(&s,&input).buttons);
+    s.player_src[0]=2;input.buttons=1u<<SDL_GAMEPAD_BUTTON_SOUTH;
+    CHECK(wii_launcher_input_map(&s,&input).buttons==0x100); /* gamepad remains independent */
+    wii_keyboard_host_reset();s.player_src[0]=1;input.buttons=0;
     s.player_key_bind[0][5]=SDL_SCANCODE_F;
     CHECK(!(wii_launcher_input_map(&s,&input).buttons&0x100));
     keys[SDL_SCANCODE_F]=true;CHECK(wii_launcher_input_map(&s,&input).buttons&0x100);
@@ -51,9 +75,27 @@ int main(void) {
     s.player_src[0]=1;s.player_key_bind[0][7]=513;input.mouse=SDL_BUTTON_LMASK;
     CHECK(wii_launcher_input_map(&s,&input).buttons&0x40);
 
+    // Per-player keyboard and IR bindings do not inherit P1's keys.
+    s.player_src[1]=1;keys[SDL_SCANCODE_F]=true;
+    CHECK(!wii_launcher_input_map_player(&s,&input,1).buttons);
+    s.player_key_bind[1][5]=SDL_SCANCODE_G;keys[SDL_SCANCODE_G]=true;
+    CHECK(wii_launcher_input_map_player(&s,&input,1).buttons==0x100);
+    s.player_key_bind[1][11]=SDL_SCANCODE_T;keys[SDL_SCANCODE_T]=true;
+    CHECK(wii_launcher_input_map_player(&s,&input,1).substick_y>128);
+    CHECK(!wii_launcher_input_map_player(&s,&input,4).buttons);
+
     /* Real SDL virtual controllers, no video subsystem, window or picker. */
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
     CHECK(SDL_Init(SDL_INIT_GAMEPAD));
+    /* System key state exists even without enumerated physical keyboards or
+     * a focused video window. The virtual USB device remains attached while
+     * unfocused and sends a neutral report rather than a disconnect. */
+    CHECK(!SDL_HasKeyboard() && !SDL_GetKeyboardFocus());
+    wii_keyboard_host_begin(false);
+    GcnllrPad presence_pad;wii_launcher_input_poll(&s,&presence_pad);
+    WiiKeyboardReport keyboard;wii_keyboard_host_end(true,&keyboard);
+    CHECK(keyboard.connected && !keyboard.modifiers);
+    CHECK(!memcmp(keyboard.keys,(unsigned char[6]){0},6));
     SDL_VirtualJoystickDesc desc;SDL_INIT_INTERFACE(&desc);
     desc.type=SDL_JOYSTICK_TYPE_GAMEPAD;desc.naxes=6;desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
     desc.axis_mask=63;desc.button_mask=(1u<<SDL_GAMEPAD_BUTTON_COUNT)-1;
@@ -75,9 +117,54 @@ int main(void) {
     CHECK(SDL_SetJoystickVirtualButton(second,SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,true));
     SDL_UpdateJoysticks();SDL_PumpEvents();wii_launcher_input_poll(&s,&pad);
     CHECK(pad.buttons&0x100); /* remapped button on the selected pad */
+    SDL_JoystickID three=SDL_AttachVirtualJoystick(&desc),four=SDL_AttachVirtualJoystick(&desc);CHECK(three && four);
+    SDL_Joystick* third=SDL_OpenJoystick(three);SDL_Joystick* fourth=SDL_OpenJoystick(four);CHECK(third && fourth);
+    SDL_Joystick* sticks[4]={second,first,third,fourth};SDL_JoystickID ids[4]={two,one,three,four};
+    for(unsigned n=0;n<4;++n) {
+        s.player_src[n]=2;s.player_gamepad_instance[n]=ids[n]+1;
+        snprintf(s.player_gamepad_guid[n],sizeof s.player_gamepad_guid[n],"%s",first_guid);
+        s.player_pad_bind[n][5]=RECOMP_LAUNCHER_PAD_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+        CHECK(SDL_SetJoystickVirtualButton(sticks[n],SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,false));
+    }
+    for(unsigned active=0;active<4;++active) {
+        CHECK(SDL_SetJoystickVirtualButton(sticks[active],SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,true));
+        SDL_UpdateJoysticks();SDL_PumpEvents();
+        for(unsigned n=0;n<4;++n) {
+            unsigned flags=wii_launcher_input_poll_player(&s,n,&pad);CHECK(flags&WIILLR_INPUT_PRESENT);
+            CHECK(((pad.buttons&0x100)!=0)==(n==active));
+        }
+        CHECK(wii_launcher_input_held_actions()==(active==0?1u:0u));
+        CHECK(SDL_SetJoystickVirtualButton(sticks[active],SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,false));
+    }
+    CHECK(SDL_SetJoystickVirtualAxis(third,SDL_GAMEPAD_AXIS_RIGHTX,16000));
+    SDL_UpdateJoysticks();SDL_PumpEvents();
+    for(unsigned n=0;n<4;++n) {wii_launcher_input_poll_player(&s,n,&pad);CHECK((pad.substick_x>128)==(n==2));}
+    // A new process cannot restore unidentifiable identical pads from SDL IDs.
+    RecompLauncherCSettings restart=s;
+    for(unsigned n=0;n<4;++n){restart.player_gamepad_instance[n]=0;snprintf(restart.player_gamepad_identity[n],65,"manual");}
+    wii_launcher_input_reset();
+    for(unsigned n=0;n<4;++n)CHECK(!(wii_launcher_input_poll_player(&restart,n,&pad)&WIILLR_INPUT_PRESENT));
+    for(unsigned n=0;n<4;++n)CHECK(wii_launcher_input_poll_player(&s,n,&pad)&WIILLR_INPUT_PRESENT); /* Explicit choices recover all four. */
+    // A duplicated physical assignment fails closed for the later slot.
+    s.player_gamepad_instance[3]=one+1;
+    CHECK(!(wii_launcher_input_poll_player(&s,3,&pad)&WIILLR_INPUT_PRESENT) && !pad.buttons);
+    s.player_gamepad_instance[3]=four+1;
+    CHECK(wii_launcher_input_poll_player(&s,3,&pad)&WIILLR_INPUT_PRESENT);
+    // Dummy video cannot create a desktop window. Losing video focus keeps
+    // assigned devices present while releasing every player's buttons/IR.
+    CHECK(SDL_SetHint(SDL_HINT_VIDEO_DRIVER,"dummy"));CHECK(SDL_InitSubSystem(SDL_INIT_VIDEO));
+    CHECK(!strcmp(SDL_GetCurrentVideoDriver(),"dummy") && !SDL_GetKeyboardFocus());
+    for(unsigned n=0;n<4;++n) {
+        const unsigned flags=wii_launcher_input_poll_player(&s,n,&pad);
+        CHECK((flags&WIILLR_INPUT_PRESENT) && !(flags&WIILLR_INPUT_FOCUSED));
+        CHECK(!pad.buttons && pad.substick_x==128 && pad.substick_y==128);
+    }
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    SDL_CloseJoystick(third);SDL_CloseJoystick(fourth);
+    CHECK(SDL_DetachVirtualJoystick(three) && SDL_DetachVirtualJoystick(four));
     SDL_CloseJoystick(second);CHECK(SDL_DetachVirtualJoystick(two));
     SDL_UpdateJoysticks();SDL_PumpEvents();wii_launcher_input_poll(&s,&pad);
-    CHECK(!(pad.buttons&0x100)); /* no takeover when selected pad disconnects */
+    CHECK(!(pad.buttons&0x100) && !(wii_launcher_input_player_flags(0)&WIILLR_INPUT_PRESENT)); /* no takeover when selected pad disconnects */
     wii_launcher_input_stop(&s);
     SDL_CloseJoystick(first);CHECK(SDL_DetachVirtualJoystick(one));SDL_Quit();
     puts("launcher input: remaps, source isolation, axes, unbinds and SDL device selection PASS");

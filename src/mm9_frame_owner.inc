@@ -74,11 +74,12 @@ static int owned_camera(CPUState* cpu,GcWiiNativeDraw* view) {
 static bool owned_view(CPUState* cpu) {
     input_invalid=false;GcWiiNativeDraw* v=&owned.view;memset(v,0,sizeof *v);
     const float top=(float)(r16(cpu,0x803b92d0)>>1),bottom=-top;
-    float right=(float)(r16(cpu,0x803b92ce)>>1),left=-right;
+    const float original_half_width=(float)(r16(cpu,0x803b92ce)>>1);
+    float right=original_half_width,left=-right;
     if(r8(cpu,cpu->gpr[13]-0x5dc8)){left=rf(cpu,cpu->gpr[2]-0x7d94);right=rf(cpu,cpu->gpr[2]-0x7d90);}
     const float near=rf(cpu,cpu->gpr[2]-0x7db0),far=rf(cpu,cpu->gpr[2]-0x7d98);
     if(!(top>bottom && right>left && far>near))return false;
-    v->projection[0]=2/(right-left);v->projection[3]=-(right+left)/(right-left);
+    if(!wii_mm9_screen_view_projection(v,original_half_width,left,right,view_enabled))return false;
     v->projection[5]=2/(top-bottom);v->projection[7]=-(top+bottom)/(top-bottom);
     v->projection[10]=-1/(far-near);v->projection[11]=-far/(far-near);v->projection[15]=1;
     float z[3],up[3],x[3],y[3];for(u32 n=0;n<3;n++){z[n]=rf(cpu,0x802536fc+n*4);up[n]=rf(cpu,0x802536f0+n*4);}

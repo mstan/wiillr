@@ -42,7 +42,7 @@ static void status(GcnllrNativeGxStatus* out) {
     out->pad.substick_x = out->pad.substick_y = 128;
 }
 static int peek(u32 depth, u16 x, u16 y, u32* value) {
-    return drain() && gx_raster_efb_cpu_read(
+    return depth<=1 && drain() && gx_raster_efb_cpu_read(
         0x08000000u | (depth ? 0x00400000u : 0) | ((u32)y << 12) | ((u32)x << 2), value);
 }
 static void stop(void) {

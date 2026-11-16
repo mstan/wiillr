@@ -3,6 +3,9 @@
 #include "debug/cost_ring.h"
 #include "cpu/timing.h"
 #include "memory/memory.h"
+#if WIILLR_MENU_PICTURES
+#include "wiillr/menu_frame_hook.h"
+#endif
 #include <stdio.h>
 #include <string.h>
 
@@ -43,8 +46,30 @@ static unsigned mmio_device(u32 physical) {
 static u64 read_device(CPUState* cpu, u32 address, u8 width) {
     WiiMachine* m = cpu->external_user_data;
     ++m->mmio_reads;
+    /* The Wii reset-vector memory keeps its full physical address. The
+     * normal register decoder's alias mask would destroy this high window.
+     * CPU ROM reads precede this callback, so original IOS rejects a stale
+     * GameCube ROM mapping when its context is created. */
+    u32 boot_value;
+    if(WIILLR_IOS_LLE && wii_ios_lle_read_ppc_boot(m->ios_lle,address,width,&boot_value))return boot_value;
     u32 physical = address & 0x3fffffffu;
     wii_machine_observe_register(m,cpu,physical);
+    /* GXPeekARGB/GXPeekZ address the EFB, not main RAM. The selected
+     * provider retires preceding GX work before returning a raw ARGB/depth
+     * sample. PE's alpha-read policy belongs to the CPU-facing aperture. */
+    if(physical>=0x08000000u && physical<0x0c000000u && width==4 && !(address&3) &&
+       !(physical&0x00800000u) && m->gx_peek) {
+        const u16 x=(u16)((physical>>2)&0x3ffu),y=(u16)((physical>>12)&0x3ffu);
+        const u32 depth=(physical>>22)&1u;
+        const u32 alpha=m->pe.reg[GCN_PE_ALPHAREAD>>1]&3u;
+        if(x>=640 || y>=528)return 0;
+        u32 value;
+        if((depth || alpha!=3) && m->gx_peek(m->gx_user,depth,x,y,&value)) {
+            if(!depth && alpha==0)value&=0x00ffffffu;
+            else if(!depth && alpha==1)value|=0xff000000u;
+            return value;
+        }
+    }
     const u32 gpio=physical&~0x00800000u;
     u32 hollywood_value;
     if(width==4 && wii_hollywood_read(&m->hollywood,physical,&hollywood_value))return hollywood_value;
@@ -159,6 +184,9 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
 #endif
     if(physical>=0x0c008000u && physical+width<=0x0c008000u+GCN_GP_SIZE &&
        (width==1 || width==2 || width==4 || width==8) && !(address&(width-1))) {
+#if WIILLR_MENU_PICTURES
+        if(wii_menu_frame_gather(m,cpu,address,value,width))return;
+#endif
         ++m->gx_cpu_gather_writes;m->gx_cpu_gather_bytes+=width;
         if(m->gx_native_owner) {
             ++m->gx_cpu_gather_rejected;
@@ -187,7 +215,8 @@ static void write_device(CPUState* cpu, u32 address, u64 value, u8 width) {
     WII_MMIO_CASE(EXI)
     if (physical >= 0x0d006800u && physical + width <= 0x0d006800u + GCN_EXI_REGISTER_BYTES &&
         width == 4 && !(address & 3)) {
-        gcn_exi_write(&m->exi, cpu, GCN_EXI_BASE + physical - 0x0d006800u, (u32)value, width);
+        gcn_exi_write_clock(&m->exi, cpu, GCN_EXI_BASE + physical - 0x0d006800u,
+                            (u32)value, width, GCN_RTC_WII_CORE_CLOCK_HZ);
         return;
     }
     WII_MMIO_CASE(AI)

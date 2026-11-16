@@ -27,7 +27,10 @@ public:
   enum USBEndpoint {HCI_CTRL=0,HCI_EVENT=0x81,ACL_DATA_IN=0x82,ACL_DATA_OUT=2};
   explicit BluetoothEmuDevice(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store=nullptr);
   void SetInput(const WiiBluetoothInput&);
+  void SetInput(unsigned index,const WiiBluetoothInput&);
   void PressSync();
+  void PairFirstRemote();
+  void PairRemote(unsigned index);
   System& GetSystem() {return m_system;}
   EmulationKernel& GetEmulationKernel() {return m_kernel;}
   void Submit(u32 message);
@@ -49,7 +52,7 @@ public:
   System m_system;
   EmulationKernel m_kernel{m_system};
   const u32* gpio_out;
-  std::unique_ptr<WiimoteCommon::NativeRemote> input_source;
+  std::array<std::unique_ptr<WiimoteCommon::NativeRemote>,4> input_sources;
 
   ~BluetoothEmuDevice();
 
@@ -106,6 +109,9 @@ private:
 
   u32 m_packet_count[MAX_BBMOTES] = {};
   u64 m_last_ticks = 0;
+  unsigned m_report_start = 0;
+  std::array<bool,4> m_pair_remote{},m_pair_sync_sent{},m_input_pairing{};
+  void UpdateFirstRemotePairing();
 
   static u16 GetConnectionHandle(const bdaddr_t&);
 

@@ -118,6 +118,35 @@ int main(int argc,char** argv) {
   CHECK(wii_fs_seek(nand,fd,uint32_t(-2),2)==3);
   uint8_t status[8]{};
   CHECK(wii_fs_ioctl(nand,fd,11,nullptr,0,status,8,&result) && !result && status[3]==5 && status[7]==3);
+  // File-backed FS handles accept the same global Delete operation. A
+  // failed operation preserves the open file's position and output guards.
+  {
+    std::array<uint8_t,64> target{};std::memcpy(target.data(),"/tmp/ioctl-victim",18);
+    std::array<uint8_t,8> guard;guard.fill(0x5a);const auto unchanged=guard;
+    int32_t missing=0;CHECK(wii_fs_ioctl(nand,-1,7,target.data(),64,nullptr,0,&missing) && missing<0);
+    CHECK(wii_fs_ioctl(nand,fd,7,target.data(),64,guard.data(),guard.size(),&result) && result==missing && guard==unchanged);
+    std::array<uint8_t,74> create{};std::memcpy(create.data()+6,target.data(),64);create[70]=3;
+    CHECK(wii_fs_ioctl(nand,-1,9,create.data(),create.size(),nullptr,0,&result) && !result);
+    CHECK(wii_fs_ioctl(nand,0x7fff,7,target.data(),64,guard.data(),guard.size(),&result) && result==-101 && fs::exists(root/"tmp/ioctl-victim") && guard==unchanged);
+    CHECK(wii_fs_ioctl(nand,fd,7,target.data(),36,guard.data(),guard.size(),&result) && result==-101 && fs::exists(root/"tmp/ioctl-victim") && guard==unchanged);
+    CHECK(wii_fs_ioctl(nand,fd,7,target.data(),64,guard.data(),guard.size(),&result) && !result && !fs::exists(root/"tmp/ioctl-victim") && guard==unchanged);
+    CHECK(wii_fs_ioctl(nand,fd,11,nullptr,0,status,8,&result) && !result && status[3]==5 && status[7]==3);
+    create.fill(0);std::memcpy(create.data()+6,"/ctx",5);create[70]=create[71]=create[72]=3;
+    CHECK(wii_fs_ioctl(nand,-1,9,create.data(),create.size(),nullptr,0,&result) && !result);
+    create.fill(0);std::memcpy(create.data()+6,"/locked",8);create[70]=3;
+    CHECK(wii_fs_ioctl(nand,-1,3,create.data(),create.size(),nullptr,0,&result) && !result);
+    create.fill(0);std::memcpy(create.data()+6,"/locked/victim",15);create[70]=3;
+    CHECK(wii_fs_ioctl(nand,-1,9,create.data(),create.size(),nullptr,0,&result) && !result);
+    auto* restricted=wii_fs_mount(path.c_str(),0x2000,0x2222);CHECK(restricted);
+    const auto context=wii_fs_open(restricted,"/ctx",1);CHECK(context>=0);
+    target.fill(0);std::memcpy(target.data(),"/locked/victim",15);
+    int32_t denied=0;CHECK(wii_fs_ioctl(restricted,-1,7,target.data(),64,nullptr,0,&denied) && denied==-102);
+    CHECK(wii_fs_ioctl(restricted,context,7,target.data(),64,guard.data(),guard.size(),&result) && result==denied && fs::exists(root/"locked/victim") && guard==unchanged);
+    CHECK(!wii_fs_close(restricted,context));wii_fs_unmount(restricted);
+    CHECK(wii_fs_ioctl(nand,-1,7,target.data(),64,nullptr,0,&result) && !result);
+    target.fill(0);std::memcpy(target.data(),"/locked",8);CHECK(wii_fs_ioctl(nand,-1,7,target.data(),64,nullptr,0,&result) && !result);
+    target.fill(0);std::memcpy(target.data(),"/ctx",5);CHECK(wii_fs_ioctl(nand,-1,7,target.data(),64,nullptr,0,&result) && !result);
+  }
   CHECK(!wii_fs_ioctl(nand,-1,10,params.data(),params.size(),nullptr,0,&result));
   CHECK(wii_fs_open(nand,"/../outside",3)==-101 && wii_fs_open(nand,"/NUL",3)==-101);
   CHECK(!wii_fs_close(nand,fd) && wii_fs_close(nand,fd)==-101);
@@ -138,11 +167,14 @@ int main(int argc,char** argv) {
   wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.fs=nand;
   const uint32_t message=0x10000200,buffer=0x10000400;
   const auto exchange=[&]() {
-    wii_ipc_write(&ipc,4,0x36,cpu.cycles);wii_ipc_write(&ipc,0,message,cpu.cycles);
+    wii_ipc_write(&ipc,4,0x36,cpu.cycles);
+    wii_ipc_write(&ipc,0x30,0x40000000u,cpu.cycles); /* complete the receiving ISR */
+    wii_ipc_write(&ipc,0,message,cpu.cycles);
     wii_ipc_write(&ipc,4,0x31,cpu.cycles);
     if(!wii_ios_native_tick(&ios,&ipc,&cpu))return false;cpu.cycles+=6000;
     if(!wii_ios_native_tick(&ios,&ipc,&cpu))return false;
-    wii_ipc_write(&ipc,4,0x32,cpu.cycles);cpu.cycles+=6000;
+    wii_ipc_write(&ipc,4,0x32,cpu.cycles);
+    wii_ipc_write(&ipc,0x30,0x40000000u,cpu.cycles);cpu.cycles+=6000;
     return wii_ios_native_tick(&ios,&ipc,&cpu);
   };
   std::memcpy(cpu.ram+0x800,"/save",6);
@@ -181,6 +213,31 @@ int main(int argc,char** argv) {
     mem_write32_cia(&cpu,message+20,outputs,0);mem_write32_cia(&cpu,message+24,0x1000,0);
   };
   ios.descriptors[2]=10;
+  // Original NCDLockWirelessDriver closes its IPC descriptor immediately;
+  // Unlock opens a different descriptor and supplies the opaque handle.
+  mem_write32_cia(&cpu,0x1000,buffer,0);mem_write32_cia(&cpu,0x1004,32,0);
+  mem_write32_cia(&cpu,buffer+8,0xabcdef01,0);
+  es_request(1,0,1);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer,0));
+  const auto wireless_lock=mem_read32_cia(&cpu,buffer+4,0);
+  CHECK(wireless_lock && wireless_lock<0x80000000u && ios.ncd_lock==wireless_lock && mem_read32_cia(&cpu,buffer+8,0)==0xabcdef01);
+  mem_write32_cia(&cpu,message,2,0);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !ios.descriptors[2] && ios.ncd_lock==wireless_lock);
+  std::memcpy(cpu.ram+0x800,"/dev/net/ncd/manage",sizeof "/dev/net/ncd/manage");
+  mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,0x800,0);mem_write32_cia(&cpu,message+16,0,0);
+  CHECK(exchange() && mem_read32_cia(&cpu,message+4,0)==1 && ios.descriptors[1]==10);
+  es_request(1,0,1);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && int32_t(mem_read32_cia(&cpu,buffer,0))==-4 && ios.ncd_lock==wireless_lock);
+  mem_write32_cia(&cpu,0x1000,buffer+64,0);mem_write32_cia(&cpu,0x1004,4,0);
+  mem_write32_cia(&cpu,0x1008,buffer,0);mem_write32_cia(&cpu,0x100c,32,0);
+  mem_write32_cia(&cpu,buffer+64,wireless_lock+1,0);
+  es_request(2,1,1);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && int32_t(mem_read32_cia(&cpu,buffer,0))==-3 && ios.ncd_lock==wireless_lock);
+  mem_write32_cia(&cpu,buffer+64,wireless_lock,0);
+  es_request(2,1,1);mem_write32_cia(&cpu,message+8,1,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer,0) && !ios.ncd_lock);
+  mem_write32_cia(&cpu,message,2,0);mem_write32_cia(&cpu,message+8,1,0);CHECK(exchange() && !ios.descriptors[1]);
+  ios.descriptors[2]=10;
   mem_write32_cia(&cpu,0x1000,buffer,0);mem_write32_cia(&cpu,0x1004,4,0);
   mem_write32_cia(&cpu,0x1008,buffer+32,0);mem_write32_cia(&cpu,0x100c,6,0);
   mem_write32_cia(&cpu,buffer+36,0x11223344,0);
@@ -195,9 +252,46 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,buffer+32,0x11223344,0);mem_write32_cia(&cpu,buffer+36,0xabcdef01,0);
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer+32,0));
-  CHECK(!cpu.mem2[0x2004] && !cpu.mem2[0x2008] && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
+  CHECK(cpu.mem2[0x2004]==2 && cpu.mem2[0x2008]==0x87 && !cpu.mem2[0x2008+2021] &&
+        !(cpu.mem2[0x2008]&0x20) && mem_read32_cia(&cpu,buffer+36,0)==0xabcdef01);
+  // Upgrade only the old byte-exact empty generated profile, never a partly
+  // configured, disabled or unselected owner connection.
+  std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> legacy_empty{};
+  std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(legacy_empty.data()),legacy_empty.size());
+  CHECK(!wii_fs_network_config(nand,legacy_empty.data()) && legacy_empty[4]==2 && legacy_empty[8]==0x87);
   std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> network{};network[4]=1;network.back()=0x5a;
   std::ofstream(root/"shared2/sys/net/02/config.dat",std::ios::binary).write(reinterpret_cast<const char*>(network.data()),network.size());
+  es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
+  // Selected virtual association follows the live SetConfig working copy;
+  // it neither overwrites NAND nor associates another saved external SSID.
+  cpu.mem2[0x2008]=0x86;std::memcpy(cpu.mem2+0x2008+1988,"wiillr",6);cpu.mem2[0x2008+2021]=6;
+  es_request(4,1,1);mem_write32_cia(&cpu,message+8,2,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  mem_write32_cia(&cpu,0x1000,buffer+64,0);mem_write32_cia(&cpu,0x1004,8,0);
+  es_request(7,0,1);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !mem_read32_cia(&cpu,buffer+64,0) &&
+        mem_read32_cia(&cpu,buffer+68,0)==(wii_network_link(ios.network)?5u:4u));
+  cpu.mem2[0x2008+1988]='x';
+  mem_write32_cia(&cpu,0x1000,0x10002000,0);mem_write32_cia(&cpu,0x1004,WIILLR_NETWORK_CONFIG_SIZE,0);
+  es_request(4,1,1);mem_write32_cia(&cpu,message+8,2,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  mem_write32_cia(&cpu,0x1000,buffer+64,0);mem_write32_cia(&cpu,0x1004,8,0);
+  es_request(7,0,1);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && mem_read32_cia(&cpu,buffer+68,0)==4);
+  std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> association_persisted{};
+  CHECK(!wii_fs_network_config(nand,association_persisted.data()) && association_persisted==network);
+  mem_write32_cia(&cpu,0x1000,0x10002000,0);mem_write32_cia(&cpu,0x1004,WIILLR_NETWORK_CONFIG_SIZE,0);
+  es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
+  // NCDiSetConfig changes the working copy only; ReadConfig reloads NAND.
+  cpu.mem2[0x2000+network.size()-1]=0x77;
+  es_request(4,1,1);mem_write32_cia(&cpu,message+8,2,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0));
+  std::array<uint8_t,WIILLR_NETWORK_CONFIG_SIZE> persisted{};
+  CHECK(!wii_fs_network_config(nand,persisted.data()) && persisted==network);
+  std::memset(cpu.mem2+0x2000,0,network.size());mem_write32_cia(&cpu,0x100c,8,0);
+  es_request(3,0,2);mem_write32_cia(&cpu,message+8,2,0);
+  CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && cpu.mem2[0x2000+network.size()-1]==0x77 &&
+        !mem_read32_cia(&cpu,buffer+32,0) && !mem_read32_cia(&cpu,buffer+36,0));
+  mem_write32_cia(&cpu,0x100c,32,0);mem_write32_cia(&cpu,buffer+36,0xabcdef01,0);
   es_request(5,0,2);mem_write32_cia(&cpu,message+8,2,0);
   CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && !std::memcmp(cpu.mem2+0x2000,network.data(),network.size()));
   const auto ncd_write=[&]() {
@@ -464,7 +558,22 @@ int main(int argc,char** argv) {
   params.fill(0);params[2]=0x10;params[3]=1;params[4]=0x33;params[5]=0x44;
   std::memcpy(params.data()+6,"/uid-test",10);params[70]=3;
   CHECK(wii_fs_ioctl(nand,-1,5,params.data(),params.size(),nullptr,0,&result) && !result);wii_fs_unmount(nand);
+  // Two global Delete calls through file handles retain their opener's
+  // authority across SetUID; neither authority follows the new live UID.
+  nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  params.fill(0);std::memcpy(params.data()+6,"/uid-ctx",9);params[70]=params[71]=params[72]=3;
+  CHECK(wii_fs_ioctl(nand,-1,9,params.data(),params.size(),nullptr,0,&result) && !result);
+  params.fill(0);std::memcpy(params.data()+6,"/captured",10);params[70]=3;
+  CHECK(wii_fs_ioctl(nand,-1,3,params.data(),params.size(),nullptr,0,&result) && !result);
+  params[2]=0x10;params[5]=7;
+  CHECK(wii_fs_ioctl(nand,-1,5,params.data(),params.size(),nullptr,0,&result) && !result);
+  for(const char* victim:{"/captured/first","/captured/second"}) {
+    params.fill(0);std::memcpy(params.data()+6,victim,std::strlen(victim)+1);params[70]=3;
+    CHECK(wii_fs_ioctl(nand,-1,9,params.data(),params.size(),nullptr,0,&result) && !result);
+  }
+  wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0x1000,7);CHECK(nand && wii_fs_open(nand,"/uid-test",1)==-102);
+  const auto menu_context=wii_fs_open(nand,"/uid-ctx",1);CHECK(menu_context>=0);
   wii_ios_native_init(&ios);wii_ipc_init(&ipc);ios.fs=nand;
   std::memcpy(cpu.ram+0x800,"/dev/es",8);
   mem_write32_cia(&cpu,message,1,0);mem_write32_cia(&cpu,message+12,0x800,0);mem_write32_cia(&cpu,message+16,0,0);
@@ -473,6 +582,9 @@ int main(int argc,char** argv) {
   mem_write32_cia(&cpu,0x1100,0x10001,0);mem_write32_cia(&cpu,0x1104,0x55555555,0);
   es_request(0x21,1,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && wii_fs_uid(nand)==0x1001);
   CHECK(fs::file_size(root/"sys/uid.sys")==36);
+  std::array<uint8_t,64> captured_path{};std::memcpy(captured_path.data(),"/captured/first",16);
+  CHECK(wii_fs_ioctl(nand,menu_context,7,captured_path.data(),64,nullptr,0,&result) && !result && !fs::exists(root/"captured/first"));
+  const auto target_context=wii_fs_open(nand,"/uid-ctx",1);CHECK(target_context>=0);
   const auto own_save=wii_fs_open(nand,"/uid-test",1);CHECK(own_save>=0);CHECK(!wii_fs_close(nand,own_save));
   params.fill(0);std::memcpy(params.data()+6,"/tmp/uid-safe",14);params[70]=3;
   CHECK(wii_fs_ioctl(nand,-1,9,params.data(),params.size(),nullptr,0,&result) && !result);
@@ -486,13 +598,20 @@ int main(int argc,char** argv) {
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-1017 && wii_fs_uid(nand)==0x1001);
   es_request(0x21,1,0);CHECK(exchange() && !mem_read32_cia(&cpu,message+4,0) && wii_fs_uid(nand)==0x1000);
   CHECK(wii_fs_open(nand,"/uid-test",1)==-102);
+  captured_path.fill(0);std::memcpy(captured_path.data(),"/captured/second",17);
+  CHECK(wii_fs_ioctl(nand,target_context,7,captured_path.data(),64,nullptr,0,&result) && result==-102 && fs::exists(root/"captured/second"));
+  CHECK(!wii_fs_close(nand,target_context));
+  CHECK(wii_fs_ioctl(nand,target_context,7,captured_path.data(),64,nullptr,0,&result) && result==-101 && fs::exists(root/"captured/second"));
+  CHECK(wii_fs_ioctl(nand,menu_context,7,captured_path.data(),64,nullptr,0,&result) && !result && !fs::exists(root/"captured/second"));
+  CHECK(!wii_fs_close(nand,menu_context));
   mem_write32_cia(&cpu,0x1104,99,0);es_request(0x21,1,0);
   CHECK(exchange() && int32_t(mem_read32_cia(&cpu,message+4,0))==-106 && wii_fs_uid(nand)==0x1000);
   CHECK(fs::file_size(root/"sys/uid.sys")==36);wii_fs_unmount(nand);
   nand=wii_fs_mount(path.c_str(),0x1001,0x3344);CHECK(nand && wii_fs_boot_title(nand,&boot_title) && boot_title==0x0001000155555555ull);
-  wii_fs_unmount(nand);cpu_free(&cpu);
+  wii_ios_native_destroy(&ios);wii_fs_unmount(nand);cpu_free(&cpu);
   // Only this exclusively created, flat disposable fixture is removed.
   CHECK(fs::remove(root/"uid-test"));
+  CHECK(fs::remove(root/"uid-ctx"));CHECK(fs::remove(root/"captured"));
   CHECK(fs::remove(root/".wiillr-network-mac"));
   CHECK(fs::remove(root/"shared2/sys/net/02/config.dat"));CHECK(fs::remove(root/"shared2/sys/net/02"));
   CHECK(fs::remove(root/"shared2/sys/net"));CHECK(fs::remove(root/"shared2/sys"));CHECK(fs::remove(root/"shared2"));

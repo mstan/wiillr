@@ -9,15 +9,32 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#if defined(_WIN32) && defined(_WIN64)
+static unsigned physical_calls,submit_calls;
+static bool submit_fails,materialize_fails;
+static int physical(u32 events,u32 token){assert(!events && !token);++physical_calls;return 1;}
+static int submitted(void){++submit_calls;return !submit_fails;}
+static const GcWiiNativeFrameApi frame={.abi=GC_WII_NATIVE_FRAME_ABI,.complete=physical};
+static const GcWiiNativeOutputApi output={GC_WII_NATIVE_OUTPUT_ABI,submitted};
+#if defined(_WIN32) && defined(_WIN64) && WIILLR_NATIVE_OUTPUT
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 static struct {GcnllrNativeGxCopy copy;u8 value;} copies[16];
 static WiiGx gx;
 static volatile u32 materials[16],releases[16],dirty;
+static DWORD WINAPI foreign(void* ignored) {
+    (void)ignored;
+    assert(!wii_gx_output_complete(&gx,&frame));
+    assert(!wii_gx_output_bind_completion(&gx,&output));
+    return 0;
+}
 void gcn_native_code_content_dirty(u32 address,u32 size){(void)address;(void)size;++dirty;}
 static int materialize(u64 token) {
     assert(token<16);++materials[token];const GcnllrNativeGxCopy* c=&copies[token].copy;
+    if(c->address<gx.cpu->ram_size) {
+        assert(!wii_gx_output_complete(&gx,&frame));
+        assert(!wii_gx_output_bind_completion(&gx,&output));
+    }
+    if(materialize_fails)return 0;
     u8* base=c->address>=0x10000000u?gx.cpu->mem2:gx.cpu->ram;
     const u32 offset=c->address>=0x10000000u?c->address-0x10000000u:c->address;
     for(u32 row=0;row<c->rows;row++)memset(base+offset+row*c->stride,copies[token].value,c->row_bytes);
@@ -35,9 +52,27 @@ int main(void) {
     cpu.ram=gcn_mem1_alloc(cpu.ram_size);assert(cpu.ram);
     cpu.mem2=calloc(1,cpu.mem2_size);assert(cpu.mem2);memset(cpu.ram,0xe5,cpu.ram_size);
     const GcnllrNativeGxApi api={.abi=GCNLLR_NATIVE_GX_ABI,.materialize_copy=materialize,.release_copy=release,.present_copy=present};
-    gx=(WiiGx){.cpu=&cpu,.api=&api};assert(wii_gx_output_open(&gx));
+    gx=(WiiGx){.cpu=&cpu,.api=&api};
+    assert(wii_gx_output_complete(&gx,&frame)==1 && physical_calls==1);
+    assert(!wii_gx_output_bind_completion(&gx,&output));
+    assert(wii_gx_output_open(&gx));
+    assert(wii_gx_output_complete(&gx,&frame)==1 && physical_calls==2); /* Unbound extension. */
+    GcWiiNativeOutputApi bad=output;bad.abi++;
+    assert(!wii_gx_output_bind_completion(&gx,&bad));bad=output;bad.submit=NULL;
+    assert(!wii_gx_output_bind_completion(&gx,&bad));
+    assert(wii_gx_output_bind_completion(&gx,&output));
+    assert(wii_gx_output_complete(&gx,&frame)==1 && submit_calls==1 && physical_calls==2);
+    HANDLE other_thread=CreateThread(NULL,0,foreign,NULL,0,NULL);assert(other_thread);
+    assert(WaitForSingleObject(other_thread,INFINITE)==WAIT_OBJECT_0);CloseHandle(other_thread);
+    assert(submit_calls==1 && physical_calls==2);
+    u8* const original_ram=cpu.ram;cpu.ram+=4096;
+    assert(!wii_gx_output_complete(&gx,&frame));cpu.ram=original_ram;
+    CPUState other_cpu=cpu;gx.cpu=&other_cpu;
+    assert(!wii_gx_output_complete(&gx,&frame));gx.cpu=&cpu;
+    assert(wii_gx_output_complete(&gx,&frame)==1 && submit_calls==2 && physical_calls==2);
     cpu.reserve_valid=true;cpu.reserve_addr=0x80001000;
     publish(1,0x1000,32,2,64,0x41);assert(!cpu.reserve_valid);
+    assert(wii_gx_output_complete(&gx,&frame)==1 && !materials[1] && !releases[1]);
     assert(wii_gx_output_pending(&gx,0xc0001000,1));
     volatile u8* raw=cpu.ram;
     errno=ERANGE;SetLastError(ERROR_INVALID_PARAMETER);
@@ -67,10 +102,34 @@ int main(void) {
     assert(wii_gx_output_prepare(&gx,0x80005fff,2));
     assert(VirtualQuery(cpu.ram+0x6000,&info,sizeof info) && info.Protect==PAGE_READWRITE);
     assert(materials[10]==1 && releases[10]==1 && raw[0x6020]==0x4a && raw[0x6000]==0xe5);
+    const unsigned before_submit=submit_calls;
+    submit_fails=true;
+    assert(!wii_gx_output_complete(&gx,&frame) && submit_calls==before_submit+1 && physical_calls==2);
+    submit_fails=false;
+    assert(!wii_gx_output_complete(&gx,&frame) && submit_calls==before_submit+1 && physical_calls==2);
+    assert(!wii_gx_output_bind_completion(&gx,&output));
     assert(wii_gx_output_close(&gx));assert(raw[0x4003]==0x48 && materials[8]==1 && releases[8]==1);
     assert(gx.copies==10 && dirty>0 && !gx.output);
+    assert(wii_gx_output_complete(&gx,&frame)==1 && physical_calls==3);
+    assert(wii_gx_output_open(&gx)); /* A new owner cannot retain the old callback. */
+    assert(wii_gx_output_complete(&gx,&frame)==1 && physical_calls==4);
+    assert(wii_gx_output_bind_completion(&gx,NULL));
+    assert(wii_gx_output_bind_completion(&gx,&output));
+    publish(11,0x7020,32,1,32,0x4b);materialize_fails=true;
+    assert(!wii_gx_output_prepare(&gx,0x7020,4));
+    assert(!wii_gx_output_complete(&gx,&frame) && physical_calls==4 && submit_calls==before_submit+1);
+    materialize_fails=false;assert(wii_gx_output_close(&gx));
     gcn_mem1_release(cpu.ram);free(cpu.mem2);return 0;
 }
 #else
-int main(void){WiiGx gx={0};assert(!wii_gx_output_open(&gx));assert(wii_gx_output_close(&gx));return 0;}
+int main(void){
+    WiiGx gx={0};assert(!wii_gx_output_open(&gx));
+    assert(!wii_gx_output_bind_completion(&gx,&output));
+    assert(wii_gx_output_complete(&gx,&frame)==1 && physical_calls==1 && !submit_calls);
+    assert(!wii_gx_output_complete(NULL,&frame));
+    GcWiiNativeFrameApi bad=frame;bad.abi++;
+    assert(!wii_gx_output_complete(&gx,&bad));bad=frame;bad.complete=NULL;
+    assert(!wii_gx_output_complete(&gx,&bad));
+    assert(wii_gx_output_close(&gx));return 0;
+}
 #endif

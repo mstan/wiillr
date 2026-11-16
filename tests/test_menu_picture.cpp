@@ -89,6 +89,18 @@ void units() {
     require(out.vertices[0].uv[0]==0 && out.vertices[0].uv[1]==1,"Native reverse quarter-turn texture rotation");
     pf(mem+40,180);require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error),error);
     require(out.vertices[0].uv[0]==1 && out.vertices[0].uv[1]==1,"Native half-turn texture rotation");
+    for(float angle:{30.f,-37.f,45.f,135.f,222.5f,1087.5f}) {
+        pf(mem+32,.25f);pf(mem+36,.5f);pf(mem+40,angle);pf(mem+44,2);pf(mem+48,.5f);
+        require(wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !out.needs_program,error);
+        const double radians=double(angle)*0.017453292519943295;
+        constexpr double u[]{0,1,1,0},v[]{0,0,1,1};
+        for(unsigned i=0;i<4;++i) {
+            const double x=2*(u[i]-.5),y=.5*(v[i]-.5);
+            require(std::abs(out.vertices[i].uv[0]-(.75+std::cos(radians)*x-std::sin(radians)*y))<2e-6 &&
+                    std::abs(out.vertices[i].uv[1]-(1.+std::sin(radians)*x+std::cos(radians)*y))<2e-6,
+                    "Named material uses centered arbitrary-angle scale/rotation/translation");
+        }
+    }
     pf(mem+32,.25f);pf(mem+36,.5f);pf(mem+40,0);pf(mem+44,2);pf(mem+48,.5f);
     const GcWiiNativeRenderApi api{1,create,destroy,draw,status};auto* renderer=wii_menu_native_create(memory,&api);require(renderer,"Native provider creation");
     require(wii_menu_native_draw_picture(renderer,pane,info,&view)==1,"Initial native picture draw");
@@ -143,8 +155,8 @@ void units() {
     const auto layer_uploads=uploads;
     require(wii_menu_native_draw_picture(layered,pane,info,&view)==1 && last_layers.weights[0][0]==12,"Layered material native submission");
     pf(mem+120,1.5f);require(wii_menu_native_draw_picture(layered,pane,info,&view)==1 && uploads==layer_uploads+1 && last_layers.uv[0][1][2]==-.5f,"Overlay animation must reuse base geometry");
-    const auto layers_previous=out;ram[0x8bc+20]=0xff;
-    require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&layers_previous,sizeof out),"Different layer equation must reject atomically");
+    const auto layers_previous=out;ram[0x8bc+24]=0x78;
+    require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&layers_previous,sizeof out),"Invalid layer alpha selector must reject atomically");
     wii_menu_native_destroy(layered);
     fixture();view=camera();
     constexpr uint32_t shadow_count=(1u<<28)|(1u<<24)|(1u<<20)|(1u<<14)|(1u<<9)|(1u<<8)|(1u<<7)|(1u<<6)|(1u<<5);
@@ -210,8 +222,8 @@ void units() {
         out.vertices[0].color[0]==1 && out.vertices[0].color[1]==0 &&
         out.vertices[1].color[0]==0 && out.vertices[1].color[1]==1 && out.vertices[0].color[3]==1,
         "Channel transition retains pane RGB without multiplying pane alpha");
-    const auto mask_previous=out;ram[0x884+6]=1;
-    require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&mask_previous,sizeof out),"Unsupported mask operation must reject atomically");
+    const auto mask_previous=out;ram[0x884+6]=2;
+    require(!wii_menu_picture_prepare(memory,pane,info,&view,&out,error,sizeof error) && !std::memcmp(&out,&mask_previous,sizeof out),"Invalid mask arithmetic must reject atomically");
     // The same one-image allocation can select the authored threshold effect.
     fixture();view=camera();const auto one_pair=mask_count-(1u<<28)-(1u<<24)-(1u<<20);
     p32(material+0x4c,one_pair);p32(material+0x50,one_pair);p32(material+0x58,mem);

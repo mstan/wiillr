@@ -4,6 +4,7 @@
 #include <gcnllr/native_render.h>
 #include <gcnllr/native_gui.h>
 #include <gcnllr/native_gui_effects.h>
+#include <gcnllr/native_gui_program.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,6 +45,9 @@ typedef struct WiiMenuPicture {
     GcWiiNativeGuiAddDraw addition;
     float extra_uv[4][2],primary_uv[2][3];
     uint8_t paired_uv;
+    uint8_t needs_program,program_extra_count;
+    GcWiiNativeGuiProgramDraw program;
+    float program_extra_uv[4][7][2];
 } WiiMenuPicture;
 typedef struct WiiMenuWindow {
     WiiMenuPicture quads[9]; /* content, then the authored four/eight borders */
@@ -69,6 +73,7 @@ int wii_menu_native_gui(WiiMenuNative*,const GcWiiNativeGuiApi*);
 int wii_menu_native_gui_layers(WiiMenuNative*,const GcWiiNativeGuiLayersApi*);
 int wii_menu_native_gui_mask(WiiMenuNative*,const GcWiiNativeGuiMaskApi*);
 int wii_menu_native_gui_effects(WiiMenuNative*,const GcWiiNativeGuiEffectsApi*);
+int wii_menu_native_gui_program(WiiMenuNative*,const GcWiiNativeGuiProgramApi*);
 void wii_menu_native_destroy(WiiMenuNative*);
 int wii_menu_native_draw_picture(WiiMenuNative*,uint32_t picture,uint32_t draw_info,const WiiMenuView*);
 int wii_menu_native_draw_window(WiiMenuNative*,uint32_t window,uint32_t draw_info,const WiiMenuView*);

@@ -19,9 +19,14 @@
 #define GRAPHICS_ARG 0x810897c0u
 static struct {
     WiiGx* owner;const GcWiiNativeRenderApi* render;const GcWiiNativeFrameApi* frame;const GcWiiNativeCaptureApi* capture;
-    WiiMenuView view;float model[12];bool active,bad,projection_ready;u32 object;u64 mesh;
+    const GcWiiNativeDisplayApi* display;u32 display_aspect;bool display_known;
+    WiiMenuView view,keyboard_view;float model[12],keyboard_model[12];bool active,bad,projection_ready,keyboard;u32 object;u64 mesh;
     GcWiiNativeVertex vertices[4];u64 initializers,begins,copies,completions,views,quads,isolated_buffers,uncovered,failed,fifo_start,fifo_bytes;
     bool transform_verified,transform_sampled;u64 transforms,transform_declines;
+    bool keyboard_drawn,keyboard_visible;u64 keyboard_draws;
+    bool sdk_verified,sdk_initializing;u32 sdk_fifo,sdk_size,sdk_thread;
+    struct {u32 word,remaining;u8 command,header;} sdk_setup;
+    u64 sdk_init_writes,sdk_texture_writes;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -36,6 +41,7 @@ static bool identity(CPUState* cpu,u32 address,u32 size,u64 hash) {
     const u8* p=bytes(cpu,address,size);if(!p)return false;u64 h=UINT64_C(14695981039346656037);
     for(u32 i=0;i<size;i++){h^=p[i];h*=UINT64_C(1099511628211);}return h==hash;
 }
+#include "menu_gx_state.inc"
 #if WIILLR_MENU_TRANSFORM
 /* These are the exact original native pages exercised by the certified
  * zero-angle CalculateMtx stage, including its SDK matrix/rotation callees.
@@ -56,6 +62,8 @@ static bool transform_identity(CPUState* cpu) {
 }
 #endif
 void wii_menu_frame_invalidate(u32 address,u32 size) {
+    const u64 sdk_begin=address&0x1fffffffu,sdk_end=sdk_begin+size;
+    if(sdk_begin<0x1540000u+0x10000u && sdk_end>0x1540000u)state.sdk_verified=false;
 #if WIILLR_MENU_TRANSFORM
     const u64 begin=address&0x1fffffffu,end=begin+size;
     for(u32 i=0;i<sizeof transform_pages/sizeof *transform_pages;i++) {
@@ -70,6 +78,92 @@ static int stop(CPUState* cpu,const char* why,bool backend) {
     if(backend)++state.failed;else ++state.uncovered;
     fprintf(stderr,"Native Menu frame %s: %s\n",backend?"failed":"unsupported",why);cpu->halted=true;return 1;
 }
+/* Preserve the enclosing native camera across the original keyboard traversal.
+ * Its view getters/setters below share that typed camera with other settings
+ * overlays, including the Sensor Bar calibration screen. */
+static bool keyboard_begin(CPUState* cpu) {
+    (void)cpu;
+    if(state.keyboard || !state.active || !state.projection_ready || !state.render || !state.render->status)return false;
+    GcWiiNativeRenderStatus status={0};state.render->status(&status);state.keyboard_draws=status.draws;
+    state.keyboard_view=state.view;memcpy(state.keyboard_model,state.model,sizeof state.model);
+    state.keyboard=true;return true;
+}
+static bool keyboard_end(void) {
+    if(!state.keyboard || !state.render || !state.render->status)return false;
+    /* The original wrapper runs even while its keyboard is hidden. This
+     * service counter advances synchronously only after a successful typed
+     * draw (including GUI/text), never on deferred GPU completion. */
+    GcWiiNativeRenderStatus status={0};state.render->status(&status);
+    if(status.draws>state.keyboard_draws)state.keyboard_drawn=true;
+    state.view=state.keyboard_view;memcpy(state.model,state.keyboard_model,sizeof state.model);state.keyboard=false;
+    return true;
+}
+static void keyboard_frame_begin(void){state.keyboard_drawn=false;}
+static void keyboard_frame_end(void){state.keyboard_visible=state.keyboard_drawn;}
+static bool overlay_scissor(CPUState* cpu) {
+    const u32 x=cpu->gpr[3],y=cpu->gpr[4],width=cpu->gpr[5],height=cpu->gpr[6];
+    if(x>1705 || y>1705 || !width || !height || width>1706-x || height>1706-y)return false;
+    const u32 sdk=word(cpu,cpu->gpr[2]-28136u);
+    if(state.bad || !sdk || !bytes(cpu,sdk,0x600))return false;
+    mem_write32(cpu,sdk+0x148,(word(cpu,sdk+0x148)&~0x007ff7ffu)|((x+342)<<12)|(y+342));
+    mem_write32(cpu,sdk+0x14c,(word(cpu,sdk+0x14c)&~0x007ff7ffu)|((x+width+341)<<12)|(y+height+341));
+    mem_write16(cpu,sdk+2,0);
+    state.view.clip_x=x;state.view.clip_y=y;state.view.clip_width=width;state.view.clip_height=height;
+    return !state.bad;
+}
+static bool overlay_projection(CPUState* cpu,bool get) {
+    const u32 output=cpu->gpr[3];
+    if(get) {
+        if(!bytes(cpu,output,28))return false;
+        const bool ortho=state.view.projection[15]==1;
+        store_real(cpu,output,ortho?1:0);
+        const u32 indices[6]={0,ortho?3:2,5,ortho?7:6,10,11};
+        for(u32 i=0;i<6;i++)store_real(cpu,output+4+i*4,state.view.projection[indices[i]]);
+    }else {
+        const u32 type=cpu->gpr[4];if(type>1 || (cpu->fpscr&3u))return false;
+        float matrix[16];for(u32 i=0;i<16;i++)matrix[i]=real(cpu,output+i*4);
+        if(state.bad)return false;
+        memset(state.view.projection,0,sizeof state.view.projection);
+        const u32 indices[6]={0,type?3:2,5,type?7:6,10,11};
+        for(u32 i=0;i<6;i++)state.view.projection[indices[i]]=matrix[indices[i]];
+        if(type)state.view.projection[15]=1;else state.view.projection[14]=-1;
+    }
+    return !state.bad;
+}
+static bool overlay_viewport(CPUState* cpu,bool get) {
+    float values[6]={state.view.x,state.view.y,state.view.width,state.view.height,state.view.near_depth,state.view.far_depth};
+    if(get) {
+        if(!bytes(cpu,cpu->gpr[3],sizeof values))return false;
+        for(u32 i=0;i<6;i++)store_real(cpu,cpu->gpr[3]+i*4,values[i]);
+    }else {
+        if(cpu->fpscr&3u)return false;
+        for(u32 i=0;i<6;i++){values[i]=(float)cpu->fpr[i+1];if(!isfinite(values[i]))return false;}
+        if(values[2]<=0 || values[3]<=0 || values[4]<0 || values[5]>1 || values[4]>values[5])return false;
+        state.view.x=values[0];state.view.y=values[1];state.view.width=values[2];state.view.height=values[3];
+        state.view.near_depth=values[4];state.view.far_depth=values[5];
+    }
+    return !state.bad;
+}
+static bool overlay_projection_vector(CPUState* cpu) {
+    const u32 input=cpu->gpr[3];if(cpu->fpscr&3u)return false;
+    const float type=real(cpu,input);float values[6];
+    for(u32 i=0;i<6;i++)values[i]=real(cpu,input+4+i*4);
+    if(state.bad)return false;
+    const bool ortho=type!=0;const u32 indices[6]={0,ortho?3:2,5,ortho?7:6,10,11};
+    memset(state.view.projection,0,sizeof state.view.projection);
+    for(u32 i=0;i<6;i++)state.view.projection[indices[i]]=values[i];
+    if(ortho)state.view.projection[15]=1;else state.view.projection[14]=-1;
+    return true;
+}
+static bool overlay_depth(CPUState* cpu) {
+    if(cpu->gpr[3]>1 || cpu->gpr[4]>7 || cpu->gpr[5]>1)return false;
+    const u32 sdk=word(cpu,cpu->gpr[2]-28136u);
+    if(state.bad || !sdk || !bytes(cpu,sdk,0x600))return false;
+    const u32 z=cpu->gpr[3]|(cpu->gpr[4]<<1)|(cpu->gpr[5]<<4);
+    mem_write32(cpu,sdk+0x228,(word(cpu,sdk+0x228)&~31u)|z);mem_write16(cpu,sdk+2,0);
+    state.view.depth_flags=(cpu->gpr[3]?GC_WII_NATIVE_DEPTH_TEST:0)|(cpu->gpr[5]?GC_WII_NATIVE_DEPTH_WRITE:0);state.view.depth_func=cpu->gpr[4];
+    return !state.bad;
+}
 static bool mode(CPUState* cpu,u32 object,u32* output) {
     if(!object || (object&3))return false;
     const u32 p=word(cpu,object);if(!p || (p&3) || !bytes(cpu,p,0x3c))return false;
@@ -79,6 +173,14 @@ static bool mode(CPUState* cpu,u32 object,u32* output) {
 }
 static bool set_viewport(CPUState* cpu,u32 object) {
     u32 p;if(!mode(cpu,object,&p))return false;
+    const u32 aspect=word(cpu,object+0x10);if(state.bad || aspect>1)return false;
+    if(state.display && (!state.display_known || state.display_aspect!=aspect)) {
+        /* The original Menu selects its own anamorphic layout. Presentation
+         * honors that mode without changing guest pixels or window geometry. */
+        if(!state.display->set_aspect(aspect?16:0,aspect?9:0))return false;
+        state.display_aspect=aspect;state.display_known=true;
+        printf("{\"native_menu_display_aspect\":%u,\"numerator\":%u,\"denominator\":%u}\n",aspect,aspect?16:0,aspect?9:0);
+    }
     state.object=object;state.view.x=state.view.y=0;state.view.width=state.view.clip_width=half(cpu,p+4);
     state.view.height=state.view.clip_height=half(cpu,p+6);state.view.clip_x=state.view.clip_y=0;
     state.view.near_depth=0;state.view.far_depth=1;++state.views;return !state.bad;
@@ -90,7 +192,7 @@ static bool frontier(void) {
         u32 n;const u8* p=gcn_mem_resolve(cpu,gcn_cp_fifo_read_pointer(&m->cp),&n);
         if(!p || n<32 || !g->api->fifo(p,32))return false;gcn_cp_gpu_consume_chunk(&m->cp);
     }
-    return !gcn_cp_fifo_rw_distance(&m->cp) && g->api->drain() && state.frame->complete(0,0);
+    return !gcn_cp_fifo_rw_distance(&m->cp) && g->api->drain() && wii_gx_output_complete(g,state.frame);
 }
 static int copy_frame(CPUState* cpu,u32 object) {
     u32 p;if(!mode(cpu,object,&p))return false;const u32 index=word(cpu,object+4);if(index>1)return false;
@@ -130,14 +232,21 @@ static int submit_quad(const GcWiiNativeDraw* view,const GcWiiNativeVertex* vert
     }
     GcWiiNativeDraw draw=*view;draw.mesh=state.mesh;if(!state.render->draw(&draw))return -1;++state.quads;return 1;
 }
-static int utility_quad(CPUState* cpu,u32 address) {
-    const u32 rect=cpu->gpr[3],texture=cpu->gpr[4],rgba=cpu->gpr[address==0x81362d3c?4:5];
-    if(!state.active || !state.projection_ready || (cpu->fpscr&3u))return 0;
-    const float left=real(cpu,rect),top=real(cpu,rect+4),right=real(cpu,rect+8),bottom=real(cpu,rect+12);
-    if(state.bad || left==right || top==bottom)return 0;
+static GcWiiNativeDraw quad_view(void) {
     GcWiiNativeDraw draw={0};memcpy(draw.projection,state.view.projection,sizeof draw.projection);memcpy(draw.model_view,state.model,sizeof draw.model_view);
     draw.x=state.view.x;draw.y=state.view.y;draw.width=state.view.width;draw.height=state.view.height;draw.near_depth=state.view.near_depth;draw.far_depth=state.view.far_depth;
     draw.clip_x=state.view.clip_x;draw.clip_y=state.view.clip_y;draw.clip_width=state.view.clip_width;draw.clip_height=state.view.clip_height;draw.material.flags=GC_WII_NATIVE_BLEND;
+    return draw;
+}
+static int utility_quad(CPUState* cpu,u32 address) {
+    const u32 rect=cpu->gpr[3],texture=cpu->gpr[4],color=cpu->gpr[address==0x81362d3c?4:5];
+    if(!state.active || !state.projection_ready || (cpu->fpscr&3u))return 0;
+    /* Both original helpers receive GXColor by reference, then load its four
+     * bytes into TEV color 1. Fold that constant into the native vertex tint. */
+    const u32 rgba=word(cpu,color);
+    const float left=real(cpu,rect),top=real(cpu,rect+4),right=real(cpu,rect+8),bottom=real(cpu,rect+12);
+    if(state.bad || left==right || top==bottom)return 0;
+    GcWiiNativeDraw draw=quad_view();
     GcWiiNativeVertex v[4]={0};const float xs[4]={left,left,right,right},ys[4]={top,bottom,bottom,top};
     for(u32 i=0;i<4;i++){v[i].position[0]=xs[i];v[i].position[1]=ys[i];for(u32 c=0;c<4;c++)v[i].color[c]=((rgba>>(24-c*8))&255)/255.f;}
     if(address==0x81362fbc) {
@@ -150,6 +259,32 @@ static int utility_quad(CPUState* cpu,u32 address) {
         if(orientation>2)return 0;for(u32 i=0;i<4;i++){v[i].uv[0]=uv[orientation][i*2]*scale;v[i].uv[1]=uv[orientation][i*2+1]*scale;}
     }
     state.view.depth_flags=0;state.view.depth_func=7;return state.bad?0:submit_quad(&draw,v);
+}
+/* The keyboard line service builds an alpha-blended quad. Retain its original
+ * sixth-pixel width and endpoint order without constructing SDK GPU state. */
+static int keyboard_line(CPUState* cpu) {
+    if(!state.active || !state.projection_ready || (cpu->fpscr&3u))return 0;
+    if((state.view.depth_flags&~6u) || ((state.view.depth_flags&GC_WII_NATIVE_DEPTH_TEST) && state.view.depth_func!=3 && state.view.depth_func!=7))return 0;
+    for(u32 i=1;i<=5;i++)if(!isfinite(cpu->fpr[i]))return 0;
+    const u32 rgba=word(cpu,cpu->gpr[4]);
+    const float translation=real(cpu,cpu->gpr[2]-30000u);
+    const float divisor=real(cpu,cpu->gpr[2]-29992u),factor=real(cpu,cpu->gpr[2]-29996u);
+    if(state.bad || !divisor)return 0;
+    const float width=(float)((double)cpu->gpr[3]/divisor),half=(float)((double)width*factor);
+    float left=(float)cpu->fpr[1],top=(float)cpu->fpr[2],right=(float)cpu->fpr[3],bottom=(float)cpu->fpr[4];
+    if(cpu->fpr[1]==cpu->fpr[3]){left=(float)(cpu->fpr[1]-half);right=(float)(cpu->fpr[3]+half);}
+    else {top=(float)(cpu->fpr[2]-half);bottom=(float)(cpu->fpr[4]+half);}
+    const float z=(float)cpu->fpr[5];
+    if(!isfinite(left) || !isfinite(top) || !isfinite(right) || !isfinite(bottom) || !isfinite(z))return 0;
+    /* Its PSMTXTrans(0,0,0) is subsequently loaded into matrix slot0. */
+    memset(state.model,0,sizeof state.model);state.model[0]=state.model[5]=state.model[10]=1;
+    state.model[3]=state.model[7]=state.model[11]=translation;
+    if(left==right || top==bottom)return 1;
+    GcWiiNativeDraw draw=quad_view();draw.material.flags|=state.view.depth_flags;
+    if(state.view.depth_func==7)draw.material.flags|=GC_WII_NATIVE_DEPTH_ALWAYS;
+    const float xs[4]={left,left,right,right},ys[4]={top,bottom,bottom,top};GcWiiNativeVertex v[4]={0};
+    for(u32 i=0;i<4;i++){v[i].position[0]=xs[i];v[i].position[1]=ys[i];v[i].position[2]=z;for(u32 c=0;c<4;c++)v[i].color[c]=((rgba>>(24-c*8))&255)/255.f;}
+    return submit_quad(&draw,v);
 }
 static int fader(CPUState* cpu,u32 object) {
     if(cpu->fpscr&3u)return 0;
@@ -168,9 +303,18 @@ static int fader(CPUState* cpu,u32 object) {
 }
 static bool fifo_object(CPUState* cpu) {
     const u32 base=cpu->gpr[3],size=cpu->gpr[4];if((base&31) || (size&31) || size<0x4000 || !bytes(cpu,base,size))return false;
+    if(state.sdk_initializing || !sdk_identity(cpu))return false;
+    const u32 thread=word(cpu,0x800000e4);
+    if(!thread || (thread&3) || !bytes(cpu,thread,4))return false;
     if(!wii_machine_claim_native_graphics(state.owner->machine,"ipl43u-frame"))return false;
-    const u32 fields[8]={base,base+size-4,size,size-0x4000,(size/2)&~31u,base,base,0};
-    for(u32 n=0;n<8;n++)mem_write32(cpu,0x81116460+n*4,fields[n]);cpu->gpr[3]=0x81116460;return !state.bad;
+    state.sdk_initializing=true;state.sdk_fifo=base;state.sdk_size=size;state.sdk_thread=thread;
+    memset(&state.sdk_setup,0,sizeof state.sdk_setup);return !state.bad;
+}
+static bool fifo_complete(CPUState* cpu) {
+    if(!state.sdk_initializing || state.sdk_setup.command || cpu->gpr[3]!=0x81116460u ||
+       !bytes(cpu,cpu->gpr[3],128) || word(cpu,cpu->gpr[3])!=state.sdk_fifo ||
+       word(cpu,cpu->gpr[3]+8)!=state.sdk_size)return false;
+    state.sdk_initializing=false;++state.initializers;return !state.bad;
 }
 static int layout_draw(CPUState* cpu,u32 address) {
     const bool explicit_pane=address==0x8136a88c;
@@ -215,6 +359,14 @@ int wii_menu_frame_current_view(CPUState* cpu,WiiMenuView* view) {
     if(!state.active || !state.projection_ready || !view)return -1;
     *view=state.view;return 1;
 }
+int wii_menu_frame_current_model(CPUState* cpu,float output[12]) {
+    if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
+    if(!state.active || !state.projection_ready || !output)return -1;
+    memcpy(output,state.model,sizeof state.model);return 1;
+}
+bool wii_menu_frame_keyboard_visible(const WiiGx* gx) {
+    return WIILLR_MENU_FRAME_MODE && state.owner==gx && state.keyboard_visible;
+}
 bool wii_menu_frame_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcWiiNativeFrameApi* frame) {
     if(!WIILLR_MENU_FRAME_MODE)return true;
     if(state.owner || !gx || !render || !frame || render->abi!=GC_WII_NATIVE_RENDER_ABI || frame->abi!=GC_WII_NATIVE_FRAME_ABI)return false;
@@ -223,6 +375,10 @@ bool wii_menu_frame_start(WiiGx* gx,const GcWiiNativeRenderApi* render,const GcW
 }
 void wii_menu_frame_capture(const GcWiiNativeCaptureApi* api) {
     state.capture=api && api->abi==GC_WII_NATIVE_CAPTURE_ABI?api:NULL;
+}
+void wii_menu_frame_display(const GcWiiNativeDisplayApi* api) {
+    state.display=api && api->abi==GC_WII_NATIVE_DISPLAY_ABI && api->set_aspect?api:NULL;
+    state.display_known=false;
 }
 int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
@@ -265,17 +421,17 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     } else if(address==0x8133de74) {
         if(!identity(cpu,address,4,UINT64_C(0x381876d7414e6544)) || !set_viewport(cpu,cpu->gpr[3]))return stop(cpu,"frame begin identity/mode",false);
         if(!frontier())return stop(cpu,"earlier graphics completion",true);GcnllrNativeGxStatus s;state.owner->api->status(&s);state.fifo_start=s.fifo_bytes;
-        state.active=true;++state.begins;
+        keyboard_frame_begin();state.active=true;++state.begins;
     } else if(address==0x8133de78) {
         if(!identity(cpu,address,0x98,UINT64_C(0x60f33f6b5eb35553)))return stop(cpu,"frame copy identity",false);
         if(!frontier())return stop(cpu,"frame copy ordering",true);const int copied=copy_frame(cpu,cpu->gpr[3]);
         if(copied!=1)return stop(cpu,"frame copy mode/submission",copied<0);
     } else if(address==0x8133df24) {
         if(!identity(cpu,0x8133df10,0x48,UINT64_C(0x4eee3be39c10ead6)))return stop(cpu,"frame handoff identity",false);
-        if(!state.frame->complete(0,0))return stop(cpu,"frame completion",true);
+        if(!wii_gx_output_complete(state.owner,state.frame))return stop(cpu,"frame completion",true);
         if(state.active){GcnllrNativeGxStatus s;state.owner->api->status(&s);const u64 n=s.fifo_bytes-state.fifo_start;state.fifo_bytes+=n;
             if(n || state.owner->machine->gp.count || gcn_cp_fifo_rw_distance(&state.owner->machine->cp))return stop(cpu,"unowned graphics in frame",false);}
-        state.active=false;++state.completions;cpu->pc=0x8133df28;++cpu->cycles;return 1;
+        keyboard_frame_end();state.active=false;++state.completions;cpu->pc=0x8133df28;++cpu->cycles;return 1;
     } else if(address==0x81334c7c) {
         if(!identity(cpu,0x81334b28,0x3e4,UINT64_C(0x79ec3ff84f08995c)) || !set_viewport(cpu,word(cpu,SYSTEM_FRAMEWORK)))return stop(cpu,"scene viewport identity/mode",false);
         cpu->gpr[27]=word(cpu,state.object);cpu->pc=0x81334cd4;++cpu->cycles;return 1;
@@ -290,6 +446,9 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     } else if(address==0x81362d3c || address==0x81362fbc) {
         if(!identity(cpu,address,address==0x81362d3c?0x26c:0x2e0,address==0x81362d3c?UINT64_C(0x55ddc65ee9f6e70f):UINT64_C(0xa44dc2f4069a6270)))return stop(cpu,"utility draw identity",false);
         const int drawn=utility_quad(cpu,address);if(drawn!=1)return stop(cpu,"utility draw input/submission",drawn<0);
+    } else if(address==0x81445904) {
+        if(!identity(cpu,address,0x2a0,UINT64_C(0xb5849a32221423af)))return stop(cpu,"keyboard line identity",false);
+        const int drawn=keyboard_line(cpu);if(drawn!=1)return stop(cpu,"keyboard line input/submission",drawn<0);
     } else if(address==0x8136339c) {
         if(!identity(cpu,address,0xc0,UINT64_C(0x76b8cf20247ebf19)) || !state.active || !state.capture || cpu->gpr[4]>1)
             return stop(cpu,"channel texture capture identity/provider",false);
@@ -303,17 +462,54 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
         const int drawn=fader(cpu,cpu->gpr[3]);if(drawn!=1)return stop(cpu,"fader input/submission",drawn<0);
     } else if(address==0x815f7ca4) {
         if(!identity(cpu,0x815f7c5c,0x68,UINT64_C(0xd6de00181d4af4b3)) || !fifo_object(cpu))return stop(cpu,"graphics initializer storage/identity",false);
-        ++state.initializers;cpu->pc=0x815f7ca8;++cpu->cycles;return 1;
+        /* Execute the original compiled GXInit: callbacks, texture/TLUT
+         * regions, tables and logical SDK state remain the guest's own. */
+        return 0;
+    } else if(address==0x815f7ca8) {
+        if(!sdk_identity(cpu) || !fifo_complete(cpu))
+            return stop(cpu,"graphics initializer completion",false);
+        return 0;
     } else if(address==0x81334328) {
         if(!identity(cpu,0x8133400c,0xac4,UINT64_C(0x08fa40f95bcc1e55)))return stop(cpu,"title graphics initialization identity",false);
         /* The native service owns its surface format; typed draw/copy masks
          * carry the RGBA contract. Retain the surrounding heap/UI setup. */
         cpu->pc=address+4;++cpu->cycles;return 1;
+    } else if(address==0x81355b68) {
+        if(!identity(cpu,address,0x40,UINT64_C(0xecafffa52519c96c)) || !keyboard_begin(cpu))return stop(cpu,"keyboard view boundary",false);
+        return 0; /* The original keyboard logic and draw traversal still run. */
+    } else if(address==0x81547fa8 && state.active) {
+        if(!identity(cpu,address,0x68,UINT64_C(0xaaddfcf055d47d0d)) || !overlay_scissor(cpu))return stop(cpu,"overlay clip state",false);
+    } else if(address==0x81548010 && state.active) {
+        if(!identity(cpu,address,0x48,UINT64_C(0x3ce45585e183c7db)))return stop(cpu,"overlay clip query identity",false);
+        for(u32 i=3;i<=6;i++)if(!bytes(cpu,cpu->gpr[i],4))return stop(cpu,"overlay clip query output",false);
+        const s32 values[4]={state.view.clip_x,state.view.clip_y,state.view.clip_width,state.view.clip_height};
+        for(u32 i=0;i<4;i++)mem_write32(cpu,cpu->gpr[i+3],values[i]);
+    } else if(address==0x81547810 && state.active) {
+        if(!identity(cpu,address,0x34,UINT64_C(0x55e3715dc74d55e8)) || !overlay_depth(cpu))return stop(cpu,"overlay depth state",false);
+    } else if(address==0x81547d20 && state.active) {
+        if(!identity(cpu,address,0x50,UINT64_C(0xdc13822b9c05ca9c)) || cpu->gpr[4])return stop(cpu,"overlay model matrix",false);
+        for(u32 i=0;i<12;i++)state.model[i]=real(cpu,cpu->gpr[3]+i*4);
+        if(state.bad)return stop(cpu,"overlay model values",false);
+    } else if((address==0x81547c30 || address==0x81547ce0) && state.active) {
+        if(!identity(cpu,address,address==0x81547c30?0x64:0x40,address==0x81547c30?UINT64_C(0x3c0751e0d8158754):UINT64_C(0xa19761a78fc036f0)))return stop(cpu,"overlay projection identity",false);
+        if(!overlay_projection(cpu,address==0x81547ce0))return stop(cpu,"overlay projection",false);
+        if(address==0x81547c30)return 0; /* Retain its original non-FIFO SDK cache publication. */
+    } else if(address==0x81547c94 && state.active) {
+        if(!identity(cpu,address,0x4c,UINT64_C(0xf251301aee2bb581)) || !overlay_projection_vector(cpu))return stop(cpu,"overlay projection vector",false);
+        return 0;
+    } else if((address==0x81547f2c || address==0x81547f58) && state.active) {
+        if(!identity(cpu,address,address==0x81547f2c?0x2c:0x20,address==0x81547f2c?UINT64_C(0xf4e34fed9866613b):UINT64_C(0x85a7768d4f45cdf7)))return stop(cpu,"overlay viewport identity",false);
+        if(!overlay_viewport(cpu,address==0x81547f58))return stop(cpu,"overlay viewport",false);
+        if(address==0x81547f2c)return 0;
     } else if(address==0x81355b88) {
         if(!identity(cpu,0x81355b68,0x40,UINT64_C(0xecafffa52519c96c)))return stop(cpu,"keyboard drawing restore identity",false);
         /* The original virtual keyboard draw already completed. Restore its
          * enclosing graphics contract before the original epilogue returns. */
-        state.view.depth_flags=GC_WII_NATIVE_DEPTH_TEST|GC_WII_NATIVE_DEPTH_WRITE;state.view.depth_func=7;
+        if(!keyboard_end())return stop(cpu,"keyboard view restoration scope",false);
+        /* The original wrapper explicitly restores ZMode(1,Always,1), even
+         * when the preceding native pane/utility draw had disabled depth. */
+        cpu->gpr[3]=1;cpu->gpr[4]=7;cpu->gpr[5]=1;
+        if(!overlay_depth(cpu))return stop(cpu,"keyboard depth restoration",false);
         cpu->pc=0x81355b98;++cpu->cycles;return 1;
     } else if(address==0x813adfdc) {
         if(!identity(cpu,address,0x3a4,UINT64_C(0xe65a50e40d62c4d4)) || !channel_clip(cpu))return stop(cpu,"channel thumbnail clipping",false);
@@ -338,6 +534,9 @@ int wii_menu_frame_entry(CPUState* cpu,u32 address) {
 }
 void wii_menu_frame_stop(void) {
     if(!state.owner)return;if(state.mesh)state.render->destroy_mesh(state.mesh);
+    if(state.display)(void)state.display->set_aspect(0,0);
+    printf("{\"native_menu_sdk_setup\":1,\"retired_initialization_writes\":%llu,\"retired_texture_binding_writes\":%llu}\n",
+        (unsigned long long)state.sdk_init_writes,(unsigned long long)state.sdk_texture_writes);
     printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"isolated_buffers\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.isolated_buffers,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
 #if WIILLR_MENU_TRANSFORM
     printf("{\"native_menu_transforms\":1,\"admitted\":%llu,\"declined\":%llu}\n",(unsigned long long)state.transforms,(unsigned long long)state.transform_declines);
