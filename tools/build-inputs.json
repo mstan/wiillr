@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "private_input_manifest": "inputs.json",
+  "providers": {
+    "gc-wii-core": {"path": "deps/gc-wii-core", "revision": "a2bcf01e85eebbc69129187c5d4617d2ca9c43d9"},
+    "gc-dsp-core": {"path": "deps/gc-wii-core/dsp_lle", "revision": "603713d1eb6af991dc8271ae528e8d9bf0139590"},
+    "powerpc-recomp-core": {"path": "deps/powerpc-recomp-core", "revision": "d1c02607edf5a2f9fa39bb6a58c853858510e74e"},
+    "arm-recomp-core": {"path": "deps/arm-recomp-core", "revision": "d14dab0367a0e14495d446600597fb3ba0eb73aa"},
+    "recomp-ui": {"path": "deps/recomp-ui", "revision": "539b4329340e22c2d2d0bf270d5226e4b19ec746"},
+    "recompcore": {"path": "deps/recompcore", "revision": "338a3dbcdd384142f0fe40db44e0cd1d1b0c61e4"},
+    "recompcore-xxhash": {"path": "deps/recompcore/Externals/xxhash/xxHash", "revision": "e626a72bc2321cd320e953a0ccf1584cad60f363"},
+    "bluewake": {"path": "deps/bluewake", "revision": "99ac007bd73477aa617f237c695cc27759135d9f"}
+  },
+  "catalog": {"path": "catalog", "prepared_sha256": "387171115fcbb5885071be970860812403139f2fac3f42f9532092f80344860f"},
+  "public_dependencies": {
+    "dawn": {"version": "v20260618.032059", "revision": "266c1cf8de969a364afa4fa49311631fc99a881e", "acquisition": "Pinned Aurora Dawn provider"},
+    "sdl3": {"minimum_version": "3.4.10", "acquisition": "One shared platform SDL3 CONFIG package for CPU and GPU"},
+    "fmt": {"version": "12.1.0", "sha256": "ea7de4299689e12b6dddd392f9896f08fb0777ac7168897a244a6d6085043fea", "acquisition": "Platform package or verified source fallback"},
+    "xxhash": {"version": "0.8.3", "sha256": "aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80", "acquisition": "Platform library or verified source fallback"},
+    "zlib": {"acquisition": "Platform package; Aurora uses its pinned donor dependency recipe"}
+  }
+}
