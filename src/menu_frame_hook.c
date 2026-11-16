@@ -389,6 +389,10 @@ void wii_menu_frame_display(const GcWiiNativeDisplayApi* api) {
     state.display=api && api->abi==GC_WII_NATIVE_DISPLAY_ABI && api->set_aspect?api:NULL;
     state.display_known=false;
 }
+bool wii_menu_frame_widescreen(const WiiGx* gx) {
+    return WIILLR_MENU_FRAME_MODE && gx && gx->title==UINT64_C(0x100000002) &&
+        state.owner==gx && state.display_known && state.display_aspect==1;
+}
 int wii_menu_frame_entry(CPUState* cpu,u32 address) {
     if(!WIILLR_MENU_FRAME_MODE || !state.owner || state.owner->cpu!=cpu)return 0;
     if(cpu->cycles>=cpu->cycle_deadline)return 1;state.bad=false;

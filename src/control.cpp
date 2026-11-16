@@ -277,12 +277,14 @@ struct WiiControl {
       if(!machine->ios.bluetooth || !wii_bluetooth_press_sync(machine->ios.bluetooth))throw std::runtime_error("Bluetooth unavailable");
       return "{\"ok\":true}";
     }
-    if(args[0]=="input" && (args.size()==2 || args.size()==7)) {
+    if((args[0]=="input" || args[0]=="mouse") && (args.size()==2 || args.size()==7)) {
       auto value=*input;const auto buttons=number(args[1],16);if(buttons&~0x9f1fu)throw std::runtime_error("invalid buttons");value.buttons=u16(buttons);
       if(args.size()==7) {
         const auto x=number(args[2],10),y=number(args[3],10),point=number(args[4],10),present=number(args[5],10),pair=number(args[6],10);
-        if(x>1023 || y>767 || point>1 || present>1 || pair>1)throw std::runtime_error("invalid pointer/presence");
-        value.pointer_x=u16(x);value.pointer_y=u16(y);value.pointing=point;value.present=present;value.pairing=pair;
+        const bool mouse=args[0]=="mouse";
+        if(x>(mouse?65535u:1023u) || y>(mouse?65535u:767u) || point>1 || present>1 || pair>1)throw std::runtime_error("invalid pointer/presence");
+        const auto camera=mouse?wii_gx_mouse_camera(gx,u16(x),u16(y)):WiiPointerCamera{u16(x),u16(y)};
+        value.pointer_x=camera.x;value.pointer_y=camera.y;value.pointing=point;value.present=present;value.pairing=pair;
       }
       *input=value;*input_pending=true;return "{\"ok\":true}";
     }

@@ -2,6 +2,7 @@
 #ifndef WIILLR_GX_H
 #define WIILLR_GX_H
 #include "wiillr/machine.h"
+#include "wiillr/pointer.h"
 #include "gcnllr/native_gx.h"
 #include "gcnllr/native_video.h"
 #include "gcnllr/native_presentation.h"
@@ -37,6 +38,7 @@ typedef struct {
 #define WIILLR_GX_INPUT_FOCUSED 2u
 typedef unsigned (*WiiGxPlayerInput)(void*,unsigned,GcnllrPad*);
 bool wii_gx_set_player_input(WiiGx*,WiiGxPlayerInput,void*);
+WiiPointerCamera wii_gx_mouse_camera(const WiiGx*,uint16_t x,uint16_t y);
 bool wii_gx_start(WiiGx*,WiiMachine*,CPUState*,const char* library,const char* data,const char* cache);
 bool wii_gx_tick(WiiGx*);
 void wii_gx_stop(WiiGx*);

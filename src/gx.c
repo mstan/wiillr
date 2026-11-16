@@ -35,6 +35,15 @@ static struct {
     bool sent[3],active;
 } players;
 static bool release_players(WiiGx*,bool);
+WiiPointerCamera wii_gx_mouse_camera(const WiiGx* gx,uint16_t x,uint16_t y) {
+    bool widescreen=false;
+#if WIILLR_MENU_PICTURES
+    widescreen=wii_menu_frame_widescreen(gx);
+#else
+    (void)gx;
+#endif
+    return wii_pointer_camera_view(x,y,widescreen);
+}
 bool wii_gx_set_player_input(WiiGx* g,WiiGxPlayerInput poll,void* user) {
     if(!g || (players.owner && players.owner!=g))return false;
     if(!poll) {
@@ -93,7 +102,7 @@ static bool poll_players(WiiGx* g,GcnllrNativeGxStatus* status,bool native_keybo
             if(pads[index].substick_x<112 || pads[index].substick_x>144 || pads[index].substick_y<112 || pads[index].substick_y>144) {
                 next.pointing=true;if(!index)g->mouse_active=false;
             } else if(!index && status->pointer.valid) {
-                const WiiPointerCamera point=wii_pointer_camera(status->pointer.x,status->pointer.y);
+                const WiiPointerCamera point=wii_gx_mouse_camera(g,status->pointer.x,status->pointer.y);
                 next.pointer_x=point.x;next.pointer_y=point.y;next.pointing=true;g->mouse_active=true;
             } else if(!index && g->mouse_active)next.pointing=false;
             if(!index && status->pointer.valid) {
@@ -369,7 +378,7 @@ bool wii_gx_tick(WiiGx* g) {
             g->mouse_active=false;next.pointing=true;
         } else if(status.pointer.valid) {
             g->mouse_active=true;next.pointing=true;
-            const WiiPointerCamera point=wii_pointer_camera(status.pointer.x,status.pointer.y);
+            const WiiPointerCamera point=wii_gx_mouse_camera(g,status.pointer.x,status.pointer.y);
             next.pointer_x=point.x;next.pointer_y=point.y;
         } else if(g->mouse_active)next.pointing=false;
         /* A+B held together performs the original menu's channel drag. */

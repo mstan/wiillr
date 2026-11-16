@@ -327,6 +327,9 @@ scenario setup. These commands affect the current process's window and gain,
 without advancing guest execution. Frame capture drains actual GPU work without advancing guest
 time; `--frame-output` optionally saves a PNG using Pillow. RAM commands reject
 MMIO and out-of-range requests. A pause preserves guest time and device state.
+`mouse mask x y pointing present pairing` uses image coordinates from 0 to 65535
+through the same aspect-aware camera mapping as the host mouse. `input` retains
+raw IR-camera coordinates for controller-level checks.
 
 `wiillr-starlet-discover` loads the original IOS4 ARM ELF at its kernel-entry
 boundary using the pinned ARM core. Its development bus covers big-endian

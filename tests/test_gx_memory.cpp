@@ -63,5 +63,14 @@ int main() {
     ir=wii_pointer_camera(0,0);CHECK(ir.x==762 && ir.y==93);
     ir=wii_pointer_camera(65535,65535);CHECK(ir.x==262 && ir.y==467);
     ir=wii_pointer_camera(16384,16384);CHECK(ir.x==637 && ir.y==187);
+    ir=wii_pointer_camera_view(32768,32768,true);CHECK(ir.x==512 && ir.y==280);
+    ir=wii_pointer_camera_view(0,0,true);CHECK(ir.x==812 && ir.y==93);
+    ir=wii_pointer_camera_view(65535,65535,true);CHECK(ir.x==212 && ir.y==467);
+    ir=wii_pointer_camera_view(62258,25151,true);CHECK(ir.x==242 && ir.y==237);
+    /* Both IR dots remain valid across the complete host mouse range. */
+    for(unsigned n=0;n<=65535;n++) {
+        ir=wii_pointer_camera_view(uint16_t(n),uint16_t(n),true);
+        CHECK(ir.x>=100 && ir.x<=923 && ir.y<=767);
+    }
     return 0;
 }
