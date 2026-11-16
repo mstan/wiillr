@@ -141,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("This build directory belongs to a different product/version/input configuration")
     marker.write_text(json.dumps(config, indent=2) + "\n")
     common = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=OFF",
+              "-DPython3_EXECUTABLE=" + sys.executable,
               "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=" + binary.as_posix(),
               "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=" + binary.as_posix(),
               "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=" + binary.as_posix(),

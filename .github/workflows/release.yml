@@ -55,6 +55,7 @@ jobs:
         with:
           submodules: false
       - uses: actions/setup-python@v5
+        id: python
         with:
           python-version: '3.12'
       - name: Windows dependencies
@@ -67,7 +68,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
             mingw-w64-x86_64-SDL3 mingw-w64-x86_64-fmt mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-xxhash mingw-w64-x86_64-python
+            mingw-w64-x86_64-xxhash
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -111,14 +112,17 @@ jobs:
         shell: msys2 {0}
         env:
           WIILLR_WAD_COMMON_KEY: ${{ secrets.WIILLR_WAD_COMMON_KEY }}
+          WIILLR_CI_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
           export CMAKE_PREFIX_PATH="$(cygpath -m /mingw64)"
-          python tools/ci_release.py --version "$RELEASE_VERSION" --products "$PRODUCTS" --inputs-dir "$RUNNER_TEMP/wiillr-inputs" --build-dir "$RUNNER_TEMP/wiillr-build" --output-dir "$GITHUB_WORKSPACE/dist" --jobs 2
+          "$WIILLR_CI_PYTHON" -m pip install -r tools/requirements-inputs.txt
+          "$WIILLR_CI_PYTHON" tools/ci_release.py --version "$RELEASE_VERSION" --products "$PRODUCTS" --inputs-dir "$RUNNER_TEMP/wiillr-inputs" --build-dir "$RUNNER_TEMP/wiillr-build" --output-dir "$GITHUB_WORKSPACE/dist" --jobs 2
       - name: Build and verify Linux and macOS packages
         if: runner.os != 'Windows'
         env:
           WIILLR_WAD_COMMON_KEY: ${{ secrets.WIILLR_WAD_COMMON_KEY }}
         run: |
+          python -m pip install -r tools/requirements-inputs.txt
           python tools/ci_release.py --version "$RELEASE_VERSION" --products "$PRODUCTS" --inputs-dir "$RUNNER_TEMP/wiillr-inputs" --build-dir "$RUNNER_TEMP/wiillr-build" --output-dir "$GITHUB_WORKSPACE/dist" --jobs 2
       - name: Retain build and package identity
         if: always()

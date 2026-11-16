@@ -55,6 +55,9 @@ bash tools/build-macos.sh --product wiillr --version 0.1.0 --build-dir "$HOME/wi
 
 `python tools/build.py --help` lists shared options. Match `--arch` to the host
 toolchain; cross compilation is not implied by a package filename.
+`--common-key` explicitly supplies the optional private 16-byte MM9 packaging
+input; it is never discovered automatically. On Windows, put the MinGW-w64
+`bin` directory first in PATH, or set `CMAKE` to its absolute CMake executable.
 
 ## Distribution and verification
 
