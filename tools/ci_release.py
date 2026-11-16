@@ -44,6 +44,20 @@ def smoke_game(archive: Path, product: str, host: str, output: Path) -> None:
         user = destination / 'empty-user-profile'
         environment = dict(os.environ, WIILLR_USER_DIR=str(user), GCN_AUDIO_MUTE='1',
                            GCNLLR_RENDER_HIDDEN='1', LNG_TEST_HIDDEN='1')
+        resources = base / (title + '.app') / 'Contents/Resources' if host == 'macos' else base
+        graphics = resources / ('gcnllr-native-gx.dll' if host == 'windows' else
+                                'libgcnllr-native-gx.' + ('dylib' if host == 'macos' else 'so'))
+        # Match the runtime's immediate/local dynamic loading and query its
+        # static API table. This does not initialize SDL, a GPU or a window.
+        probe = ('import ctypes as c,json,os,sys; '
+                 'scope=os.add_dll_directory(os.path.dirname(sys.argv[1])) if os.name=="nt" else None; '
+                 'library=c.CDLL(sys.argv[1],mode=getattr(os,"RTLD_NOW",0)); '
+                 'api=library.gcnllr_native_gx_get_api; api.argtypes=[c.c_uint32]; api.restype=c.c_void_p; '
+                 'assert api(12) and not api(0); print(json.dumps({"graphics_loaded":True,"abi":12,"gpu_initialized":False}))')
+        loaded = subprocess.run([sys.executable, '-c', probe, str(graphics)],
+                                cwd=destination, env=environment, capture_output=True, text=True, timeout=30)
+        if loaded.returncode:
+            raise RuntimeError('Packaged graphics service did not load: ' + loaded.stderr)
         process = subprocess.run([str(binary), '--launcher-check'], cwd=destination,
                                  env=environment, capture_output=True, text=True, timeout=30)
         if process.returncode != 2:
@@ -56,7 +70,8 @@ def smoke_game(archive: Path, product: str, host: str, output: Path) -> None:
         report = {'product': product, 'platform': host, 'returncode': process.returncode,
                   'stdout': process.stdout, 'stderr': process.stderr,
                   'profile': 'fresh disposable profile without original content',
-                  'window_opened': False, 'guest_executed': False}
+                  'window_opened': False, 'guest_executed': False,
+                  'graphics': json.loads(loaded.stdout)}
         (output / f'{product}-{host}-package-smoke.json').write_text(json.dumps(report, indent=2) + '\n')
 
 
