@@ -2,8 +2,8 @@
   "schema": 1,
   "private_input_manifest": "inputs.json",
   "providers": {
-    "gc-wii-core": {"path": "deps/gc-wii-core", "revision": "a2bcf01e85eebbc69129187c5d4617d2ca9c43d9"},
-    "gc-dsp-core": {"path": "deps/gc-wii-core/dsp_lle", "revision": "603713d1eb6af991dc8271ae528e8d9bf0139590"},
+    "gc-wii-core": {"path": "deps/gc-wii-core", "revision": "581fc74266f26e75cb413e44e41b38b8f0fef22d"},
+    "gc-dsp-core": {"path": "deps/gc-wii-core/dsp_lle", "revision": "6405e585cf4c1c04a6190e5332d6e278f1bcc3a0"},
     "powerpc-recomp-core": {"path": "deps/powerpc-recomp-core", "revision": "d1c02607edf5a2f9fa39bb6a58c853858510e74e"},
     "arm-recomp-core": {"path": "deps/arm-recomp-core", "revision": "d14dab0367a0e14495d446600597fb3ba0eb73aa"},
     "recomp-ui": {"path": "deps/recomp-ui", "revision": "539b4329340e22c2d2d0bf270d5226e4b19ec746"},
