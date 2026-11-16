@@ -27,8 +27,9 @@ the source checkout or in a source commit.
 The developer tool builds without a title catalog. Game builds require a
 qualified private generated PowerPC catalog and its matching preparation receipt.
 The combined Menu/MM9 catalog preserves captured overlay variants; regenerating
-only the boot DOL is insufficient. These inputs stay outside Git. Release jobs
-obtain the frozen inputs from the same private repository's release assets.
+only the boot DOL is insufficient. These inputs stay outside Git. Maintainers
+can obtain the frozen input bundle from the same private repository's release
+assets and extract it with `tools/release_inputs.py --sha256 <archive-sha256>`.
 
 ## Commands
 
@@ -73,7 +74,15 @@ visible interpreter/miss accounting; it does not establish native gameplay
 acceptance. Component portability checks do not establish another platform's
 gameplay or performance qualification.
 
-The manual release workflow builds the requested products and platforms, retains
-checksums and publishes only after its required jobs succeed. It does not run
-on every source push. Product tags keep Menu, Mega Man 9 and developer-tool
-releases separate. Release notes state any remaining platform limitations.
+Builds run locally. To build all three products while compiling the combined
+game runtime once, use `python tools/build_release.py` with `--version`,
+`--inputs-dir`, `--build-dir` and `--output-dir`. `--products tools` or `games`
+selects a smaller set. The script verifies packaged CLI commands, graphics
+library loading and empty-profile startup without opening a game window.
+It writes checksums beside the archives. Private MM9 packaging can pass the
+optional `--common-key` file explicitly.
+
+Product tags keep Menu, Mega Man 9 and developer-tool releases separate. Release
+notes state which platform archives were built and tested. macOS build scripts
+and instructions are included; a finished Mac archive is not part of this
+milestone's delivery, and final native bundle validation remains unverified.

@@ -3,7 +3,6 @@
 """Build release products once per host and smoke-check their packaged tools."""
 from __future__ import annotations
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -83,6 +82,8 @@ def main() -> None:
     parser.add_argument('--version', required=True)
     parser.add_argument('--products', choices=('all', 'tools', 'games'), default='all')
     parser.add_argument('--jobs', type=int, default=2)
+    parser.add_argument('--common-key', type=Path,
+                        help='Explicit private 16-byte MM9 packaging input; omitted by default')
     args = parser.parse_args()
     host = {'win32': 'windows', 'linux': 'linux', 'darwin': 'macos'}[sys.platform]
     arch = {'AMD64': 'x86_64', 'aarch64': 'arm64'}.get(platform.machine(), platform.machine())
@@ -128,17 +129,13 @@ def main() -> None:
         prefix = f'WiiMenuRecomp-{host}-{arch}-v{args.version}'
         smoke_game(args.output_dir / (prefix + ('.tar.gz' if host == 'linux' else '.zip')),
                    'wii-menu', host, args.output_dir)
-        key = os.environ.get('WIILLR_WAD_COMMON_KEY', '')
-        with tempfile.TemporaryDirectory(prefix='wiillr-private-package-') as temporary:
-            extra: list[str] = []
-            if key:
-                value = base64.b64decode(key, validate=True)
-                if len(value) != 16:
-                    raise ValueError('Private WAD packaging input must contain exactly 16 bytes')
-                path = Path(temporary) / 'common-key.bin'
-                path.write_bytes(value)
-                extra = ['--common-key', str(path)]
-            package('mega-man-9', directory, *runtime, *extra)
+        extra: list[str] = []
+        if args.common_key:
+            key = args.common_key.resolve(strict=True)
+            if key.stat().st_size != 16:
+                raise ValueError('Private WAD packaging input must contain exactly 16 bytes')
+            extra = ['--common-key', str(key)]
+        package('mega-man-9', directory, *runtime, *extra)
         prefix = f'MegaMan9Recomp-{host}-{arch}-v{args.version}'
         smoke_game(args.output_dir / (prefix + ('.tar.gz' if host == 'linux' else '.zip')),
                    'mega-man-9', host, args.output_dir)
