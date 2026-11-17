@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_DSP_H
 #define WIILLR_DSP_H
 #include "dsp/dsp.h"

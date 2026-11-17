@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* CPU-visible GX state is maintained by the original compiled SDK. The native
  * Menu owns the hardware cache, so only identified cache/state setup is retired.
  * Draws, copies, tokens, TLUT uploads and unknown stores keep the strict floor. */

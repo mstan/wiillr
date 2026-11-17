@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_IPC_H
 #define WIILLR_IPC_H
 #include <stdbool.h>

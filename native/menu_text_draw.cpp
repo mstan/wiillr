@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "wiillr/menu_text.h"
 #include <algorithm>
 #include <array>

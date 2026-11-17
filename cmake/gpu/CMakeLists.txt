@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.25)
 project(wiillr_graphics LANGUAGES C CXX)
 include("${CMAKE_CURRENT_LIST_DIR}/../CompilerRuntime.cmake")

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* IOS4 v3 / IOS37 v5663 / IOS80 v6944 launch-memory layout, recorded in:
  * dolphin-emu/dolphin Source/Core/Core/IOS/{IOS,VersionInfo}.cpp.
  * Values are boot-contract metadata, never captured execution state. The

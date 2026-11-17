@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Merge one verified original IOS title into a stopped, owned NAND copy."""
 import argparse
 import hashlib

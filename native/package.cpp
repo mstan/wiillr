@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include <wiillr/package.h>
 #include <wiillr/menu_profile.h>
 #include <wiillr/network_profile.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * Immutable GPU output with owner-thread observation. The row/token manager
  * is shared with gcnllr. Like its Windows memory watch, a vectored fault
  * handler covers raw compiled pointers without adding a check to every load.

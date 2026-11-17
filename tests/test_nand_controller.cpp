@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/nand_controller.hpp"
 #include <cstdio>
 #include <vector>

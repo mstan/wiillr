@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #define main discover_program_main
 #define wii_gx_start fixture_gx_start
 #define wii_gx_stop fixture_gx_stop

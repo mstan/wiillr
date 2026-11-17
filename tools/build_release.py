@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build release products once per host and smoke-check their packaged tools."""
 from __future__ import annotations
 import argparse

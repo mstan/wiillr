@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Initial cache shared by the release driver on every supported host.
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration")
 set(BUILD_TESTING OFF CACHE BOOL "Build component tests")

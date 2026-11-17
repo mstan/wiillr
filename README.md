@@ -29,7 +29,7 @@ Game-specific mods stay in the Mega Man 9 launcher.
 ## Builds and downloads
 
 [Wii Menu releases](https://github.com/mstan/wii-menu-recomp/releases) live with
-the consumer. The engine's [private releases](https://github.com/mstan/wiillr/releases)
+the consumer. The engine's [developer-tool releases](https://github.com/mstan/wiillr/releases)
 retain developer tools and earlier application packages. [Build instructions](docs/building.md)
 cover Windows, Linux and macOS through the shared driver and platform scripts;
 use the consumer's scripts for new Wii Menu builds.
@@ -55,7 +55,9 @@ the versioned decompilation, symbols and system-format documentation.
 debug commands, preparation and renderer contracts. Save states are specific to
 their build; original native saves and imported assets are preserved.
 
-Original wiillr code is MIT. Shared components and adapted third-party code
-retain their licenses and notices. See [LICENSE](LICENSE), `third_party/`,
-component repositories and the source/license notices included in each package.
+The native runtime, generators and build scripts use [GPLv3 or later](LICENSE).
+The independent Menu annotation helper uses PolyForm Noncommercial 1.0.0.
+[Licensing details](LICENSING.md) define that narrow exception and preserve
+third-party licenses and earlier grants. Component notices and corresponding
+source accompany applicable distributions.
 wiillr is independent software and is not affiliated with Nintendo or Capcom.

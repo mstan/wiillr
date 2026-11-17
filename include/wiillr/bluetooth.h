@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_BLUETOOTH_H
 #define WIILLR_BLUETOOTH_H
 #ifdef __cplusplus

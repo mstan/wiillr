@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/launcher.h"
 #include "wiillr/launcher_input.h"
 #include "wiillr/launcher_peripherals.h"

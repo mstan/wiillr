@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/sha1_engine.hpp"
 #include <vector>
 #include <string_view>

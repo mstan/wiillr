@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_MENU_PICTURE_H
 #define WIILLR_MENU_PICTURE_H
 #include <gcnllr/native_render.h>

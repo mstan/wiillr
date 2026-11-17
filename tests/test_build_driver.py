@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build-input confinement and catalog-free developer graph contracts."""
 import importlib.util
 import json

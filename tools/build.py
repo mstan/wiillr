@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build a native product using pinned source inputs; never generate title code."""
 from __future__ import annotations
 
@@ -249,9 +249,13 @@ def main(argv: list[str] | None = None) -> int:
             products["runtime_libraries"].append(str(companion.resolve()))
     licenses = build / "licenses"
     licenses.mkdir(exist_ok=True)
-    shutil.copy2(ROOT / "LICENSE", licenses / "wiillr-LICENSE")
     if inputs and (inputs / "LICENSES").is_dir():
         shutil.copytree(inputs / "LICENSES", licenses, dirs_exist_ok=True)
+    # Current project terms follow imported notices so inputs cannot replace them.
+    shutil.copy2(ROOT / "LICENSE", licenses / "wiillr-GPL3.txt")
+    shutil.copy2(ROOT / "LICENSING.md", licenses / "wiillr-LICENSING.md")
+    shutil.copy2(ROOT / "LICENSES/PolyForm-Noncommercial-1.0.0.txt",
+                 licenses / "PolyForm-Noncommercial-1.0.0.txt")
     # Record source roots; packaging uses the explicit notices and archives.
     products["source_roots"] = [str(ROOT)] + ([str(inputs / "deps")] if inputs else [])
     products["inputs_dir"] = str(inputs) if inputs else None

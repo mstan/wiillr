@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_LAUNCHER_INPUT_H
 #define WIILLR_LAUNCHER_INPUT_H
 #include "recomp_launcher.h"

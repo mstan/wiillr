@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Exercise the private typed-quad boundary without a GPU or desktop window.
  * Build this TU with function/data sections and linker GC, linking the normal
  * gcn_runtime_core; unused frame-owner paths are deliberately not required. */

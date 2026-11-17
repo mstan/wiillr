@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* CPU-only module fixture: no SDL window/device or guest memory is created. */
 #include "gcnllr/native_gx.h"
 #include "gcnllr/native_session.h"

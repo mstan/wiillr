@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Reuse the exact public dependency versions from the pinned Aurora graph.
 # Platform packages win; source fallback is local to the build tree.
 include(FetchContent)

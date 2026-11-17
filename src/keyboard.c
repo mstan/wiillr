@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/keyboard.h"
 #include <string.h>
 static unsigned changes(const WiiKeyboard* keyboard,const WiiKeyboardReport* report) {

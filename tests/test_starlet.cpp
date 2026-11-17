@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/starlet.hpp"
 #include "arm_decode.h"
 #include "thumb_decode.h"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* CPU-only control contracts with synthetic RAM. Original guest routines are
  * deliberately represented by call/return spies: these tests establish routing,
  * input/state isolation and bank semantics, not original gameplay correctness.

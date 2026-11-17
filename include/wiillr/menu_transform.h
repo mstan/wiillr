@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_MENU_TRANSFORM_H
 #define WIILLR_MENU_TRANSFORM_H
 #include <stdbool.h>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Extract a checksum-pinned private build-input archive without path escapes."""
 from __future__ import annotations
 import argparse

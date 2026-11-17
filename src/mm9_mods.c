@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Optional WR9E gameplay controls. All extra guest subroutines execute through
  * the existing content-verified native catalog, never nested emulation or guest
  * code patches. Session mode, acquired weapons, lives and native progress stay

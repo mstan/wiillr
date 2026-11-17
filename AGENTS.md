@@ -13,7 +13,9 @@ native routes require zero interpreter execution and unresolved native misses.
 Never commit private/, firmware, NAND, keys, game content, generated guest code,
 captures or user saves. Preserve original assets and native progress. Use copied
 writable NAND profiles. Save states are build-specific disposable snapshots.
-Preserve imported licenses. Original code is MIT.
+Preserve imported licenses. Original runtime/build code is GPL-3.0-or-later;
+the standalone annotation utility has the explicit PolyForm NC exception in
+LICENSING.md. Earlier license grants remain valid.
 
 Automated gameplay uses muted output and runtime diagnostics without changing
 desktop focus. Owner handoffs use a normal window and normal audio. Check

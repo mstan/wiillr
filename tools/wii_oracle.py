@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compare two native Wii builds at matching guest cycles using a retained launch."""
 import argparse
 import hashlib

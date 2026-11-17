@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Synthetic content: verification failures must leave copied NAND unchanged."""
 import hashlib,importlib.util,json,struct,sys,tempfile,unittest
 from pathlib import Path

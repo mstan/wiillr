@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """ROM-free whole-text page preparation, including shared initialized data."""
 import hashlib,importlib.util,json,struct,tempfile,unittest,zlib
 from pathlib import Path

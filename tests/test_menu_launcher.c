@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Headless boundary test: real launcher code/SHA, synthetic installed-title
  * provider, and an observing replacement for the UI window call. No SDL
  * initialization, controller access, window, dialog or original data. */

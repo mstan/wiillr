@@ -63,7 +63,7 @@ Version annotations come from the CC0
 `config/43U`. Its original executable SHA-1 is
 `26116613f624061ba99c8d1a299aaa6efa85670d`. Verify that binary before using its
 object offsets or installing the `0x8152126c` draw boundary. This implementation
-is original MIT code and includes no firmware or generated guest code.
+is original GPL-3.0-or-later code and includes no firmware or generated guest code.
 
 Configure this directory with `GC_WII_CORE_DIR` pointing to a core with
 `include/gcnllr/native_render.h` for the standalone library and focused contract

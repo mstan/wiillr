@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Copy supplied NAND inputs into an explicitly owned writable runtime profile."""
 from pathlib import Path
 import hashlib

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/ave.h"
 #include <string.h>
 enum {IDLE,RX,ACK_SETUP,ACK_CLOCK,ACK_FINISH,TX,TX_RELEASE,MASTER_ACK,MASTER_ACK_FINISH,IGNORE};

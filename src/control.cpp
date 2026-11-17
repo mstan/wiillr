@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>

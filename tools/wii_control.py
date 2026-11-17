@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Local development control for a running wiillr process; never edits guest flags."""
 import argparse
 import json

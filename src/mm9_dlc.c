@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Offline, installed-content EC queries for the verified WR9E runtime.
  * Original archive opening, resource registration and gameplay remain callers.
  * Tickets/TMD/content are read unchanged; no online account is synthesized. */

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_PERIPHERALS_INTERNAL_H
 #define WIILLR_PERIPHERALS_INTERNAL_H
 #include "wiillr/peripherals.h"

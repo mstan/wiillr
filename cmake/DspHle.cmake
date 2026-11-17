@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Reuse the pinned donor DSP implementation without configuring its game or GPU
 # executable. Consumer tooling supplies and records these dependency identities.
 set(WIILLR_DSP_DONOR_SOURCE "" CACHE PATH "Pinned RecompCore source for DSP HLE")

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_IOS_H
 #define WIILLR_IOS_H
 #include "cpu/cpu.h"

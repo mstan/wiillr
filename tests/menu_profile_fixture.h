@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include <string>
 /* Synthetic SCv0 with independent expected offsets: AR@21, CB@29, plus an

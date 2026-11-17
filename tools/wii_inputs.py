@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Read title metadata without decrypting content or modifying a NAND."""
 from __future__ import annotations
 

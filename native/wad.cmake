@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Call wiillr_add_wad_importer(<pinned-RecompCore-root>) once, then link wii_wad.
 function(wiillr_add_wad_importer RECOMPCORE_ROOT)
     if(TARGET wii_wad)

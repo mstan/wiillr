@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Synthetic IOS graph: merge identities while preserving player-owned files."""
 import hashlib
 from pathlib import Path

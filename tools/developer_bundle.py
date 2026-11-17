@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Stage the developer CLI, its source dependencies and available native tools."""
 from __future__ import annotations
 
@@ -72,7 +72,8 @@ def stage_developer_bundle(repo: Path, build_dir: Path, stage: Path, version: st
     copies += [
         (core / "tools/gen_overlay_module.py",
          payload / "external/gc-wii-core/tools/gen_overlay_module.py"),
-        (repo / "LICENSE", payload / "licenses/wiillr-MIT.txt"),
+        (repo / "LICENSE", payload / "licenses/wiillr-GPL3.txt"),
+        (repo / "LICENSING.md", payload / "licenses/wiillr-LICENSING.md"),
         (core / "LICENSE", payload / "licenses/gc-wii-core-GPL3.txt"),
         (repo / "docs/developer-tools.md", Path("docs/developer-tools.md")),
     ]

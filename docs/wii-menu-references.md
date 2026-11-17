@@ -33,7 +33,9 @@ pins the original executable and upstream metadata. It adds original explanatory
 notes around the channel scene. The importer preserves aliases and separates
 function/object annotations; names do not automatically create recompiler entries.
 
-From a source checkout with Python and optional `capstone==5.0.7`:
+The standalone annotation helper uses PolyForm Noncommercial 1.0.0; see
+[the licensing scope](../LICENSING.md). It is separate from the GPL native runtime
+and build pipeline. From a source checkout with Python and optional `capstone==5.0.7`:
 
 ```sh
 python tools/annotate_wii_menu.py fetch --output private/wii-ipl-43u

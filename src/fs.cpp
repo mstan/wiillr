@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/fs.h"
 #include "wiillr/sha1.hpp"
 #include "FS.h"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/ios_lle.h"
 #include "wiillr/starlet.hpp"
 extern "C" {

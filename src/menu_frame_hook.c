@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <wiillr/menu_frame_hook.h>
 #include <wiillr/menu_picture_hook.h>
 #include <wiillr/menu_grid.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Menu-only display provider. The UI owns a copy of settings while open;
  * stage mod choices here and apply them after that copy is returned. */
 static struct {
@@ -23,7 +23,7 @@ static int menu_mod_count(void* context){(void)context;return 1;}
 static int menu_mod_package_get(void* context,int index,RecompLauncherCModPackage* out) {
     (void)context;if(index || !out)return 0;memset(out,0,sizeof *out);
     strcpy(out->id,menu_mod_package);strcpy(out->version,"1.0");
-    strcpy(out->name,"Wii Menu display");strcpy(out->license,"MIT");
+    strcpy(out->name,"Wii Menu display");strcpy(out->license,"GPL-3.0-or-later");
     strcpy(out->description,"Display enhancements for the Wii Menu and launched channels.");
     out->enabled=menu_mods.enabled;return 1;
 }

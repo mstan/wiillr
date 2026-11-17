@@ -4,7 +4,7 @@ Source: https://github.com/dolphin-emu/dolphin/tree/70c5a6ad0e62ce32d922dd2478d4
 
 Imported files: FileSystem.h, FileSystemCommon.cpp, HostBackend/FS.h,
 HostBackend/FS.cpp, HostBackend/File.cpp. Copyright notices and COPYING are
-retained. Original wiillr bindings remain MIT; linking this backend produces
+retained. Original wiillr bindings use GPL-3.0-or-later; linking this backend produces
 a combined work subject to the upstream GPL license.
 
 Adaptations: flattened includes; portable standard-library host bindings;

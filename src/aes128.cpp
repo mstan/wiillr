@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/aes128.hpp"
 #include <cstring>
 /* This translation unit owns the upstream macros and context ABI. */

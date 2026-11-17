@@ -41,10 +41,10 @@ the source checkout or in a source commit.
 The developer tool builds without a title catalog. Game builds require a
 qualified private generated PowerPC catalog and its matching preparation receipt.
 The combined Menu/MM9 catalog preserves captured overlay variants; regenerating
-only the boot DOL is insufficient. These inputs stay outside Git. Maintainers
-can obtain the frozen input bundle from the same private repository's release
-assets. Download [the frozen maintainer inputs](https://github.com/mstan/wiillr/releases/tag/release-inputs-20261115-3),
-then extract them into a new directory:
+only the boot DOL is insufficient. These inputs stay outside Git. Frozen
+maintainer input bundles are private and are not public application downloads.
+Maintainers with access can obtain the frozen input archive through the private
+maintainer distribution, then extract it into a new directory:
 
 ```sh
 python tools/release_inputs.py wiillr-release-inputs-20261115-3.zip /path/to/wiillr-inputs --sha256 c00f1a49ff909fd2fe2e754808a68868564413fc3e8749be7a396502fe6e64d7

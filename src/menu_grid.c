@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Stock provider. A game consumer can supply WIILLR_MENU_GRID_SOURCE without
  * placing its experimental presentation or product policy in the engine. */
 #include <wiillr/menu_grid.h>

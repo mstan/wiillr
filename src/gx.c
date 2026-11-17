@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/gx.h"
 #include "wiillr/pointer.h"
 #include "wiillr/remote_input.h"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * One native graphics owner inside the verified original frame orchestration.
  * Input, logical palette updates, VRAM transfers and VI handoff stay original.
  * No graphics SDK routine, gather encoding or FIFO replay is used here. */

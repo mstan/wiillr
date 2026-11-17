@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """ROM-free live control: pause/budget, RAM bounds and reconnect semantics."""
 import json
 import os

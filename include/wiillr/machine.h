@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_MACHINE_H
 #define WIILLR_MACHINE_H
 #include "cpu/cpu.h"

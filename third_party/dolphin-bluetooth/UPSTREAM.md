@@ -6,7 +6,7 @@ The donor retains Dolphin's implementation and copyright/license notices.
 
 Adapted packet serialization, HCI commands and L2CAP/HID channel management.
 Original copyright, GPL and embedded BSD notices are retained. The combined
-binary is subject to these licenses. Original wiillr interfaces remain MIT.
+binary is subject to these licenses. Original wiillr interfaces use GPL-3.0-or-later.
 
 Adaptations remove Dolphin global machine, UI, input, netplay, movie and save-state
 dependencies. Memory and asynchronous replies use explicit consumer interfaces.

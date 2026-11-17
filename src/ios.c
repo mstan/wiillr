@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/ios.h"
 #include "wiillr/host_session.h"
 #include "wiillr/network_profile.h"

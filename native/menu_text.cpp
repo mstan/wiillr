@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // NW4R resource contracts checked against the CC0 wii-ipl 43U annotations:
 // ut_ResFontBase.cpp, ut_ArchiveFont.cpp and ut/fontResources.h.
 #include "wiillr/menu_text.h"

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // WR9E whole-overlay contract: 80083730, 80083E08, 80083BD8 and 80083CF8.
 // Resource lookup is shared with the Menu, independent of either font class.
 #include "wiillr/mm9_overlay.h"

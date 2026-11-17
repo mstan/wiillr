@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Bounded original-code runner. Discovery cannot qualify native CPU acceptance;
  * the separately built static PPC target stops on a miss. Native IOS reports its
  * identity and stops at operations it does not implement. */

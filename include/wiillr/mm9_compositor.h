@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_MM9_COMPOSITOR_H
 #define WIILLR_MM9_COMPOSITOR_H
 #include <stdint.h>

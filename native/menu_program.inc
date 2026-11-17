@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Complete non-indirect NW4R materials become typed integer shader inputs.
 // Guest command streams and persistent GX state are not reconstructed here.
 void program_material(const Reader& r,uint32_t pane,const QuadInput* quad,const Counts& cap,const Counts& num,

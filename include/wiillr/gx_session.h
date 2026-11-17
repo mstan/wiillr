@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_GX_SESSION_H
 #define WIILLR_GX_SESSION_H
 #include "wiillr/gx.h"

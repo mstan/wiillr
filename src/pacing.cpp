@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "wiillr/pacing.h"
 #if WIILLR_PACING_FIELD
 #include <chrono>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/launcher_mods.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>

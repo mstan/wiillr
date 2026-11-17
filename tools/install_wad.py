@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Verify/decrypt a local WAD into an owned NAND copy, preserving existing titles."""
 import argparse,hashlib,json,os,struct
 from pathlib import Path

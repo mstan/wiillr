@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_NAND_SETUP_H
 #define WIILLR_NAND_SETUP_H
 #include <stddef.h>

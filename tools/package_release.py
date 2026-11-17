@@ -5,7 +5,7 @@ Build metadata lives in build-products.json beside the build: dependency_dirs,
 assets, licenses_dir, readme, source_archives and source_readme are explicit
 paths. Relative paths are resolved against the build directory. The inputs
 directory is only searched at its bin/lib children; it is never inventoried.
-Original implementation: MIT, see ../LICENSE.
+Original implementation: GPL-3.0-or-later, see ../LICENSE.
 """
 from __future__ import annotations
 

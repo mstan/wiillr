@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/machine.h"
 #include "debug/cost_ring.h"
 #include "cpu/timing.h"

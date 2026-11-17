@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Hollywood mailbox semantics: two request bits and two reply bits, each
  * cleared by its receiving processor. No IOS result is synthesized here.
  * Register layout and hardware-tested ~100-TB response interrupt delay:

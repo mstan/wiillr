@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * wiillr's portable host binding for the separately licensed Dolphin backend. */
 #pragma once
 #include <algorithm>

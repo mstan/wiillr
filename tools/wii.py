@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Run bounded original NAND-title discovery with explicit fallback accounting."""
 from __future__ import annotations
 import argparse

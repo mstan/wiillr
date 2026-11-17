@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Synthetic content and HLE spies exercise execution bindings, not game code. */
 #include "cpu/overlay_module.h"
 #include "cpu/aot_module.h"

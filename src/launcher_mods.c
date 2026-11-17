@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/launcher_mods.h"
 #include "wiillr/mm9_mods.h"
 #include "wiillr/fs.h"
@@ -24,7 +24,7 @@ static int package_count(void* context){(void)context;return 1;}
 static int package_get(void* context,int n,RecompLauncherCModPackage* out) {
     (void)context;if(n || !out)return 0;memset(out,0,sizeof *out);
     snprintf(out->id,sizeof out->id,"%s",package);strcpy(out->version,"1.0");
-    strcpy(out->name,"Mega Man 9 gameplay");strcpy(out->license,"MIT");
+    strcpy(out->name,"Mega Man 9 gameplay");strcpy(out->license,"GPL-3.0-or-later");
     strcpy(out->description,"Optional character exchange and shoulder weapon selection.");
     out->enabled=state.staged[0] || state.staged[1];return 1;
 }

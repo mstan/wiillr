@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Exercise the production binder with an observing SDL boundary. No desktop
  * window is created; the startup fixture supplies title/UI validation stubs. */
 #include "../src/launcher.c"

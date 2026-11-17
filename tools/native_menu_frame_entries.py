@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Derive the verified IPL43U graphics-owner seams; prepared pages stay intact."""
 import argparse
 import hashlib

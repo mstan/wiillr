@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* ROM-free architectural bus fixture, not evidence of an original IOS reply. */
 #include "wiillr/machine.h"
 #include "memory/memory.h"

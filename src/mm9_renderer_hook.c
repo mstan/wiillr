@@ -1,4 +1,4 @@
-﻿/* SPDX-License-Identifier: MIT */
+﻿/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <wiillr/mm9_renderer_hook.h>
 #include <wiillr/mm9_compositor.h>
 #include <wiillr/mm9_screen.h>

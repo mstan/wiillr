@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include <wiillr/mm9_hbm.h>
 #include <wiillr/mm9_screen.h>
 #include <algorithm>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: GPL-3.0-or-later
  * Original image/device implementation. Protocol references (not copied code):
  * devkitPro/libogc ef718e2d7df5e5b1750a9e1a67c17350bdd30d3e,
  * libogc/{wiisd,usb,usbstorage}.c; SD/USB request field layouts and BOT framing.

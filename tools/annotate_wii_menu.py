@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Required Notice: Copyright (c) 2026 Matthew Stanley
 """Produce a private, version-verified Wii Menu listing with upstream annotations."""
 from __future__ import annotations
 

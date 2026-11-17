@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef WIILLR_KEYBOARD_H
 #define WIILLR_KEYBOARD_H
 #include <stdbool.h>

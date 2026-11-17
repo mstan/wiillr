@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Maintained DSP engine with shared ARAM and paced audio-DMA state machines.
  * PCM retirement is counted; the consumer may attach the shared host sink. */
 #include "wiillr/dsp.h"

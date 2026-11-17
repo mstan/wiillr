@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "BTEmu.h"
 #include "l2cap.h"
 #include <set>

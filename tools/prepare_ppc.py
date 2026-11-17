@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Compile verified discovery pages; they are code inputs, never boot state."""
 import argparse, hashlib, json, os, re, struct
 from pathlib import Path

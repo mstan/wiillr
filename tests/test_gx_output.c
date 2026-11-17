@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #include <wiillr/gx_output.h>
 #include <cpu/native_code.h>
 #include <memory/write_epoch.h>

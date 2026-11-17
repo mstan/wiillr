@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Derive the attested MM9 entry seam without changing its prepared catalog."""
 import argparse
 import hashlib
