@@ -154,11 +154,14 @@ static void bp_write(void* user,u32 reg,u32 value) {
     if(reg==0x47 || reg==0x48)gcn_pe_set_token(&g->machine->pe,(u16)value,reg==0x48);
 }
 static int write_copy(void* user,u32 address,const u8* bytes,u32 size,u32 flags,u32 width,u32 height,u32 stride) {
-    (void)width;(void)height;(void)stride;
     WiiGx* g=user;GcnllrNativeGxMemory range;
     if(!resolve(user,address,size,&range))return 0;
     if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING) && !wii_gx_output_prepare(g,address,size))return 0;
     memcpy(range.bytes,bytes,size);
+    if((flags&GCNLLR_NATIVE_GX_COPY_DISPLAY) && width && height && stride>=width*2ull &&
+       (u64)stride*(height-1)+width*2ull<=size) {
+        g->copy_address=address;g->copy_width=width;g->copy_height=height;g->copy_stride=stride;
+    }
     if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING))gcn_native_code_content_dirty(range.physical_address,size);
     if(!(flags&GCNLLR_NATIVE_GX_COPY_MATERIALIZING) && g->cpu->reserve_valid && size) {
         const u32 reservation=gcn_reservation_key(g->cpu->reserve_addr)&~31u;

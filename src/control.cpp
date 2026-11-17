@@ -101,6 +101,10 @@ struct WiiControl {
     if(!gx->api || !gx->api->drain() || !gcn_vi_xfb_info(&address,&width,&height,&stride) ||
        !width || !height || width>1024 || height>1024 || stride<width*2)
       throw std::runtime_error("frame unavailable");
+    return pixels(address,width,height,stride);
+  }
+  Scanout pixels(u32 address,u32 width,u32 height,u32 stride) {
+    if(!width || !height || width>1024 || height>1024 || stride<width*2)throw std::runtime_error("frame dimensions unavailable");
     const u64 size=u64(stride)*height;
     const u32 physical=address&0x1fffffffu;
     u32 available;
@@ -341,10 +345,12 @@ struct WiiControl {
       }
       return result+"}";
     }
-    if(args[0]=="frame" && args.size()==1) {
-      const auto frame=scanout();
+    if((args[0]=="frame" || args[0]=="copy-frame") && args.size()==1) {
+      const bool copy=args[0]=="copy-frame";
+      if(copy && (!paused || !gx->api || !gx->api->drain()))throw std::runtime_error("pause before reading a display copy");
+      const auto frame=copy?pixels(gx->copy_address,gx->copy_width,gx->copy_height,gx->copy_stride):scanout();
       return "{\"ok\":true,\"width\":"+std::to_string(frame.width)+",\"height\":"+std::to_string(frame.height)+",\"stride\":"+
-        std::to_string(frame.stride)+",\"data\":\""+hex(frame.bytes,frame.size)+"\"}";
+        std::to_string(frame.stride)+",\"source\":\""+(copy?"completed-display-copy":"vi-scanout")+"\",\"data\":\""+hex(frame.bytes,frame.size)+"\"}";
     }
     if(args[0]=="settings" && args.size()==1) {
       if(!paused || !gx->host_settings || !gx->host_settings(gx->host_input_user))

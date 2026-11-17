@@ -30,6 +30,9 @@ typedef struct {
     bool (*host_review)(void*,bool,u32); /* paused test window visibility/volume */
     bool host_input_capture; /* host menu holds input until its controls release */
     bool scripted_input; /* setup owns input until the explicit review handoff */
+    /* Last completed eager display-copy destination. Observation metadata only;
+     * it does not select VI scanout or publish a presented frame. */
+    u32 copy_address,copy_width,copy_height,copy_stride;
 } WiiGx;
 /* Optional four-player host input. The callback returns PRESENT=1/FOCUSED=2;
  * zero is an unassigned/disconnected Remote. P1 mouse remains renderer-owned.

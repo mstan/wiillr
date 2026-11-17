@@ -7,6 +7,16 @@ import subprocess, sys, zlib
 ROOT=Path(__file__).resolve().parents[1]
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 
+def capture_contract(run,journal):
+    strict_stop=run.get('execution')=='PPC-static-native' and run.get('exit_code') in (1,2)
+    if run.get('execution') not in ('PPC-discovery-interpreter','PPC-native-with-discovery','PPC-static-native') or (run.get('exit_code') not in (0,1) and not strict_stop):
+        raise ValueError('Expected an original-title execution with explicit miss capture')
+    if strict_stop:
+        summaries=[json.loads(line) for line in journal.splitlines() if line.strip() and json.loads(line).get('event')=='summary']
+        if not summaries or summaries[-1].get('instructions')!=0 or not summaries[-1].get('unique_misses',0):
+            raise ValueError('Strict-stop capture must record zero interpretation and a real native miss')
+    return strict_stop
+
 def catalog_pages(path):
     """Union previously prepared titles without changing their PC namespaces."""
     root=path.resolve(strict=True);receipt=root/'prepared.json'
@@ -91,9 +101,8 @@ def main():
             journals.append(json.dumps(dict(event='prepared_code_page',pc=int(name[:8],16),receipt_sha256=record['receipt_sha256']))+'\n')
     for source in args.capture:
         capture=source.resolve();run=json.loads((capture/'run.json').read_text())
-        strict_stop=run.get('execution')=='PPC-static-native' and run.get('exit_code')==2
-        if run.get('execution') not in ('PPC-discovery-interpreter','PPC-native-with-discovery','PPC-static-native') or (run.get('exit_code') not in (0,1) and not strict_stop):
-            raise ValueError('Expected an original-title execution with explicit miss capture')
+        journal=(capture/'native-misses.jsonl').read_text()
+        strict_stop=capture_contract(run,journal)
         for key in ('log','mem1'):
             path=Path(run[key]['path'])
             if path.parent!=capture or sha(path)!=run[key]['sha256']:raise ValueError('Changed discovery '+key)
@@ -103,11 +112,7 @@ def main():
         current=(run['inputs']['content']['sha256'],run['inputs']['tmd']['sha256'],run['boot_profile'])
         if title_identity is not None and current!=title_identity:raise ValueError('Mixed title/profile identities')
         title_identity=current
-        journal=(capture/'native-misses.jsonl').read_text();journals.append(journal.rstrip()+'\n')
-        if strict_stop:
-            summaries=[json.loads(line) for line in journal.splitlines() if line.strip() and json.loads(line).get('event')=='summary']
-            if not summaries or summaries[-1].get('instructions')!=0 or not summaries[-1].get('unique_misses',0):
-                raise ValueError('Strict-stop capture must record zero interpretation and a real native miss')
+        journals.append(journal.rstrip()+'\n')
         captures.append(dict(capture=str(capture),run_sha256=sha(capture/'run.json'),journal_sha256=sha(capture/'native-misses.jsonl')))
         blobs={p.name.lower():p for p in (capture/'pages').glob('*.bin')}
         validated=set();misses=0

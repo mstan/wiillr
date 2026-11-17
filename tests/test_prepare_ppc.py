@@ -5,6 +5,19 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location('prepare_ppc',Path(__file__).resolve().parents[1]/'tools/prepare_ppc.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
+class CaptureContract(unittest.TestCase):
+    def test_actual_halt_exit_and_legacy_stop_require_zero_interpretation(self):
+        for code in (1,2):
+            run=dict(execution='PPC-static-native',exit_code=code)
+            journal=json.dumps(dict(event='summary',instructions=0,unique_misses=1))
+            self.assertTrue(module.capture_contract(run,journal))
+            for summary in ({'instructions':1,'unique_misses':1},{'instructions':0,'unique_misses':0},{}):
+                with self.assertRaisesRegex(ValueError,'zero interpretation'):
+                    module.capture_contract(run,json.dumps(dict(event='summary',**summary)))
+    def test_unfinished_and_unidentified_runs_rejected(self):
+        for run in ({'execution':'unverified','exit_code':0},{'execution':'PPC-native-with-discovery','exit_code':2}):
+            with self.assertRaises(ValueError):module.capture_contract(run,'')
+
 class DolPages(unittest.TestCase):
     def image(self):
         data=bytearray(0x140)
