@@ -2,7 +2,7 @@
 
 The developer bundle inspects original Wii inputs, runs bounded discovery and
 prepares content-verified PowerPC compilations. It is separate from the Wii Menu
-and Mega Man 9 player packages. It contains no game content, firmware, console
+player application. It contains no game content, firmware, console
 keys, prepared NAND, saved progress or generated guest catalog.
 
 ![wiillr inspecting supplied NAND metadata](images/wiillr-tools.png)

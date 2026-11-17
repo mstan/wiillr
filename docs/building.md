@@ -119,7 +119,7 @@ For this checkout, validation checks:
 1. `inputs.json` has schema 1 and a nonempty map of relative filenames to SHA-256
    digests. Every listed file must exist, remain inside the bundle and match.
 2. Application source providers match the revisions in
-   [tools/build-inputs.json](../tools/build-inputs.json).
+   [tools/build-inputs.json](https://github.com/mstan/wiillr/blob/wiillr-v0.1.1/tools/build-inputs.json).
 3. The prepared catalog receipt matches that specification's exact expected
    hash, uses Broadway with preserved PC namespaces, and lists matching generated
    source hashes.
@@ -131,7 +131,7 @@ is separate from building, and a newly prepared catalog is not automatically a
 qualified release input.
 
 ZIP input is checked against the archive digest pinned in
-[tools/build-inputs.json](../tools/build-inputs.json), extracted into a new
+[tools/build-inputs.json](https://github.com/mstan/wiillr/blob/wiillr-v0.1.1/tools/build-inputs.json), extracted into a new
 checksum-named cache under the build directory, and validated with the same
 file/catalog checks. Extraction rejects unsafe paths. Existing imports are
 reused and their file hashes are checked again before a build. Raw NAND backups
