@@ -10,6 +10,7 @@
 #include <time.h>
 #include <stdatomic.h>
 
+enum { IOS_DEFERRED = 4 }; /* Preserve existing 2/3 asynchronous ACK results. */
 static WiiIosNative* host_session_owner;
 static bool host_menu_return;
 void wii_host_session_bind(WiiIosNative* ios){host_session_owner=ios;host_menu_return=false;}
@@ -166,24 +167,54 @@ static int di_ioctl(WiiIosNative* ios,CPUState* cpu,const u8* request) {
     if(input_size!=32 || !packet || available<32) {ios->result=32;return 1;}
     u32 value;
     switch(command) {
-    case 0x12:case 0x70:case 0xe0: {
-        if(ios->di_waiting || ios->di->cmd_pending)return 0;
-        const u32 need=command==0xe0?4:32;
-        if((command==0xe0 ? output_size<4 || (output&3):output_size!=32 || (output&31)) ||
+    case 0x71: {
+        if(ios->di_waiting || ios->di->cmd_pending)return IOS_DEFERRED;
+        /* Development partition route. No fake successful empty-drive read.
+         * Timing and partition authentication remain unqualified. */
+        const u32 size=read_be32(packet+4);
+        if(!ios->disc || read_be32(packet)>>24!=command || size!=output_size ||
+           size>0x1000000u || (output&31) ||
+           !ios_memory(cpu,output,&available) || available<size) {ios->result=32;return 1;}
+        u8* data=malloc(size?size:1);
+        if(!data)return 0;
+        const bool ok=wii_disc_read(ios->disc,(u64)read_be32(packet+8)*4,data,size);
+        if(ok)for(u32 n=0;n<size;++n)mem_write8_cia(cpu,output+n,data[n],cpu->pc);
+        free(data);ios->result=ok?1:2;return 1;
+    }
+    case 0x12:case 0x70:case 0x8d:case 0xa4:case 0xe0: {
+        if(ios->di_waiting || ios->di->cmd_pending)return IOS_DEFERRED;
+        const u32 need=command==0xe0?4:command==0x8d?read_be32(packet+4):32;
+        if(need>0x1000000u || (command==0xe0 ? output_size<4 || (output&3):output_size!=need || (output&31)) ||
            !ios_memory(cpu,output,&available) || available<need ||
            read_be32(packet)>>24!=command) {ios->result=32;return 1;}
+        if(command==0x8d) {
+            const u64 begin=(u64)read_be32(packet+8)*4,end=begin+need;
+            if(!((begin<=0x50000ull && end<=0x50000ull) ||
+                 (begin>=0x118280000ull && end<=0x118280020ull) ||
+                 (begin>=0x1fb500000ull && end<=0x1fb500020ull))) {ios->result=32;return 1;}
+        }
         di_registers(ios,cpu);
         for(unsigned n=0;n<3;n++)gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0+4*n,read_be32(packet+4*n),4);
         if(command==0x70)gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0,0xa8000040u,4);
+        if(command==0xa4) {
+            gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0,0xa4000000u|((u32)packet[7]<<16),4);
+            gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0+4,read_be32(packet+8)&0xffffffu,4);
+            gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0+8,0,4);
+        }
+        if(command==0x8d) {
+            gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0,0xa8000000u,4);
+            gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0+4,read_be32(packet+8),4);
+            gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CMDBUF0+8,need,4);
+        }
         gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_MAR,output&0x1fffffffu,4);
-        gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_LENGTH,32,4);
+        gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_LENGTH,need,4);
         gcn_di_write(ios->di,cpu,GCN_DI_BASE+GCN_DI_CR,GCN_DI_CR_TSTART|(command==0xe0?0:GCN_DI_CR_DMA),4);
         ios->di_immediate=command==0xe0;ios->di_output=output;
         ios->di_message=ios->message;ios->di_fd=read_be32(request+8);ios->di_waiting=true;ios->di_wait_kind=1;
         return 2; /* IPC ACK now, reply after actual shared-device completion */
     }
     case 0x79:
-        if(ios->di_waiting || ios->di->cmd_pending)return 0;
+        if(ios->di_waiting || ios->di->cmd_pending)return IOS_DEFERRED;
         ios->di_message=ios->message;ios->di_fd=read_be32(request+8);ios->di_waiting=true;ios->di_wait_kind=2;
         return 2; /* stay pending while the shared drive's cover is open */
     case 0x7a:value=gcn_di_read(ios->di,cpu,GCN_DI_BASE+GCN_DI_CVR,4);break;
@@ -219,6 +250,12 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
     if(!request || available<32 || (ios->message&3))return false;
     ios->command=read_be32(request);
     const u32 fd=read_be32(request+8);
+    if(ios->command==6 && fd<24 && ios->descriptors[fd]==3 &&
+       (ios->di_waiting || (ios->di && ios->di->cmd_pending))) {
+        const u32 operation=read_be32(request+12);
+        if(operation==0x12 || operation==0x70 || operation==0x71 || operation==0x79 ||
+           operation==0x8d || operation==0xa4 || operation==0xe0)return IOS_DEFERRED;
+    }
     if(getenv("WIILLR_IOS_TRACE")) {
         fprintf(stderr,"IOS request command=%u fd=%u argument=%08x\n",ios->command,fd,read_be32(request+12));
         if(ios->command==7 && fd<24 && ios->descriptors[fd]==6) {
@@ -288,7 +325,7 @@ static int execute(WiiIosNative* ios,CPUState* cpu) {
             if(device==9 && !ios->bluetooth) {
                 const WiiBluetoothStore store={ios->fs,wii_fs_bt_read,wii_fs_bt_write};
                 ios->bluetooth=wii_bluetooth_create(cpu,ios->gpio_out,ios->fs?&store:NULL);if(!ios->bluetooth)return 0;
-                if(host_session_owner==ios && !wii_bluetooth_pair_first_remote(ios->bluetooth))return 0;
+                if((host_session_owner==ios || ios->disc) && !wii_bluetooth_pair_first_remote(ios->bluetooth))return 0;
             }
             if(device==5) {
                 const s32 opened=wii_fs_open(ios->fs,(const char*)path,read_be32(request+16));
@@ -1015,8 +1052,12 @@ bool wii_ios_native_tick(WiiIosNative* ios,WiiIpc* ipc,CPUState* cpu) {
     }
     if(ios->phase==1 && cpu->cycles>=ios->ready_at) {
         const int status=execute(ios,cpu);if(!status)return false;
-        wii_ipc_write(ipc,12,12,cpu->cycles);
-        ios->ready_at=cpu->cycles+6000;ios->phase=status>=2?0:2;return true;
+        /* A busy serialized device retains this request. Its older async
+         * completion below must remain deliverable before we retry it. */
+        if(status!=IOS_DEFERRED) {
+            wii_ipc_write(ipc,12,12,cpu->cycles);
+            ios->ready_at=cpu->cycles+6000;ios->phase=status>=2?0:2;return true;
+        }
     }
     if(ios->bluetooth && !ipc->y) {
         u32 message;s32 result;bool ready;

@@ -43,6 +43,10 @@ int main(void) {
     write_be32(image+0x48, 0x817ffff0);
     CHECK(!wii_dol_load(&cpu, image, sizeof image, &entry));
     CHECK(cpu_alloc_mem2(&cpu,WII_MEM2_SIZE));
+    CHECK(wii_native_ios_boot_memory(&cpu,35));
+    CHECK(read_be32(cpu.ram+0x3140)==0x00230e18);
+    CHECK(read_be32(cpu.ram+0x3144)==0x00030110);
+    CHECK(read_be32(cpu.ram+0x3128)==0x935e0000);
     CHECK(wii_native_ios_boot_memory(&cpu,37));
     CHECK(read_be32(cpu.ram+0x3140)==0x0025161f);
     CHECK(read_be32(cpu.ram+0x3128)==0x935e0000);

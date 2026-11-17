@@ -56,12 +56,30 @@ int main(void) {
     CHECK(mem_read32_cia(&cpu,message,0)==6 && mem_read32_cia(&cpu,message+4,0)==0x12345678);
     CHECK(di.dimar==output && mem_read32_cia(&cpu,output,0)==2 && mem_read32_cia(&cpu,output+4,0)==0x20060526);
     for(unsigned n=0;n<32;n++)CHECK(cpu.ram[0x600+n]==0xa5);
+    /* A second async drive request must wait for the first, preserving both
+     * messages and the first destination until actual device completion. */
+    const u32 second=message+64,second_input=input+64,second_output=output+64;
+    mem_write32_cia(&cpu,second,6,0);mem_write32_cia(&cpu,second+4,0x55667788,0);
+    mem_write32_cia(&cpu,second+8,0,0);mem_write32_cia(&cpu,second+12,0x8d,0);
+    mem_write32_cia(&cpu,second+16,second_input,0);mem_write32_cia(&cpu,second+20,32,0);
+    mem_write32_cia(&cpu,second+24,second_output,0);mem_write32_cia(&cpu,second+28,32,0);
+    mem_write32_cia(&cpu,second_input,0x8d000000,0);mem_write32_cia(&cpu,second_input+4,32,0);
+    mem_write32_cia(&cpu,second_input+8,0,0);
+    CHECK(exchange(&ios,&ipc,&cpu,second));
+    CHECK(ios.di_message==message && ios.di_waiting && ios.phase==1);
+    CHECK(mem_read32_cia(&cpu,message+4,0)==0x12345678 && mem_read32_cia(&cpu,second+4,0)==0x55667788);
     const u32 delay=(u32)di.pending_cycles;
     gcn_di_tick(&cpu,delay-1);cpu.cycles+=delay-1;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.di_waiting && !ipc.y);
     gcn_di_tick(&cpu,1);++cpu.cycles;
     CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.di_waiting && ipc.y==1);
     CHECK(mem_read32_cia(&cpu,message,0)==8 && mem_read32_cia(&cpu,message+4,0)==1);
+    consume_mailbox(&ipc,0x36,cpu.cycles);
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && ios.di_message==second && ios.di_waiting);
+    consume_mailbox(&ipc,0x36,cpu.cycles);
+    gcn_di_tick(&cpu,(u32)di.pending_cycles);cpu.cycles+=300000;
+    CHECK(wii_ios_native_tick(&ios,&ipc,&cpu) && !ios.di_waiting);
+    CHECK(mem_read32_cia(&cpu,second,0)==8 && mem_read32_cia(&cpu,second+4,0)==2);
     mem_write32_cia(&cpu,message,6,0);mem_write32_cia(&cpu,message+8,0,0);
     mem_write32_cia(&cpu,message+12,0x70,0);mem_write32_cia(&cpu,input,0x70000000,0);
     mem_write32_cia(&cpu,output,0x55667788,0);

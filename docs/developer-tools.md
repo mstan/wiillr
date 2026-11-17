@@ -61,6 +61,29 @@ startup, and these tools do not synthesize missing hardware or firmware state.
 
 ## Prepare a static catalog
 
+### Experimental disc inputs
+
+`python tools/wii_disc.py ORIGINAL.iso --common-key PRIVATE-KEY --extract NEW-PRIVATE-DIRECTORY`
+inspects a raw encrypted Wii disc and extracts its DOL inputs. The optional
+Python dependency is `pycryptodome`. Original inputs remain read-only. Accessed
+data sectors are H0 checked; ticket signatures and H1-H3 are not authenticated.
+
+The direct discovery executable accepts `--disc ORIGINAL.iso PRIVATE-KEY` after
+its other options. `--ios-profile 35` selects the native IOS35 v3608 development
+memory contract. This DOL-entry route reserves the original FST from MEM1 arena
+allocation, exposes the disc capacity/partition metadata and mounts the real
+image. Original apploader execution and authenticated partition changes are
+not implemented. It does not extend the NAND-oriented `wiillr discover` wrapper.
+
+The native DI provider implements partition data reads for this explicit route,
+plus restricted raw reads and the retail drive's ReportKey error. Raw commands
+retain the shared drive's asynchronous completion. Encrypted partition reads
+are a synchronous development implementation; their timing remains unqualified.
+Busy drive requests wait without losing the earlier reply. Missing services
+still stop discovery; this route does not establish native title acceptance.
+
+### Verified code preparation
+
 For Wii Menu 4.3U reverse engineering, the [source and annotation guide](https://github.com/mstan/wiillr/blob/wiillr-v0.1.1/docs/wii-menu-references.md)
 describes the version-verified symbol index and addressed disassembly. Its
 `tools/annotate_wii_menu.py` helper runs from a source checkout; it does not

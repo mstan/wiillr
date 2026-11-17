@@ -9,6 +9,7 @@
 #include "wiillr/hollywood.h"
 #include "wiillr/network.h"
 #include "wiillr/keyboard.h"
+#include "wiillr/disc.h"
 typedef struct {
     u8 descriptors[24],phase;
     u32 message,command;
@@ -31,6 +32,7 @@ typedef struct {
     bool (*validate_launch)(void*,const WiiTitleLaunch*);
     void* launch_user;
     GcnDi* di; /* borrowed device; consumer owns storage, time and disc paths */
+    WiiDisc* disc; /* borrowed verified partition for explicit disc discovery */
     bool di_initialized;
     bool di_waiting;
     u8 di_wait_kind; /* 1: command completion, 2: actual cover closure */

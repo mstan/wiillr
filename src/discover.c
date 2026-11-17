@@ -5,6 +5,7 @@
 #include "wiillr/dol.h"
 #include "wiillr/machine.h"
 #include "wiillr/boot.h"
+#include "wiillr/disc.h"
 #include "wiillr/gx.h"
 #include "wiillr/gx_output.h"
 #include "wiillr/gx_session.h"
@@ -221,9 +222,14 @@ static int run(int argc, char** argv) {
         if(errno || !*sync_text || *tail){fprintf(stderr,"invalid Sync-button cycle\n");return 2;}
         sync_pending=true;
     }
+    const char *disc_path=NULL,*disc_key=NULL;
+    if(argc>=4 && !strcmp(argv[argc-3],"--disc")) {
+        disc_path=argv[argc-2];disc_key=argv[argc-1];argc-=3;
+    }
     u32 ios_profile=4;
     if(argc>=3 && !strcmp(argv[argc-2],"--ios-profile")) {
         if(!strcmp(argv[argc-1],"4"))ios_profile=4;
+        else if(!strcmp(argv[argc-1],"35") && WIILLR_IOS_NATIVE)ios_profile=35;
         else if(!strcmp(argv[argc-1],"37") && WIILLR_IOS_NATIVE)ios_profile=37;
         else if(!strcmp(argv[argc-1],"80") && WIILLR_IOS_NATIVE)ios_profile=80;
         else return 2;
@@ -235,9 +241,10 @@ static int run(int argc, char** argv) {
     }
     if (argc != 5 && argc != 7 && argc != 8 && argc != 10) {
 #if WIILLR_PPC_STATIC
-        fprintf(stderr,"usage: wiillr-native [--launcher|--launcher-settings|--launcher-check] ORIGINAL-DOL MAX-CYCLES MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID] [--gx LIB DATA CACHE] [--ios-profile 4|37|80]\n");
+        fprintf(stderr,"usage: wiillr-native [--launcher|--launcher-settings|--launcher-check] ORIGINAL-DOL MAX-CYCLES MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID] [--gx LIB DATA CACHE] [--ios-profile 4|35|37|80] [--disc ISO COMMON-KEY]\n");
 #else
         fprintf(stderr, "usage: wiillr-discover ORIGINAL-DOL MAX-STEPS MEM1-OUTPUT STOP-PC [DSP-ROM DSP-COEF] [NAND-PROFILE UID GID]\n"
+                        "[--gx LIB DATA CACHE] [--ios-profile 4|35|37|80] [--disc ISO COMMON-KEY]\n"
                         "Discovery only; all guest instructions are interpreted. STOP-PC=0 disables.\n");
 #endif
         return 2;
@@ -297,8 +304,17 @@ static int run(int argc, char** argv) {
         cpu_free(&cpu); free(image); return 2;
     }
     free(image);
+    WiiDisc* disc=NULL;
+    if(disc_path) {
+        disc=wii_disc_open(disc_path,disc_key);
+        if(!wii_disc_boot_memory(&cpu,disc)) {
+            fprintf(stderr,"invalid disc or requested IOS differs\n");wii_disc_close(disc);cpu_free(&cpu);return 2;
+        }
+        printf("{\"disc_development_boundary\":true,\"partition_authentication\":false,\"apploader_executed\":false}\n");
+    }
     printf("{\"boot_ios_profile\":%u,\"original_ARM_boot\":false}\n",ios_profile);
     gcn_rings_init();
+    gcn_ring_watch_init();
     gcn_interpreter_capture_begin();
     /* IOS NAND-title handoff: physical entry, translation disabled. The
      * original entry stub initializes the PPC; no captured state is restored. */
@@ -306,6 +322,22 @@ static int run(int argc, char** argv) {
     cpu.spr[287] = PPC_BROADWAY_PVR;
     WiiMachine machine;
     wii_machine_init(&machine, &cpu);
+    machine.ios.disc=disc;
+    if(disc && !gcn_di_set_disc(&machine.di,disc_path)) {
+        fprintf(stderr,"disc drive mount failed\n");wii_disc_close(disc);cpu_free(&cpu);return 2;
+    }
+    if(disc) {
+        /* Disc launch follows an actual Read Disc ID transaction. Keep the
+         * shared drive state consistent with this documented handoff. */
+        gcn_di_reset_drive(&machine.di,true);
+        gcn_di_write(&machine.di,&cpu,GCN_DI_BASE+GCN_DI_CMDBUF0,0xa8000040u,4);
+        gcn_di_write(&machine.di,&cpu,GCN_DI_BASE+GCN_DI_MAR,0,4);
+        gcn_di_write(&machine.di,&cpu,GCN_DI_BASE+GCN_DI_LENGTH,32,4);
+        gcn_di_write(&machine.di,&cpu,GCN_DI_BASE+GCN_DI_CR,GCN_DI_CR_TSTART|GCN_DI_CR_DMA,4);
+        gcn_di_tick(&cpu,(u32)machine.di.pending_cycles);
+        if(machine.di.error_code) {wii_disc_close(disc);cpu_free(&cpu);return 2;}
+        gcn_di_write(&machine.di,&cpu,GCN_DI_BASE+GCN_DI_SR,GCN_DI_SR_TCINT|GCN_DI_SR_DEINT,4);
+    }
 #ifdef RECOMP_LAUNCHER
     /* Actual Menu packages seed host-local time once at process startup.
      * Direct CLI QA keeps its fixed RTC. Title handoffs preserve this state. */
@@ -575,6 +607,12 @@ static int run(int argc, char** argv) {
         }
     }
     wii_gx_stop(&gx);
+    if(disc && (cpu.halted || (stop && cpu.pc==stop))) {
+        if(gcn_watch_len)gcn_ring_watch_dump_stderr(64);
+        fprintf(stderr,"disc discovery state pc=%08x lr=%08x ctr=%08x\n",cpu.pc,cpu.lr,cpu.ctr);
+        for(unsigned n=0;n<32;n+=4)fprintf(stderr,"r%u=%08x r%u=%08x r%u=%08x r%u=%08x\n",
+            n,cpu.gpr[n],n+1,cpu.gpr[n+1],n+2,cpu.gpr[n+2],n+3,cpu.gpr[n+3]);
+    }
 #if WIILLR_PPC_STATIC
     wii_native_summary();
 #if WIILLR_PPC_DISCOVERY
@@ -595,6 +633,7 @@ static int run(int argc, char** argv) {
            stop && cpu.pc == stop ? "true":"false", dump_requested && saved ? "true":"false");
     gcn_exi_free(&machine.exi);
     gcn_di_free(&machine.di);
+    wii_disc_close(disc);
     cpu_free(&cpu);
     return !saved ? 2 : cpu.halted ? 1 : 0;
 }

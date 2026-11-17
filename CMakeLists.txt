@@ -133,7 +133,7 @@ endif()
 add_library(wii_peripherals STATIC src/peripherals.cpp)
 target_include_directories(wii_peripherals PUBLIC include ${WIILLR_CORE_SOURCE_DIR}/include ${WIILLR_CORE_SOURCE_DIR}/dsp_lle/include)
 target_link_libraries(wii_peripherals PUBLIC gcn_runtime_core)
-add_library(wii_boot STATIC src/boot.c src/dol.c src/machine.c src/dsp.c src/ios.c src/keyboard.c src/ave.c src/gx.c src/gx_output.c src/gx_session.c
+add_library(wii_boot STATIC src/boot.c src/dol.c src/disc.cpp src/machine.c src/dsp.c src/ios.c src/keyboard.c src/ave.c src/gx.c src/gx_output.c src/gx_session.c
   ${WIILLR_CORE_SOURCE_DIR}/src/resident_memory.c
   src/control.cpp src/pacing.cpp
   ${WIILLR_CORE_SOURCE_DIR}/src/host_audio.c
@@ -153,7 +153,7 @@ find_package(Threads REQUIRED)
 option(WIILLR_MM9_DLC "Use verified installed MM9 DLC through the offline native provider" ON)
 target_sources(wii_boot PRIVATE src/mm9_dlc.c src/mm9_mods.c)
 set_property(SOURCE src/mm9_dlc.c APPEND PROPERTY COMPILE_DEFINITIONS WIILLR_MM9_DLC=$<BOOL:${WIILLR_MM9_DLC}>)
-target_link_libraries(wii_boot PRIVATE Threads::Threads wii_peripherals)
+target_link_libraries(wii_boot PRIVATE Threads::Threads wii_peripherals wii_aes128)
 add_library(wii_network STATIC src/network.cpp)
 target_include_directories(wii_network PUBLIC include ${WIILLR_CORE_SOURCE_DIR}/include)
 target_link_libraries(wii_network PRIVATE Threads::Threads)
@@ -728,6 +728,10 @@ endif()
 add_executable(test_wii_dol tests/test_dol.c)
 target_link_libraries(test_wii_dol PRIVATE wii_boot)
 add_test(NAME wii_dol_launch COMMAND test_wii_dol)
+add_executable(test_wii_disc_reader tests/test_disc_reader.cpp)
+target_link_libraries(test_wii_disc_reader PRIVATE wii_boot)
+add_test(NAME wii_encrypted_disc_reader COMMAND "${Python3_EXECUTABLE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_disc.py" "$<TARGET_FILE:test_wii_disc_reader>")
 add_executable(test_wii_devices tests/test_devices.c)
 target_link_libraries(test_wii_devices PRIVATE wii_boot)
 add_test(NAME wii_pi_ipc COMMAND test_wii_devices)
