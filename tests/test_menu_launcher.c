@@ -22,6 +22,12 @@ static bool grid_enabled;
 static unsigned grid_width,grid_height;
 void wii_menu_grid_configure(bool enabled){grid_enabled=enabled;}
 bool wii_menu_grid_supported(void){return true;}
+static unsigned library_multiplier=1;
+const char* wii_menu_grid_library_error(void){return "";}
+bool wii_menu_grid_library_configure(unsigned multiplier){
+    if(!multiplier || multiplier>128 || (multiplier&(multiplier-1)))return false;
+    library_multiplier=multiplier;return true;
+}
 void wii_menu_grid_extent(unsigned w,unsigned h,bool fit){(void)fit;grid_width=w;grid_height=h;}
 static bool peripheral_missing;
 static RecompLauncherCPeripheral test_peripheral;

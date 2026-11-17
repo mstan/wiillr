@@ -30,6 +30,14 @@ bool wii_fs_menu_welcome_enabled(WiiFs*,bool* enabled);
 bool wii_fs_menu_welcome_set_enabled(WiiFs*,bool enabled);
 WiiMenuWelcomeResult wii_fs_menu_welcome(WiiFs*,uint32_t rtc_seconds);
 uint32_t wii_fs_uid(WiiFs*);
+#define WIILLR_MENU_LIBRARY_LIMIT 6144u
+#define WIILLR_MENU_LIBRARY_CONFIG_LIMIT (WIILLR_MENU_LIBRARY_LIMIT*160u)
+/* Host-only channel order/page sidecar. Never changes iplsave.bin or title data.
+ * Missing means an empty catalog; invalid/symlinked data is rejected. */
+bool wii_fs_menu_library_read(WiiFs*,uint64_t titles[WIILLR_MENU_LIBRARY_LIMIT],uint32_t* anchor);
+bool wii_fs_menu_library_write(WiiFs*,const uint64_t titles[WIILLR_MENU_LIBRARY_LIMIT],uint32_t anchor);
+/* Optional UTF-8 channels.cfg from this profile; bounded and reparse-safe. */
+bool wii_fs_menu_library_config(WiiFs*,uint8_t* data,uint32_t capacity,uint32_t* size);
 int32_t wii_es_set_uid(WiiFs*,uint32_t caller_uid,uint64_t title);
 /* Actual /title directories, including titles whose content is absent.
  * A non-null output receives up to capacity big-endian title IDs; count is

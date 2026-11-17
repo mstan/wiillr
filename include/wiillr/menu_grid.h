@@ -6,11 +6,18 @@
 #include <stddef.h>
 typedef struct CPUState CPUState;
 typedef struct WiiMenuPicture WiiMenuPicture;
+typedef struct WiiFs WiiFs;
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Experimental presentation only. Original page/index and NAND order survive. */
+/* Consumer-owned layout/library. Stock providers decline these enhancements. */
 void wii_menu_grid_configure(bool enabled);
+/* Capacity is latched at profile attachment, never changed beneath live guest
+ * objects. 1 is stock; supported expanded multipliers are powers of two <=128.
+ * The borrowed filesystem remains valid until attachment with NULL. */
+bool wii_menu_grid_library_configure(unsigned multiplier);
+void wii_menu_grid_library_attach(WiiFs*);
+const char* wii_menu_grid_library_error(void);
 bool wii_menu_grid_supported(void);
 bool wii_menu_grid_enabled(void);
 void wii_menu_grid_extent(unsigned width,unsigned height,bool fit);

@@ -9,6 +9,7 @@
 #include "wiillr/gx_output.h"
 #include "wiillr/gx_session.h"
 #include "wiillr/control.h"
+#include "wiillr/menu_grid.h"
 #include "wiillr/host_session.h"
 #ifdef RECOMP_LAUNCHER
 #include "wiillr/launcher.h"
@@ -108,7 +109,8 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     /* The old title never receives a success reply: ES_Launch bootstraps PPC.
      * Retire all old GPU ownership before replacing RAM, descriptors or DSP. */
     wii_gx_stop(gx);if(cpu->halted){wii_gx_handoff_end(&handoff,false);wii_es_release_launch(&launch);return false;}
-    wii_dsp_stop(&m->dsp);wii_ios_native_destroy(&m->ios);wii_fs_unmount(m->ios.fs);
+    wii_dsp_stop(&m->dsp);wii_menu_grid_library_attach(NULL);
+    wii_ios_native_destroy(&m->ios);wii_fs_unmount(m->ios.fs);
     cpu_reset(cpu);cpu->cycles=cycles;cpu->timebase=timebase;cpu->spr[287]=PPC_BROADWAY_PVR;
     u32 entry;
     bool ok=wii_native_ios_boot_memory(cpu,(u32)launch.ios) &&
@@ -125,6 +127,7 @@ static bool bootstrap_launch(CPUState* cpu,WiiMachine* m,WiiGx* gx,const char* p
     m->ios.operations=operations;m->ios.kd_utc=utc;m->ios.kd_utc_cycles=utc_cycles;m->ios.kd_utc_set=utc_set;
     m->ios.validate_launch=validate_launch;m->ios.launch_user=cpu;
     m->ios.fs=wii_fs_mount(profile,launch.uid,launch.gid);ok=ok && m->ios.fs;
+    if(ok)wii_menu_grid_library_attach(m->ios.fs);
     if(ok && library) {
         ok=wii_gx_start(gx,m,cpu,library,data,cache);
         /* The setup journal may remain in the environment after review has
@@ -336,6 +339,9 @@ static int run(int argc, char** argv) {
         wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;
     }
 #endif
+    /* Standalone Menu settings are loaded above too. Latch library capacity
+     * after those choices exist, consistently with packaged startup. */
+    wii_menu_grid_library_attach(machine.ios.fs);
     WiiGx gx={0};
     if(gx_library) {
 #if WIILLR_GX_NATIVE || WIILLR_GX_SOFTWARE

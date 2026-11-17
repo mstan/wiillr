@@ -48,6 +48,26 @@
     {
       "symbol": "searchList__Q33ipl5scene13ChannelSelectCFii",
       "comment": "Resolves the original stock page/index pair to its live channel object. Keep the original slot identity independent from presentation pages."
+    },
+    {
+      "symbol": "loadMetaHeaderAsync__Q33ipl7channel7ManagerFii",
+      "comment": "Copies SaveData SInfo synchronously, then queues a metadata read whose callback retains the resident SEntry address. Do not relocate or recycle that entry until the callback finishes. Virtual catalogs must substitute the copied value without changing persistent SaveData."
+    },
+    {
+      "symbol": "cbReadMetaHeader__Q33ipl7channel7ManagerFPv",
+      "comment": "Completes the metadata owner, initializes its ARC handle and updates mNumFinished/mNumValidChannel. These counters describe the original 48 resident entries, not a virtual library size."
+    },
+    {
+      "symbol": "refreshAsync__Q33ipl7channel7ManagerFv",
+      "comment": "Only an acquired mbCanRefresh request reinitializes the manager and SaveData. A host channel catalog must invalidate its resident mapping when this stock refresh begins, including changes made through Data Management."
+    },
+    {
+      "symbol": "appendToChannelList__Q33ipl5scene13ChannelSelectFii",
+      "comment": "Allocates a ChannelObj and its bounded thumbnail heap; appends to the stock list. A virtual channel position must map to an existing resident page/index before creating this object."
+    },
+    {
+      "symbol": "destroyChannelObj__Q33ipl5scene13ChannelSelectFPQ33ipl5scene10ChannelObj",
+      "comment": "Destroys the ChannelObj and its thumbnail heap. Remove its list link first and retain the original asynchronous file/module lifetime contracts."
     }
   ],
   "structures": [
@@ -100,6 +120,48 @@
       "offset": "0x10",
       "source": "libs/NW4R",
       "comment": "C++ intrusive list: size at0, next/previous sentinel at4/8; Pane link begins at4. This differs from the C ut::List representation."
+    },
+    {
+      "type": "ipl::System::Arg",
+      "field": "mpChannelManager",
+      "offset": "0x84",
+      "source": "include/system/iplSystem.h",
+      "comment": "Original global argument block begins at 0x81089008 for the pinned 4.3U executable."
+    },
+    {
+      "type": "ipl::System::Arg",
+      "field": "mpSaveDataManager",
+      "offset": "0x94",
+      "source": "include/system/iplSystem.h",
+      "comment": "Original manager pointer; live SaveData chanInfo begins at manager+0x30."
+    },
+    {
+      "type": "ipl::channel::Manager",
+      "field": "mChannels",
+      "offset": "0x0C",
+      "source": "include/system/iplChannelManager.h",
+      "comment": "Exactly four pages of twelve SEntry records, each 0x70 bytes. Host library positions must never index this array directly."
+    },
+    {
+      "type": "ipl::channel::SEntry",
+      "field": "info",
+      "offset": "0x38",
+      "source": "include/system/iplChannelManager.h",
+      "comment": "Sixteen-byte SInfo copied from SaveData. ARC/header pointers elsewhere in this record retain guest ownership."
+    },
+    {
+      "type": "ipl::channel::SEntry",
+      "field": "state",
+      "offset": "0x4C",
+      "source": "include/system/iplChannelManager.h",
+      "comment": "0 unloaded, 1 metadata pending, 2 loaded. A pending callback owns its original SEntry address."
+    },
+    {
+      "type": "ipl::savedata::Manager",
+      "field": "mData.chanInfo",
+      "offset": "0x30",
+      "source": "include/system/iplSaveDataManager.h",
+      "comment": "The stock 48 channel positions. iplsave.bin remains the original 0x4C0-byte format with its MD5 trailer."
     }
   ]
 }

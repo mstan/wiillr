@@ -35,6 +35,29 @@ int main(int argc,char** argv) {
   std::memcpy(ticket.data()+0x1dc,uid_record,8);ticket[0x1f1]=152;ticket[0x2a3]=0x7b;
   std::ofstream(root/"ticket/00010001/41424344.tik",std::ios::binary).write(reinterpret_cast<const char*>(ticket.data()),ticket.size());
   auto* nand=wii_fs_mount(path.c_str(),0,0);CHECK(nand);
+  // Host-only library order is bounded, atomic and independent of native data.
+  std::array<uint64_t,WIILLR_MENU_LIBRARY_LIMIT> order{},loaded_order{};uint32_t anchor=99;
+  CHECK(wii_fs_menu_library_read(nand,loaded_order.data(),&anchor) && !anchor && loaded_order==order);
+  order[48]=0x1000141424344ull;order[6143]=0x1000155555555ull;
+  CHECK(wii_fs_menu_library_write(nand,order.data(),6143));
+  CHECK(wii_fs_menu_library_read(nand,loaded_order.data(),&anchor) && anchor==6143 && loaded_order==order);
+  CHECK(fs::file_size(root/".wiillr-channel-library")==16+WIILLR_MENU_LIBRARY_LIMIT*8);
+  CHECK(!fs::exists(root/".wiillr-channel-library.tmp"));
+  CHECK(!wii_fs_menu_library_write(nand,order.data(),6144));
+  std::ofstream(root/".wiillr-channel-library.tmp")<<"preserve existing temporary file";
+  CHECK(!wii_fs_menu_library_write(nand,order.data(),70));
+  CHECK(wii_fs_menu_library_read(nand,loaded_order.data(),&anchor) && anchor==6143);
+  CHECK(fs::remove(root/".wiillr-channel-library.tmp"));
+  std::ofstream(root/".wiillr-channel-library",std::ios::binary)<<"invalid/truncated";
+  CHECK(!wii_fs_menu_library_read(nand,loaded_order.data(),&anchor) && anchor==6143);
+  CHECK(fs::file_size(root/"title/00010001/55555555/data/progress")==16);
+  CHECK(fs::remove(root/".wiillr-channel-library"));
+  std::array<uint8_t,1024> shortcuts{};uint32_t config_size=99;
+  CHECK(wii_fs_menu_library_config(nand,shortcuts.data(),shortcuts.size(),&config_size) && !config_size);
+  std::ofstream(root/"channels.cfg",std::ios::binary)<<"48 0001000141424344\n";
+  CHECK(wii_fs_menu_library_config(nand,shortcuts.data(),shortcuts.size(),&config_size) && config_size==20);
+  CHECK(!wii_fs_menu_library_config(nand,shortcuts.data(),4,&config_size));
+  CHECK(fs::remove(root/"channels.cfg"));
   // Launch preparation checks the actual installed view, boot index, UID and
   // content digest without changing active credentials or persistent data.
   auto launch_tmd=tmd;launch_tmd[0x187]=1;launch_tmd[0x18b]=37;launch_tmd[0x1e1]=3;

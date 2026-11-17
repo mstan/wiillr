@@ -5,6 +5,9 @@
 #include <stdio.h>
 bool wii_menu_grid_supported(void){return false;}
 void wii_menu_grid_configure(bool enabled){(void)enabled;}
+bool wii_menu_grid_library_configure(unsigned multiplier){return multiplier==1;}
+void wii_menu_grid_library_attach(WiiFs* fs){(void)fs;}
+const char* wii_menu_grid_library_error(void){return "";}
 bool wii_menu_grid_enabled(void){return false;}
 void wii_menu_grid_extent(unsigned width,unsigned height,bool fit){(void)width;(void)height;(void)fit;}
 void wii_menu_grid_reset(void){}

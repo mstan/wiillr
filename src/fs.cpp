@@ -82,21 +82,21 @@ extern "C" WiiFs* wii_fs_mount(const char* profile,uint32_t uid,uint16_t gid) {
   } catch(const std::exception& e){std::fprintf(stderr,"NAND mount: %s\n",e.what());return nullptr;}
 }
 extern "C" void wii_fs_unmount(WiiFs* s){delete s;}
-static bool profile_read(WiiFs* s,const char* name,uint8_t* data,uint32_t capacity,uint32_t* size) {
+static bool profile_read(WiiFs* s,const char* name,uint8_t* data,uint32_t capacity,uint32_t* size,uint32_t limit=512) {
   try {
     const auto path=s->root/name;
     if(reparse(path))return false;
     if(!fs::exists(path)){*size=0;return true;}
-    const auto bytes=fs::file_size(path);if(bytes>capacity || bytes>512)return false;
+    const auto bytes=fs::file_size(path);if(bytes>capacity || bytes>limit)return false;
     std::ifstream file(path,std::ios::binary);file.read(reinterpret_cast<char*>(data),bytes);
     if(!file)return false;*size=uint32_t(bytes);return true;
   }catch(...){return false;}
 }
-static bool profile_write(WiiFs* s,const char* name,const uint8_t* data,uint32_t size) {
+static bool profile_write(WiiFs* s,const char* name,const uint8_t* data,uint32_t size,uint32_t limit=512) {
   try {
     const auto path=s->root/name;
     const auto temporary=s->root/(std::string(name)+".tmp");
-    if(size>512 || reparse(path) || reparse(temporary) || fs::exists(temporary))return false;
+    if(size>limit || reparse(path) || reparse(temporary) || fs::exists(temporary))return false;
     {std::ofstream file(temporary,std::ios::binary);file.write(reinterpret_cast<const char*>(data),size);file.close();if(!file)return false;}
 #ifdef _WIN32
     return MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
@@ -104,6 +104,30 @@ static bool profile_write(WiiFs* s,const char* name,const uint8_t* data,uint32_t
     fs::rename(temporary,path);return true;
 #endif
   }catch(...){return false;}
+}
+static constexpr uint32_t library_bytes=16+WIILLR_MENU_LIBRARY_LIMIT*8;
+extern "C" bool wii_fs_menu_library_config(WiiFs* s,uint8_t* data,uint32_t capacity,uint32_t* size) {
+  if(!s || !data || !size || capacity>WIILLR_MENU_LIBRARY_CONFIG_LIMIT)return false;
+  return profile_read(s,"channels.cfg",data,capacity,size,WIILLR_MENU_LIBRARY_CONFIG_LIMIT);
+}
+extern "C" bool wii_fs_menu_library_read(WiiFs* s,uint64_t* titles,uint32_t* anchor) {
+  if(!s || !titles || !anchor)return false;
+  std::vector<uint8_t> data(library_bytes);uint32_t size=0;
+  if(!profile_read(s,".wiillr-channel-library",data.data(),library_bytes,&size,library_bytes))return false;
+  if(!size){std::fill(titles,titles+WIILLR_MENU_LIBRARY_LIMIT,0);*anchor=0;return true;}
+  if(size!=library_bytes || std::memcmp(data.data(),"WLLRCH01",8))return false;
+  auto read32=[&](uint32_t o){return uint32_t(data[o])<<24|uint32_t(data[o+1])<<16|uint32_t(data[o+2])<<8|data[o+3];};
+  if(read32(12)!=WIILLR_MENU_LIBRARY_LIMIT || read32(8)>=WIILLR_MENU_LIBRARY_LIMIT)return false;
+  for(uint32_t n=0;n<WIILLR_MENU_LIBRARY_LIMIT;n++)titles[n]=uint64_t(read32(16+n*8))<<32|read32(20+n*8);
+  *anchor=read32(8);return true;
+}
+extern "C" bool wii_fs_menu_library_write(WiiFs* s,const uint64_t* titles,uint32_t anchor) {
+  if(!s || !titles || anchor>=WIILLR_MENU_LIBRARY_LIMIT)return false;
+  std::vector<uint8_t> data(library_bytes);std::memcpy(data.data(),"WLLRCH01",8);
+  auto write32=[&](uint32_t o,uint32_t v){for(unsigned n=0;n<4;n++)data[o+n]=uint8_t(v>>(24-n*8));};
+  write32(8,anchor);write32(12,WIILLR_MENU_LIBRARY_LIMIT);
+  for(uint32_t n=0;n<WIILLR_MENU_LIBRARY_LIMIT;n++){write32(16+n*8,uint32_t(titles[n]>>32));write32(20+n*8,uint32_t(titles[n]));}
+  return profile_write(s,".wiillr-channel-library",data.data(),library_bytes,library_bytes);
 }
 static constexpr char menu_mod_settings[]="wiillr-menu-mods-v1\nwelcome-letter=1\n";
 extern "C" bool wii_fs_menu_welcome_enabled(WiiFs* s,bool* enabled) {
