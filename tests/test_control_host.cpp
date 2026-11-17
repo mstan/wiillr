@@ -7,6 +7,10 @@ static unsigned services,events;
 static bool failure,closed,service_failure;
 static int service_host(){++services;return !service_failure;}
 static void poll_host(GcnllrNativeGxStatus* out){++events;*out={};out->failed=failure;out->quit=closed;}
+static unsigned pixels;
+static int peek_pixel(u32 kind,u16 x,u16 y,u32* argb) {
+  assert(!kind && x==320 && y==224);++pixels;*argb=0xff123456u;return 1;
+}
 int main() {
   static CPUState cpu;WiiGx gx{};WiiControl control{};
   GcnllrNativeGxApi api{};api.service=service_host;api.status=poll_host;
@@ -23,6 +27,14 @@ int main() {
   paused_host_events(&control);assert(cpu.halted && control.paused);
   failure=service_failure=false;cpu.halted=false;control.paused=true;
   paused_host_events(&control);assert(control.paused && !cpu.halted);
+  api.peek=peek_pixel;gx.api=&api;
+  assert(control.efb_pixel(320,224)==0xff123456u && pixels==1);
+  assert(cpu.cycles==12345 && cpu.pc==0x80004000);
+  bool rejected=false;try{control.efb_pixel(640,224);}catch(const std::runtime_error&){rejected=true;}assert(rejected);
+  rejected=false;try{control.efb_pixel(320,528);}catch(const std::runtime_error&){rejected=true;}assert(rejected);
+  control.paused=false;
+  rejected=false;try{control.efb_pixel(320,224);}catch(const std::runtime_error&){rejected=true;}
+  assert(rejected && pixels==1);
   gx.api=nullptr;cpu.halted=false;control.paused=true;
   paused_host_events(&control);assert(control.paused && !cpu.halted && cpu.cycles==12345);
   puts("Paused host event dispatch, close/failure and guest-time isolation passed");

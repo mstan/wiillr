@@ -115,6 +115,12 @@ struct WiiControl {
       throw std::runtime_error("invalid frame range");
     return {bytes,width,height,stride,size_t(size)};
   }
+  u32 efb_pixel(u64 x,u64 y) {
+    u32 argb=0;
+    if(!paused || x>=640 || y>=528 || !gx->api || !gx->api->peek ||
+       !gx->api->peek(0,u16(x),u16(y),&argb))throw std::runtime_error("paused EFB pixel unavailable");
+    return argb;
+  }
   std::string fingerprint() {
     if(!paused)throw std::runtime_error("pause before fingerprinting");
     if(gx->api && !gx->api->drain())throw std::runtime_error("GX drain failed");
@@ -157,6 +163,12 @@ struct WiiControl {
         << ",\"dsp_native\":" << dsp.native_instructions
         << ",\"dsp_interpreter\":" << dsp.interpreter_instructions
         << ",\"dsp_misses\":" << dsp.misses
+        << ",\"dsp_pc\":" << dsp.pc << ",\"dsp_control\":" << dsp.control
+        << ",\"dsp_csr\":" << machine->dsp.registers.csr
+        << ",\"dsp_cpu_mail_high\":" << (machine->dsp.engine?gcn_dsp_engine_peek_mail_high(machine->dsp.engine,true):0)
+        << ",\"dsp_mail_high\":" << (machine->dsp.engine?gcn_dsp_engine_peek_mail_high(machine->dsp.engine,false):0)
+        << ",\"audio_dma_frames\":" << machine->dsp.audio_frames
+        << ",\"audio_dma_nonzero_bytes\":" << machine->dsp.audio_nonzero_bytes
         << ",\"gx_fifo_bytes\":" << graphics.fifo_bytes
         << ",\"gx_draws\":" << graphics.draws
         << ",\"gx_display_copies\":" << graphics.display_copies
@@ -351,6 +363,9 @@ struct WiiControl {
       const auto frame=copy?pixels(gx->copy_address,gx->copy_width,gx->copy_height,gx->copy_stride):scanout();
       return "{\"ok\":true,\"width\":"+std::to_string(frame.width)+",\"height\":"+std::to_string(frame.height)+",\"stride\":"+
         std::to_string(frame.stride)+",\"source\":\""+(copy?"completed-display-copy":"vi-scanout")+"\",\"data\":\""+hex(frame.bytes,frame.size)+"\"}";
+    }
+    if(args[0]=="efb" && args.size()==3) {
+      return "{\"ok\":true,\"source\":\"efb\",\"argb\":"+std::to_string(efb_pixel(number(args[1],10),number(args[2],10)))+"}";
     }
     if(args[0]=="settings" && args.size()==1) {
       if(!paused || !gx->host_settings || !gx->host_settings(gx->host_input_user))
