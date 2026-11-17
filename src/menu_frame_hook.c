@@ -27,8 +27,9 @@ static struct {
     bool transform_verified,transform_sampled;u64 transforms,transform_declines;
     bool keyboard_drawn,keyboard_visible;u64 keyboard_draws;
     bool sdk_verified,sdk_initializing;u32 sdk_fifo,sdk_size,sdk_thread;
+    u32 sdk_shutdown_next,sdk_shutdown_thread;
     struct {u32 word,remaining;u8 command,header;} sdk_setup;
-    u64 sdk_init_writes,sdk_texture_writes;
+    u64 sdk_init_writes,sdk_texture_writes,sdk_shutdown_writes;
 } state;
 static const u8* bytes(CPUState* cpu,u32 address,u32 size) {
     const u32 a=address&0x1fffffff;u32 available;
@@ -550,8 +551,9 @@ void wii_menu_frame_stop(void) {
     wii_menu_grid_reset();
     if(!state.owner)return;if(state.mesh)state.render->destroy_mesh(state.mesh);
     if(state.display)(void)state.display->set_aspect(0,0);
-    printf("{\"native_menu_sdk_setup\":1,\"retired_initialization_writes\":%llu,\"retired_texture_binding_writes\":%llu}\n",
-        (unsigned long long)state.sdk_init_writes,(unsigned long long)state.sdk_texture_writes);
+    printf("{\"native_menu_sdk_setup\":1,\"retired_initialization_writes\":%llu,\"retired_texture_binding_writes\":%llu,\"retired_shutdown_padding_writes\":%llu}\n",
+        (unsigned long long)state.sdk_init_writes,(unsigned long long)state.sdk_texture_writes,
+        (unsigned long long)state.sdk_shutdown_writes);
     printf("{\"native_menu_frame\":1,\"initializers\":%llu,\"begins\":%llu,\"copies\":%llu,\"completions\":%llu,\"views\":%llu,\"utility_quads\":%llu,\"isolated_buffers\":%llu,\"uncovered\":%llu,\"failed\":%llu,\"scope_fifo_bytes\":%llu}\n",(unsigned long long)state.initializers,(unsigned long long)state.begins,(unsigned long long)state.copies,(unsigned long long)state.completions,(unsigned long long)state.views,(unsigned long long)state.quads,(unsigned long long)state.isolated_buffers,(unsigned long long)state.uncovered,(unsigned long long)state.failed,(unsigned long long)state.fifo_bytes);
 #if WIILLR_MENU_TRANSFORM
     printf("{\"native_menu_transforms\":1,\"admitted\":%llu,\"declined\":%llu}\n",(unsigned long long)state.transforms,(unsigned long long)state.transform_declines);

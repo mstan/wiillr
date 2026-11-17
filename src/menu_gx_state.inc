@@ -77,6 +77,22 @@ bool wii_menu_frame_gather(WiiMachine* machine,CPUState* cpu,u32 address,u64 val
        strcmp(machine->gx_native_owner,"ipl43u-frame") ||
        (width!=1 && width!=2 && width!=4 && width!=8) || !state.sdk_verified)return false;
     if(!state.sdk_initializing) {
+        /* The original __GXShutdown flushes eight zero words. Shutdown can
+         * interrupt an active frame; these NOPs do not alter that frame's work.
+         * The existing title handoff drains the current graphics owner.
+         * Keep every SDK register/MMIO operation and barrier in original code;
+         * retire only this verified, ordered sequence on its calling thread. */
+        if(cpu->pc>=0x81541938u && cpu->pc<=0x81541954u && !(cpu->pc&3)) {
+            if(value || width!=4 || (address&0x1fffffffu)!=0x0c008000u ||
+               cpu->lr!=0x81541930u || state.sdk_setup.command || state.sdk_setup.header ||
+               state.sdk_setup.remaining)return false;
+            const u32 thread=word(cpu,0x800000e4);
+            if(state.bad || !thread || cpu->pc!=(state.sdk_shutdown_next?state.sdk_shutdown_next:0x81541938u) ||
+               (state.sdk_shutdown_next && thread!=state.sdk_shutdown_thread))return false;
+            state.sdk_shutdown_thread=thread;
+            state.sdk_shutdown_next=cpu->pc==0x81541954u?0:cpu->pc+4;
+            ++state.sdk_shutdown_writes;return true;
+        }
         if((address&0x1fffffffu)!=0x0c008000u || !sdk_texture_store(cpu,value,width))return false;
         ++state.sdk_texture_writes;return true;
     }

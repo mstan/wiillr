@@ -242,6 +242,27 @@ int main(void) {
     CHECK(fifo_complete(&cpu) && !state.sdk_initializing && state.initializers==1);
     CHECK(!memcmp(logical,cpu.ram+0x8000,sizeof logical));
     CHECK(word(&cpu,sdk+0x518)==callbacks && word(&cpu,sdk+0x51c)==callbacks+4);
+    /* Shutdown may interrupt a frame. Its padding must preserve the active
+     * owner, arrive in order on one thread, and contain only zero words. */
+    cpu.pc=0x8154193c;cpu.lr=0x81541930;
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0,4));
+    cpu.pc=0x81541938;state.active=false;
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,1,4));
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0,8));
+    CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008004,0,4));
+    cpu.lr=0;CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0,4));cpu.lr=0x81541930;
+    CHECK(!state.sdk_shutdown_writes && !state.sdk_shutdown_next);
+    for(unsigned active=0;active<2;active++) {
+        state.active=active!=0;
+        for(unsigned n=0;n<8;n++) {
+            cpu.pc=0x81541938+n*4;const CPUState before=cpu;
+            if(n==1){put(&cpu,0x800000e4,state.sdk_thread+4);CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0,4));put(&cpu,0x800000e4,state.sdk_thread);}
+            CHECK(wii_menu_frame_gather(&machine,&cpu,0xcc008000,0,4));CHECK(!memcmp(&before,&cpu,sizeof cpu));
+            CHECK(state.active==(active!=0));
+        }
+        CHECK(state.sdk_shutdown_writes==(active+1)*8 && !state.sdk_shutdown_next);
+    }
+    cpu.pc=0x81541958;CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0,4));
     cpu=unchanged;state.sdk_verified=true;wii_menu_frame_invalidate(0x81546000,4);CHECK(!state.sdk_verified);
     CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));
     wii_menu_frame_stop();CHECK(!wii_menu_frame_gather(&machine,&cpu,0xcc008000,0x61,1));
