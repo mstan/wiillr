@@ -174,7 +174,7 @@ bool wii_launcher_menu_session(const char* image) {
     game.rom_noun="Wii system";game.channel_grid_art=1;
     game.system_media_title="Wii system files";
     game.system_media_status=menu_system_status;
-    game.system_media_note="Import a Wii Menu 4.3U NAND backup or an extracted NAND folder. System files and saved data use a managed copy; your original backup is preserved.";
+    game.system_media_note="Import your Wii Menu 4.3U nand.bin (or its folder), or an extracted NAND root containing title, ticket, sys and shared2. Matching keys.bin beside the backup is detected automatically. Your original files and saves are preserved; the Menu uses a managed copy.";
     game.system_media_folders=1;game.host_persists_paths=1;
     game.rom_cache_path=rom_cache_path;game.settings_bindings=1;
     game.known_sha256=(const uint8_t(*)[32])menu_sha256;game.num_known_sha256=1;

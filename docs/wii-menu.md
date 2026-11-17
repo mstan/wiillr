@@ -19,11 +19,15 @@ Peripherals together.*
 ## First launch
 
 1. Extract the complete package and open **Wii Menu**.
-2. Choose **Import NAND backup** for a BootMii backup, or **Import extracted
-   folder** for an already extracted NAND.
+2. Choose **Import NAND backup** for a BootMii nand.bin, or **Import extracted
+   folder** for an extracted NAND root. The folder picker also recognizes a
+   containing folder with one nand.bin or one immediate nand/Wii root. It does
+   not search your drive for system files.
 3. Supply your own **Wii Menu 4.3U (USA)** system files. A BootMii backup can use
    its embedded keys; **Console keys** accepts the matching `keys.bin` or
-   128-byte OTP backup when needed. An extracted folder needs no separate key.
+   128-byte OTP backup when needed. When a backup has no appended keys, a
+   matching keys.bin beside nand.bin is detected automatically. An explicitly
+   selected key file takes priority. An extracted folder needs no separate key.
 4. Wait for **Wii system files are ready**, then choose **Launch**.
 
 Import verifies the supported Menu content and installed metadata before launch.

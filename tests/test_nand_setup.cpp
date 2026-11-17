@@ -77,7 +77,13 @@ int main(int argc,char** argv){try{
     Bytes truncated(6);write(source/"sys/uid.sys",truncated);require(inspect(source)==WII_NAND_SETUP_INVALID,"truncated UID table");write(source/"sys/uid.sys",original.at("sys/uid.sys"));
     auto bad_sc=original.at("shared2/sys/SYSCONF");bad_sc[22]=0x65;write(source/"shared2/sys/SYSCONF",bad_sc);
     require(inspect(source)==WII_NAND_SETUP_INVALID,"malformed required setting type refuses without replacement");write(source/"shared2/sys/SYSCONF",original.at("shared2/sys/SYSCONF"));
+    const auto wrapper=own.root/"wrapper";
+    folder(wrapper/"nand");
+    require(inspect(wrapper)==WII_NAND_SETUP_READY && info.source_kind==WII_NAND_SOURCE_EXTRACTED,"known immediate NAND wrapper detected");
+    folder(wrapper/"Wii");
+    require(inspect(wrapper)==WII_NAND_SETUP_INVALID && !info.ready,"ambiguous wrapper refuses without choosing a system");
     const auto raw_path=own.root/"nand.bin";raw(raw_path);require(inspect(raw_path)==WII_NAND_SETUP_READY,error);require(info.source_kind==WII_NAND_SOURCE_BOOTMII,"BootMii source identity");
+    write(own.root/"keys.bin",Bytes(128,1));require(inspect(raw_path)==WII_NAND_SETUP_READY,"valid embedded backup keys take priority over an unselected sibling");fs::remove(own.root/"keys.bin");
     const auto raw_copy=own.root/"decrypted";require(import(raw_path,raw_copy)==WII_NAND_SETUP_READY,error);for(const auto& [name,data]:original)require(read(raw_copy/name)==data,"raw AES/filesystem decode exact");
     std::unique_ptr<WiiFs,decltype(&wii_fs_unmount)> mounted(wii_fs_mount(text(raw_copy).c_str(),0,0),wii_fs_unmount);require(bool(mounted),"imported native mount");std::array<uint8_t,64> in{};std::copy_n("/sys/uid.sys",12,in.begin());std::array<uint8_t,74> out{};int32_t result=-1;
     require(wii_fs_ioctl(mounted.get(),-1,6,in.data(),in.size(),out.data(),out.size(),&result) && result==0 && out[2]==0x10 && out[3]==0 && out[5]==1 && out[70]==3 && out[71]==3 && out[72]==3 && out[73]==2,"raw owner/permissions/attributes preserved");mounted.reset();
@@ -88,6 +94,13 @@ int main(int argc,char** argv){try{
     require(inspect(raw_path)==WII_NAND_SETUP_NEEDS_KEYS && info.source_kind==WII_NAND_SOURCE_BOOTMII,"raw NAND without footer requests explicit keys");
     Bytes otp(128);const uint8_t key[]={1,3,5,7,9,11,13,15,2,4,6,8,10,12,14,16};std::copy_n(key,16,otp.begin()+0x58);write(keys,otp);
     require(inspect(raw_path,keytext.c_str())==WII_NAND_SETUP_READY,error);
+    const auto sibling_keys=own.root/"keys.bin";write(sibling_keys,otp);
+    require(inspect(raw_path)==WII_NAND_SETUP_READY,"matching sibling key backup detected");
+    require(inspect(own.root)==WII_NAND_SETUP_READY && info.source_kind==WII_NAND_SOURCE_BOOTMII,"backup folder detected without recursive discovery");
+    write(sibling_keys,wrong);
+    require(inspect(raw_path)==WII_NAND_SETUP_INVALID,"incorrect sibling key backup is never silently accepted");
+    fs::remove(sibling_keys);
+
     // A valid-ECC but cyclic allocation must still be rejected before import.
     {std::fstream f(raw_path,std::ios::binary|std::ios::in|std::ios::out);const uint64_t page=uint64_t(0x1fc00000)/0x800*0x840;Bytes b(0x840);f.seekg(page);f.read((char*)b.data(),b.size());put(b,14,1,2);for(unsigned i=0;i<4;++i)put(b,0x830+i*4,wiillr::NandController::ecc(b.data()+i*512));f.seekp(page);f.write((const char*)b.data(),b.size());}
     require(inspect(raw_path,keytext.c_str())==WII_NAND_SETUP_INVALID,"valid-ECC cyclic allocation rejects");

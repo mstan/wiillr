@@ -26,6 +26,7 @@ def unpack(archive: Path, output: Path, expected: str) -> None:
         for entry in entries:
             path = PurePosixPath(entry.filename)
             if (not path.parts or path.is_absolute() or '..' in path.parts or
+                    any(part.lower() == '.git' for part in path.parts) or
                     '\\' in entry.filename or ':' in entry.filename or
                     stat.S_ISLNK(entry.external_attr >> 16) or entry.filename in names):
                 raise ValueError('Invalid build-input member: ' + entry.filename)

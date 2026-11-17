@@ -90,7 +90,7 @@ struct Raw:Source {
  explicit Raw(const fs::path& p,const char* keys){origin=fs::canonical(p);chain(origin);raw_size=fs::file_size(origin);modified=fs::last_write_time(origin);need(raw_size==0x21000000 || raw_size==0x21000400,"Choose a standard 512 MiB BootMii nand.bin or an extracted NAND folder",WII_NAND_SETUP_UNSUPPORTED);file.open(origin,std::ios::binary);need(bool(file),"Cannot open the NAND backup",WII_NAND_SETUP_IO_ERROR);
   Bytes otp;if(raw_size==0x21000400){auto footer=physical(0x21000000,0x400);need(std::memcmp(footer.data(),"BackupMii v1",12)==0,"The appended NAND key backup is not BootMii v1");otp={footer.begin()+0x100,footer.begin()+0x180};}
   if(keys && *keys){auto b=read_file(path(keys),0x400);if(b.size()==0x400){need(std::memcmp(b.data(),"BackupMii v1",12)==0,"Unsupported key-backup format");b=Bytes(b.begin()+0x100,b.begin()+0x180);}need(b.size()==128,"Use a BootMii keys.bin or a 128-byte OTP backup");need(otp.empty() || b==otp,"The explicit key backup does not match this NAND");otp=std::move(b);}
-  need(!otp.empty(),"This NAND has no appended keys. Select its matching BootMii keys.bin.",WII_NAND_SETUP_NEEDS_KEYS);std::array<uint8_t,16> key{};std::copy_n(otp.data()+0x58,16,key.data());need(std::any_of(key.begin(),key.end(),[](uint8_t b){return b!=0 && b!=255;}),"The NAND key backup is empty or invalid");aes=wiillr::aes128_expand(key);std::fill(key.begin(),key.end(),0);std::fill(otp.begin(),otp.end(),0);
+  need(!otp.empty(),"This NAND needs console keys. Choose its matching keys.bin in Console keys, or place keys.bin beside nand.bin.",WII_NAND_SETUP_NEEDS_KEYS);std::array<uint8_t,16> key{};std::copy_n(otp.data()+0x58,16,key.data());need(std::any_of(key.begin(),key.end(),[](uint8_t b){return b!=0 && b!=255;}),"The NAND key backup is empty or invalid");aes=wiillr::aes128_expand(key);std::fill(key.begin(),key.end(),0);std::fill(otp.begin(),otp.end(),0);
   bool found=false;uint32_t generation=0,selected=0;for(unsigned i=0;i<16;++i){auto b=logical(0x1fc00000+i*0x40000,0x40000,false);if(std::memcmp(b.data(),"SFFS",4))continue;const auto seq=u32(b,4);if(!found || int32_t(seq-generation)>0){generation=seq;selected=0x1fc00000+i*0x40000;super=std::move(b);found=true;}}
   need(found,"No valid Wii filesystem superblock was found");super=logical(selected,0x40000);need((super[0x1000c+12]&3)==2,"Invalid NAND root directory");Entry root;root.directory=true;root.mode=super[0x1000c+12];root.attribute=super[0x1000c+13];root.uid=u32(super,0x1000c+22);root.gid=u16(super,0x1000c+26);entries.push_back(root);std::set<unsigned> visited,clusters;std::set<std::string> paths;
   auto walk=[&](auto&& self,uint16_t index,const std::string& parent,unsigned depth)->void {need(depth<32 && index<0x17ff && visited.insert(index).second,"NAND directory tree is cyclic or invalid");const size_t at=0x1000c+size_t(index)*32;View row(super.data()+at,32);std::string name((const char*)row.data(),std::find(row.begin(),row.begin()+12,0)-row.begin());need(!name.empty() && name!="." && name!=".." && name.back()!='.' && name.back()!=' ',"Unsupported NAND filename");for(unsigned char c:name)need(c>=32 && c<127 && std::string("\\/:*?\"<>|").find(char(c))==std::string::npos,"Unsupported NAND filename");need(!reserved_name(name),"NAND filename cannot be represented safely on the host");Entry e;e.name=parent.empty()?name:parent+"/"+name;need(e.name.size()+1<64,"NAND path exceeds the IOS limit");std::string folded=e.name;std::transform(folded.begin(),folded.end(),folded.begin(),[](unsigned char c){return char(std::tolower(c));});need(paths.insert(folded).second,"NAND names collide on the host filesystem");e.mode=row[12];e.attribute=row[13];e.directory=(e.mode&3)==2;need(e.directory || (e.mode&3)==1,"Unknown NAND node type");e.cluster=u16(row,14);e.size=e.directory?0:u32(row,18);e.uid=u32(row,22);e.gid=u16(row,26);entries.push_back(e);if(!e.directory){files[e.name]=entries.size()-1;auto c=e.cluster;uint64_t left=e.size;while(left){need(c<0x7f00 && clusters.insert(c).second,"NAND file allocation is cyclic or overlapping");left-=std::min(left,uint64_t(0x4000));c=u16(super,12+size_t(c)*2);}need(!e.size || c==0xfffb || c==0xffff,"NAND file allocation has an invalid terminator");}else{auto c=e.cluster;while(c!=0xffff){need(c<0x17ff,"Invalid NAND child index");const auto next=u16(super,0x1000c+size_t(c)*32+16);self(self,c,e.name,depth+1);c=next;}}};
@@ -101,7 +101,34 @@ struct Raw:Source {
  void unchanged()override{need(fs::file_size(origin)==raw_size && fs::last_write_time(origin)==modified,"The source NAND backup changed during import",WII_NAND_SETUP_IO_ERROR);}
  WiiNandSourceKind kind()const override{return WII_NAND_SOURCE_BOOTMII;}
 };
-std::unique_ptr<Source> open(const char* source,const char* keys){const auto p=path(source);chain(p);need(fs::exists(p),"The selected NAND source does not exist",WII_NAND_SETUP_MISSING);if(fs::is_directory(p))return std::make_unique<Folder>(p);need(fs::is_regular_file(p),"Choose a NAND folder or BootMii backup");return std::make_unique<Raw>(p,keys);}
+bool extracted_root(const fs::path& p){
+ if(!fs::is_directory(p))return false;
+ for(const char* name:{"title/00000001/00000002/content/title.tmd","ticket/00000001/00000002.tik","sys/uid.sys","shared2/sys/SYSCONF"})
+  if(!fs::is_regular_file(p/name))return false;
+ return true;
+}
+std::unique_ptr<Source> open(const char* source,const char* keys){
+ auto p=path(source);chain(p);need(fs::exists(p),"The selected NAND source does not exist",WII_NAND_SETUP_MISSING);
+ if(fs::is_directory(p)){
+  if(extracted_root(p))return std::make_unique<Folder>(p);
+  // Inspect only known immediate children; never search a containing drive or
+  // Downloads tree for backups or keys.
+  std::vector<fs::path> candidates;
+  for(const char* name:{"nand","Wii"})if(extracted_root(p/name))candidates.push_back(p/name);
+  if(fs::is_regular_file(p/"nand.bin"))candidates.push_back(p/"nand.bin");
+  need(candidates.size()<=1,"This folder contains multiple Wii systems. Choose the exact NAND folder or nand.bin to import.",WII_NAND_SETUP_INVALID);
+  need(!candidates.empty(),"Choose nand.bin, its containing folder, or the NAND root containing title, ticket, sys and shared2.",WII_NAND_SETUP_MISSING);
+  p=candidates.front();chain(p);
+  if(fs::is_directory(p))return std::make_unique<Folder>(p);
+ }
+ need(fs::is_regular_file(p),"Choose a NAND folder or BootMii backup");
+ std::string companion;
+ if((!keys || !*keys) && fs::file_size(p)==0x21000000){
+  const auto sibling=p.parent_path()/"keys.bin";
+  if(fs::is_regular_file(sibling)){chain(sibling);companion=utf8(sibling);keys=companion.c_str();}
+ }
+ return std::make_unique<Raw>(p,keys);
+}
 struct Content {uint32_t id;uint16_t index,flags;uint64_t size;std::array<uint8_t,20> hash;};
 struct Title {uint64_t id,ios;uint16_t version,gid,boot;std::vector<Content> content;};
 Title tmd(Source& s,uint64_t id){const auto b=s.read("title/"+hex(id>>32)+"/"+hex(uint32_t(id))+"/content/title.tmd");const auto sig=u32(b,0);const size_t o=sig==0x10000?0x240:sig==0x10001?0x140:sig==0x10002?0x80:0;need(o && b.size()>=o+0xa4,"Invalid installed title metadata");Title t{u64(b,o+0x4c),u64(b,o+0x44),u16(b,o+0x9c),u16(b,o+0x58),u16(b,o+0xa0),{}};const auto count=u16(b,o+0x9e);need(t.id==id && count && count<=512 && b.size()==o+0xa4+count*36,"Invalid installed content table");std::set<unsigned> ids,indices;for(unsigned i=0;i<count;++i){const auto at=o+0xa4+i*36;Content c{u32(b,at),u16(b,at+4),u16(b,at+6),u64(b,at+8),{}};std::copy_n(b.data()+at+16,20,c.hash.data());need(ids.insert(c.id).second && indices.insert(c.index).second,"Duplicate installed content identity");t.content.push_back(c);}need(indices.contains(t.boot),"Boot content is missing from the title metadata");return t;}

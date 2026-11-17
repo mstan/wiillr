@@ -32,7 +32,10 @@ typedef struct WiiNandSetupInfo {
     char boot_relative[192];
     char details[1024];
 } WiiNandSetupInfo;
-/* UTF-8 paths. Inspect never changes source, destination, settings or keys.
+/* UTF-8 paths. Accepts a NAND root, a unique immediate nand/Wii wrapper,
+ * nand.bin, or its containing folder. A sibling keys.bin is used when no
+ * explicit key path is selected. No recursive source/key discovery occurs.
+ * Inspect never changes source, destination, settings or keys.
  * keys may be NULL: BootMii's genuine appended footer is used when present.
  * Explicit backup formats are BootMii keys.bin (1024 bytes) or OTP (128).
  * Readiness is for qualified Wii Menu 4.3U with the included native IOS80
