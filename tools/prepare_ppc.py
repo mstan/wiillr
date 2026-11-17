@@ -8,6 +8,8 @@ ROOT=Path(__file__).resolve().parents[1]
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 
 def capture_contract(run,journal):
+    if run.get('code_mutations'):
+        raise ValueError('Code-mutated QA capture cannot seed an original-code native catalog')
     strict_stop=run.get('execution')=='PPC-static-native' and run.get('exit_code') in (1,2)
     if run.get('execution') not in ('PPC-discovery-interpreter','PPC-native-with-discovery','PPC-static-native') or (run.get('exit_code') not in (0,1) and not strict_stop):
         raise ValueError('Expected an original-title execution with explicit miss capture')
@@ -101,6 +103,8 @@ def main():
             journals.append(json.dumps(dict(event='prepared_code_page',pc=int(name[:8],16),receipt_sha256=record['receipt_sha256']))+'\n')
     for source in args.capture:
         capture=source.resolve();run=json.loads((capture/'run.json').read_text())
+        if (capture/'code-mutations.json').exists():
+            run['code_mutations']=str(capture/'code-mutations.json')
         journal=(capture/'native-misses.jsonl').read_text()
         strict_stop=capture_contract(run,journal)
         for key in ('log','mem1'):

@@ -17,6 +17,10 @@ class CaptureContract(unittest.TestCase):
     def test_unfinished_and_unidentified_runs_rejected(self):
         for run in ({'execution':'unverified','exit_code':0},{'execution':'PPC-native-with-discovery','exit_code':2}):
             with self.assertRaises(ValueError):module.capture_contract(run,'')
+    def test_forced_code_branch_is_not_an_original_code_capture(self):
+        run=dict(execution='PPC-native-with-discovery',exit_code=0,code_mutations={'path':'code-mutations.json'})
+        with self.assertRaisesRegex(ValueError,'Code-mutated QA'):
+            module.capture_contract(run,'')
 
 class DolPages(unittest.TestCase):
     def image(self):
