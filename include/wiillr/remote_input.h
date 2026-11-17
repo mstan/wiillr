@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "gcnllr/native_gx.h"
+#include "wiillr/bluetooth.h"
 
 /* Host controls have a screen-relative D-pad and four face buttons. Remote
  * reports retain their physical wire layout; the title chooses its hold. */
@@ -21,5 +22,16 @@ static inline uint16_t wii_remote_buttons(const GcnllrPad* pad,bool sideways) {
     if(pad->stick_y>176 || (pad->buttons&8))buttons|=sideways?2:8;
     if(pad->stick_y<80 || (pad->buttons&4))buttons|=sideways?1:4;
     return buttons;
+}
+static inline void wii_remote_host_controls(WiiBluetoothInput* input,const GcnllrPad* pad,bool sideways) {
+    GcnllrPad buttons=*pad;
+    if(input->nunchuk.attached) {
+        buttons.stick_x=buttons.stick_y=128;buttons.buttons&=~0x60u;
+        input->nunchuk=wii_nunchuk_neutral();
+        input->nunchuk.stick_x=(u8)(128+((int)pad->stick_x-128)*96/128);
+        input->nunchuk.stick_y=(u8)(128+((int)pad->stick_y-128)*96/128);
+        input->nunchuk.buttons=(pad->buttons&0x20?1:0)|(pad->buttons&0x40?2:0);
+    }
+    input->buttons=wii_remote_buttons(&buttons,sideways);
 }
 #endif

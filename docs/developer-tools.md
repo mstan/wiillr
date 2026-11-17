@@ -82,6 +82,16 @@ are a synchronous development implementation; their timing remains unqualified.
 Busy drive requests wait without losing the earlier reply. Missing services
 still stop discovery; this route does not establish native title acceptance.
 
+Consumers may select `WIILLR_REMOTE_EXTENSION=nunchuk` for the development
+default. Each Remote input carries its own extension state. Left stick and
+shoulder inputs feed Nunchuk movement/C/Z independently of Remote D-pad/Sync.
+The loopback interface accepts `remote INDEX BUTTONS [X Y POINTING PRESENT PAIRING]`
+and `nunchuk INDEX X Y BUTTONS [ACCEL_X ACCEL_Y ACCEL_Z]`. Indices are 0–3;
+button masks are hexadecimal and other values decimal. These test commands
+select scripted ownership and use ordinary Bluetooth/HID traffic, never guest
+gameplay flags. Nunchuk registers, encrypted reads and report modes 0x32/0x34–0x37
+are supported; MotionPlus and other extension types remain unsupported.
+
 ### Verified code preparation
 
 For Wii Menu 4.3U reverse engineering, the [source and annotation guide](https://github.com/mstan/wiillr/blob/wiillr-v0.1.1/docs/wii-menu-references.md)

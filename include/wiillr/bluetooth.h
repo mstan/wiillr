@@ -7,7 +7,17 @@ extern "C" {
 #include "cpu/cpu.h"
 typedef struct WiiBluetooth WiiBluetooth;
 typedef struct {void* user;bool (*load)(void*,u8*,u32,u32*);bool (*save)(void*,const u8*,u32);} WiiBluetoothStore;
-typedef struct {u16 buttons,accel[3];u16 pointer_x,pointer_y;bool pointing,present,pairing;} WiiBluetoothInput;
+typedef struct {bool attached;u8 stick_x,stick_y,buttons;u16 accel[3];} WiiNunchukInput;
+/* Nunchuk buttons: bit 0 Z, bit 1 C (pressed=1 at this host interface).
+ * Acceleration retains all ten wire bits; stick neutral is 128/128. */
+typedef struct {u16 buttons,accel[3];u16 pointer_x,pointer_y;bool pointing,present,pairing;WiiNunchukInput nunchuk;} WiiBluetoothInput;
+static inline WiiNunchukInput wii_nunchuk_neutral(void) {
+    const WiiNunchukInput value={true,128,128,0,{512,512,716}};return value;
+}
+static inline bool wii_nunchuk_equal(const WiiNunchukInput* a,const WiiNunchukInput* b) {
+    return a->attached==b->attached && a->stick_x==b->stick_x && a->stick_y==b->stick_y &&
+        a->buttons==b->buttons && a->accel[0]==b->accel[0] && a->accel[1]==b->accel[1] && a->accel[2]==b->accel[2];
+}
 WiiBluetooth* wii_bluetooth_create(CPUState*,const u32* gpio_out,const WiiBluetoothStore*);
 void wii_bluetooth_destroy(WiiBluetooth*);
 void wii_bluetooth_close(WiiBluetooth*);

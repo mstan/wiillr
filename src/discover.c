@@ -422,6 +422,8 @@ static int run(int argc, char** argv) {
     u64 steps = 0, exceptions = 0;unsigned input_next=0;bool input_pending=false;
     WiiBluetoothInput input_state={0};
     input_state.accel[0]=input_state.accel[1]=512;input_state.accel[2]=616;
+    const char* extension=getenv("WIILLR_REMOTE_EXTENSION");
+    if(extension && !strcmp(extension,"nunchuk"))input_state.nunchuk=wii_nunchuk_neutral();
     WiiControl* control=wii_control_start(&cpu,&machine,&gx,&input_state,&input_pending,native_module);
     if(getenv("WIILLR_CONTROL_PORT") && !control){wii_dsp_stop(&machine.dsp);wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
 #if GCN_COST_RING_ENABLED
@@ -443,6 +445,7 @@ static int run(int argc, char** argv) {
             sync_pending=false;
         }
         while(input_next<(unsigned)input_count && inputs[input_next].at<=cpu.cycles) {
+            inputs[input_next].input.nunchuk=input_state.nunchuk;
             input_state=inputs[input_next++].input;input_pending=true;
         }
         if(input_pending && machine.ios.bluetooth) {

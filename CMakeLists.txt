@@ -204,6 +204,7 @@ endif()
 target_link_libraries(wii_boot PUBLIC wii_fs)
 target_link_libraries(wii_boot PUBLIC wii_ipc)
 add_library(wii_bluetooth STATIC third_party/dolphin-bluetooth/BTEmuHCI.cpp
+  third_party/dolphin-bluetooth/Encryption.cpp
   third_party/dolphin-bluetooth/Devices.cpp third_party/dolphin-bluetooth/Packets.cpp
   third_party/dolphin-bluetooth/WiimoteDevice.cpp third_party/dolphin-bluetooth/WiimoteHIDAttr.cpp
   third_party/dolphin-bluetooth/Transport.cpp third_party/dolphin-bluetooth/Remote.cpp)

@@ -39,6 +39,7 @@ extern "C" {
 
 struct WiiControl {
   CPUState* cpu;WiiMachine* machine;WiiGx* gx;WiiBluetoothInput* input;bool* input_pending;
+  WiiBluetoothInput remote_inputs[3]{};
   const GcnOverlayModule* native_module;
   SOCKET listener=INVALID_SOCKET,client=INVALID_SOCKET;
   std::string rx,tx;size_t sent=0;u64 last_poll=0,stop_at=0;bool paused=false,quit=false;
@@ -155,7 +156,10 @@ struct WiiControl {
         << ",\"gx_fifo_bytes\":" << graphics.fifo_bytes
         << ",\"gx_draws\":" << graphics.draws
         << ",\"gx_display_copies\":" << graphics.display_copies
-        << ",\"gx_texture_copies\":" << graphics.texture_copies;
+        << ",\"gx_texture_copies\":" << graphics.texture_copies
+        << ",\"vi_registers\":[";
+    for(unsigned n=0;n<GCN_VI_SIZE/2;++n)out << (n?",":"") << machine->vi.reg[n];
+    out << "]";
 #if WIILLR_IOS_LLE
     const auto arm=wii_ios_lle_status(machine->ios_lle);
     out << ",\"ios_provider\":\"original\",\"ARM_interpreter_instructions\":" << arm.instructions
@@ -175,6 +179,35 @@ struct WiiControl {
   std::string command(const std::string& line) {
     std::istringstream stream(line);std::vector<std::string> args;std::string word;
     while(stream>>word)args.push_back(word);if(args.empty())throw std::runtime_error("command required");
+    if((args[0]=="remote" && (args.size()==3 || args.size()==8)) ||
+       (args[0]=="nunchuk" && (args.size()==5 || args.size()==8))) {
+      const auto index=number(args[1],10);if(index>=4)throw std::runtime_error("Remote index must be 0..3");
+      WiiBluetoothInput value=index?remote_inputs[index-1]:*input;
+      value.present=true;
+      if(args[0]=="remote") {
+        const auto buttons=number(args[2],16);if(buttons&~0x9f1fu)throw std::runtime_error("invalid buttons");
+        value.buttons=u16(buttons);
+        if(args.size()==8) {
+          const auto x=number(args[3],10),y=number(args[4],10),point=number(args[5],10),present=number(args[6],10),pair=number(args[7],10);
+          if(x>1023 || y>767 || point>1 || present>1 || pair>1)throw std::runtime_error("invalid pointer/presence");
+          value.pointer_x=u16(x);value.pointer_y=u16(y);value.pointing=point;value.present=present;value.pairing=pair;
+        }
+      } else {
+        const auto x=number(args[2],10),y=number(args[3],10),buttons=number(args[4],16);
+        if(x>255 || y>255 || buttons>3)throw std::runtime_error("invalid Nunchuk input");
+        if(!value.nunchuk.attached)value.nunchuk=wii_nunchuk_neutral();
+        value.nunchuk.stick_x=u8(x);value.nunchuk.stick_y=u8(y);value.nunchuk.buttons=u8(buttons);
+        if(args.size()==8)for(unsigned n=0;n<3;++n) {
+          const auto accel=number(args[5+n],10);if(accel>1023)throw std::runtime_error("invalid Nunchuk acceleration");
+          value.nunchuk.accel[n]=u16(accel);
+        }
+      }
+      if(!machine->ios.bluetooth)throw std::runtime_error("Bluetooth unavailable");
+      if(value.present && !wii_bluetooth_pair_remote(machine->ios.bluetooth,u32(index)))throw std::runtime_error("Remote pairing failed");
+      if(!wii_bluetooth_set_input_indexed(machine->ios.bluetooth,u32(index),&value))throw std::runtime_error("Remote input failed");
+      if(index)remote_inputs[index-1]=value;else {*input=value;*input_pending=false;}
+      gx->scripted_input=true;return "{\"ok\":true}";
+    }
 #if WIILLR_LAUNCHER_WINDOW
     if(args[0]=="window" && (args.size()==1 || args.size()==3)) {
       unsigned w=0,h=0;
@@ -380,6 +413,7 @@ extern "C" WiiControl* wii_control_start(CPUState* cpu,WiiMachine* machine,WiiGx
     WiiControl::nonblocking(control->listener);control->cpu=cpu;control->machine=machine;control->gx=gx;control->input=input;control->input_pending=pending;
     control->native_module=native_module;
     control->paused=std::getenv("WIILLR_CONTROL_PAUSED") && std::string(std::getenv("WIILLR_CONTROL_PAUSED"))=="1";
+    for(auto& source:control->remote_inputs){source=*input;source.buttons=0;source.present=false;}
     std::fprintf(stderr,"wiillr loopback control port=%u\n",unsigned(port));return control.release();
   }catch(const std::exception& e){std::fprintf(stderr,"wiillr control: %s\n",e.what());return nullptr;}
 }

@@ -25,9 +25,26 @@ checking the console-address PIN; Broadcom radio cryptography is not executed.
 
 `Remote.cpp`/`Remote.h` adapt the base report, EEPROM, calibration and I2C behavior
 from the same donor's `Core/HW/WiimoteEmu/EmuSubroutines.cpp` and input-report
-implementation. They retain Dolphin's GPL notices. The bounded source implements
-buttons, acceleration, extended infrared and reports 0x30/0x31/0x33. Unsupported
-extensions NACK; speaker audio and other report modes stop explicitly.
+implementation. They retain Dolphin's GPL notices. The base source implements
+buttons, acceleration, extended infrared and reports 0x30/0x31/0x33. Nunchuk
+support is described below. Other extensions NACK; speaker audio and
+unimplemented report modes stop explicitly.
+
+Nunchuk support adds its identity, calibration, active-low button/ten-bit
+acceleration payload, extension register bank and input modes 0x32/0x34-0x37.
+Mode 0x37 combines basic IR with extension data. Base Remote behavior is retained
+when no extension is selected. Host controls carry per-Remote extension state;
+an attached Nunchuk uses the left stick and shoulder buttons independently of
+Remote D-pad input. Attachment changes produce normal status reports.
+
+`Encryption.cpp` and `Encryption.h` reuse the same pinned RecompCore donor's
+`Core/HW/WiimoteEmu/Encryption.*`, preserving Dolphin and Hector Martin notices.
+Only include paths, fixed-width type access and logger integration were adapted.
+Original SHA-256: `Encryption.cpp`
+`1195831fa7d53569b723479bc73d9b7cd57909be381d7f8dd011362a0a6880cc`;
+`Encryption.h` `fbe0a9f7a58b40e03c7bbad11b13e315fc43c80dba0277bd4bc840d1a0a13025`.
+The key generator supports first-party extension encryption and the documented
+fallback-key behavior; it does not execute physical accessory firmware.
 
 Unmodified donor file SHA-256 identities:
 - `hci.h`: `7eb577e0b615e99fcfedbccb93988a92543ae3019c7cd45713ddd23918c0266b`

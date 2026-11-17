@@ -59,6 +59,7 @@ bool wii_gx_set_player_input(WiiGx* g,WiiGxPlayerInput poll,void* user) {
     memset(&players,0,sizeof players);players.owner=g;players.cpu=g->cpu;players.poll=poll;players.user=user;
     g->input_sent=false; /* Rebind publishes P1 even after the legacy poll ran. */
     for(unsigned i=0;i<3;++i)players.input[i]=(WiiBluetoothInput){0,{512,512,616},512,384,false,false,false};
+    for(unsigned i=0;i<3;++i)players.input[i].nunchuk=g->input.nunchuk;
     return true;
 }
 static bool release_players(WiiGx* g,bool disconnect) {
@@ -66,6 +67,7 @@ static bool release_players(WiiGx* g,bool disconnect) {
     for(unsigned index=0;index<4;++index) {
         WiiBluetoothInput* input=index?&players.input[index-1]:&g->input;
         input->buttons=0;input->pointing=false;input->pairing=false;
+        if(input->nunchuk.attached)input->nunchuk=wii_nunchuk_neutral();
         if(disconnect)input->present=false;
         if(g->machine->ios.bluetooth && !wii_bluetooth_set_input_indexed(g->machine->ios.bluetooth,index,input))return false;
     }
@@ -94,8 +96,9 @@ static bool poll_players(WiiGx* g,GcnllrNativeGxStatus* status,bool native_keybo
         const bool present=(flags[index]&WIILLR_GX_INPUT_PRESENT)!=0;
         const bool focused=present && (flags[index]&WIILLR_GX_INPUT_FOCUSED) && !g->host_input_capture;
         WiiBluetoothInput next=*prior;next.present=present;next.buttons=0;next.pairing=false;
+        if(next.nunchuk.attached)next.nunchuk=wii_nunchuk_neutral();
         if(focused) {
-            next.buttons=wii_remote_buttons(&pads[index],g->title==0x0001000157523945ull);
+            wii_remote_host_controls(&next,&pads[index],g->title==0x0001000157523945ull);
             int x=(int)next.pointer_x-((int)pads[index].substick_x-128)/16;
             int y=(int)next.pointer_y-((int)pads[index].substick_y-128)/16;
             next.pointer_x=(u16)(x<0?0:x>1023?1023:x);next.pointer_y=(u16)(y<0?0:y>767?767:y);
@@ -110,13 +113,13 @@ static bool poll_players(WiiGx* g,GcnllrNativeGxStatus* status,bool native_keybo
                 if(status->pointer.buttons&2)next.buttons|=0x400;
                 if(status->pointer.buttons&4)next.buttons|=0x8000;
             }
-            next.pairing=(pads[index].buttons&0x20)!=0;
+            next.pairing=!next.nunchuk.attached && (pads[index].buttons&0x20)!=0;
         } else {next.pointing=false;if(!index)g->mouse_active=false;}
         if(g->machine->ios.bluetooth) {
             if(present && (!*sent || !prior->present) && !wii_bluetooth_pair_remote(g->machine->ios.bluetooth,index))return false;
             if(!*sent || next.buttons!=prior->buttons || next.pointer_x!=prior->pointer_x ||
                next.pointer_y!=prior->pointer_y || next.pointing!=prior->pointing ||
-               next.present!=prior->present || next.pairing!=prior->pairing) {
+               next.present!=prior->present || next.pairing!=prior->pairing || !wii_nunchuk_equal(&next.nunchuk,&prior->nunchuk)) {
                 if(!wii_bluetooth_set_input_indexed(g->machine->ios.bluetooth,index,&next))return false;
             }
             if(next.pairing && !prior->pairing && !wii_bluetooth_press_sync(g->machine->ios.bluetooth))return false;
@@ -200,6 +203,8 @@ bool wii_gx_start(WiiGx* g,WiiMachine* m,CPUState* cpu,const char* library,const
     g->visible=false;
 #endif
     g->input=(WiiBluetoothInput){0,{512,512,616},512,280,false,true,false};
+    const char* extension=getenv("WIILLR_REMOTE_EXTENSION");
+    if(extension && !strcmp(extension,"nunchuk"))g->input.nunchuk=wii_nunchuk_neutral();
     GcnllrNativeGxConfig config={.abi=GCNLLR_NATIVE_GX_ABI,.title=title?title:"Wii",.data_directory=data,
         .cache_directory=cache,.hidden=!(window && !strcmp(window,"1")),.user=g,.bp_write=bp_write,.write_copy=write_copy,
         .resolve_memory=resolve,.locate_memory=locate};
@@ -370,7 +375,7 @@ bool wii_gx_tick(WiiGx* g) {
         if(wii_ios_native_keyboard_input(&g->machine->ios,&keyboard)<0)return false;
 #endif
         if(g->host_input_capture)status.pointer.valid=false;
-        next.buttons=wii_remote_buttons(&pad,g->title==0x0001000157523945ull);
+        wii_remote_host_controls(&next,&pad,g->title==0x0001000157523945ull);
         int x=(int)next.pointer_x-((int)pad.substick_x-128)/16;
         int y=(int)next.pointer_y-((int)pad.substick_y-128)/16;
         next.pointer_x=(u16)(x<0?0:x>1023?1023:x);next.pointer_y=(u16)(y<0?0:y>767?767:y);
@@ -385,11 +390,11 @@ bool wii_gx_tick(WiiGx* g) {
         if(status.pointer.valid && (status.pointer.buttons&1))next.buttons|=0x800;
         if(status.pointer.valid && (status.pointer.buttons&2))next.buttons|=0x400;
         if(status.pointer.valid && (status.pointer.buttons&4))next.buttons|=0x8000;
-        next.pairing=(pad.buttons&0x20)!=0;
+        next.pairing=!next.nunchuk.attached && (pad.buttons&0x20)!=0;
         const bool sync=next.pairing && !g->input.pairing;
         if(g->machine->ios.bluetooth && (!g->input_sent || next.buttons!=g->input.buttons || next.pairing!=g->input.pairing ||
            next.pointer_x!=g->input.pointer_x || next.pointer_y!=g->input.pointer_y ||
-           next.pointing!=g->input.pointing)) {
+           next.pointing!=g->input.pointing || !wii_nunchuk_equal(&next.nunchuk,&g->input.nunchuk))) {
             if(!wii_bluetooth_set_input(g->machine->ios.bluetooth,&next))return false;
             g->input=next;g->input_sent=true;
         }

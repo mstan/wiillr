@@ -1,6 +1,7 @@
 // Copyright 2010 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "Remote.h"
+#include <cstdlib>
 namespace WiimoteCommon {
 NativeRemote::NativeRemote() {
   const u16 lx=0x7f,ly=0x5d,hx=0x380,hy=0x2a2;
@@ -16,6 +17,39 @@ NativeRemote::NativeRemote() {
 void NativeRemote::EventLinked() {
   mode=0x30;leds=0;continuous=false;first_report=true;ir=ir_clock=speaker=mute=rumble=false;
   read_size=0;last_buttons=0;camera.fill(0);speaker_registers.fill(0);
+  extension_attached=false;ResetNunchuk();
+}
+void NativeRemote::ResetNunchuk() {
+  // Physical Nunchuk identity/calibration, following Dolphin's Nunchuk.cpp.
+  extension.fill(0);extension_key={};extension_key_dirty=true;
+  const u8 id[]={0,0,0xa4,0x20,0,0};std::copy_n(id,6,extension.data()+0xfa);
+  const u8 calibration[]={0x80,0x80,0x80,0,0xb3,0xb3,0xb3,0,0xe0,0x20,0x80,0xe0,0x20,0x80};
+  std::copy_n(calibration,14,extension.data()+0x20);
+  u8 sum=0x55;for(auto byte:calibration)sum+=byte;
+  extension[0x2e]=sum;extension[0x2f]=u8(sum+0x55);
+}
+void NativeRemote::Status() {
+  const u8 reply[]={0x20,u8(state.buttons.hex),u8(state.buttons.hex>>8),
+    u8((leds<<4)|(input.nunchuk.attached?2:0)|(speaker?4:0)|(ir?8:0)),0,0,0x69};
+  Emit(reply,sizeof reply);
+}
+u8 NativeRemote::ReadNunchuk(u16 address,u8* data,u16 size) {
+  if(u32(address)+size>extension.size())return 8;
+    if(address>=0x20 && std::getenv("WIILLR_IOS_TRACE"))std::fprintf(stderr,
+      "Nunchuk remote=%u read=%04x size=%u encrypted=%u\n",unsigned(device_index),address,size,unsigned(extension[0xf0]==0xaa));
+  const auto& nc=input.nunchuk;
+  extension[0]=nc.stick_x;extension[1]=nc.stick_y;
+  for(unsigned n=0;n<3;++n)extension[2+n]=u8(nc.accel[n]>>2);
+  extension[5]=u8((~nc.buttons&3)|((nc.accel[0]&3)<<2)|((nc.accel[1]&3)<<4)|((nc.accel[2]&3)<<6));
+  std::copy_n(extension.data()+address,size,data);
+  if(extension[0xf0]==0xaa) {
+    if(extension_key_dirty) {
+      WiimoteEmu::KeyGen::ExtKeyData key;std::copy_n(extension.data()+0x40,key.size(),key.data());
+      extension_key=WiimoteEmu::KeyGen1stParty().GenerateFromExtensionKeyData(key);extension_key_dirty=false;
+    }
+    extension_key.Encrypt(data,address,size);
+  }
+  return 0;
 }
 void NativeRemote::PrepareInput(WiimoteEmu::DesiredWiimoteState* target,SensorBarState bar) {
   target->buttons.hex=input.buttons&ButtonData::BUTTON_MASK;
@@ -32,6 +66,7 @@ u8 NativeRemote::Read(u8 space,u8 slave,u16 address,u8* data,u16 size) {
   if(slave==0x50)return 8;
   if(slave==0x58 && ir){for(u16 n=0;n<size;n++)data[n]=camera[u8(address+n)];return 0;}
   if(slave==0x51){for(u16 n=0;n<size;n++)data[n]=speaker_registers[u8(address+n)];return 0;}
+  if(slave==0x52 && input.nunchuk.attached)return ReadNunchuk(address,data,size);
   return 7; // actual I2C NACK: no extension/MotionPlus device attached
 }
 u8 NativeRemote::Write(u8 space,u8 slave,u16 address,const u8* data,u16 size) {
@@ -41,6 +76,12 @@ u8 NativeRemote::Write(u8 space,u8 slave,u16 address,const u8* data,u16 size) {
   if(slave==0x58 && ir){for(u16 n=0;n<size;n++)camera[u8(address+n)]=data[n];return 0;}
   if(slave==0x51 && u8(address)!=0){for(u16 n=0;n<size;n++)speaker_registers[u8(address+n)]=data[n];return 0;}
   if(slave==0x51)throw std::runtime_error("Wiimote speaker audio is not implemented");
+  if(slave==0x52 && input.nunchuk.attached) {
+    if(u32(address)+size>extension.size())return 8;
+    std::copy_n(data,size,extension.data()+address);
+    if(address<0x50 && u32(address)+size>0x40)extension_key_dirty=true;
+    return 0;
+  }
   return 7;
 }
 bool NativeRemote::ReadReply() {
@@ -61,15 +102,16 @@ void NativeRemote::InterruptDataOutput(const u8* bytes,u32 size) {
   case 0x11:leds=flags>>4;if(flags&2)Ack(report);return;
   case 0x12:
     if(size<3)throw std::runtime_error("Truncated Wiimote report-mode request");
-    if(bytes[2]!=0x30 && bytes[2]!=0x31 && bytes[2]!=0x33)throw std::runtime_error("Unimplemented Wiimote input mode");
+    if(bytes[2]<0x30 || bytes[2]>0x37)throw std::runtime_error("Unimplemented Wiimote input mode");
+    if(std::getenv("WIILLR_IOS_TRACE"))std::fprintf(stderr,"Wiimote remote=%u report-mode=%02x nunchuk=%u\n",
+      unsigned(device_index),bytes[2],unsigned(input.nunchuk.attached));
     mode=bytes[2];continuous=flags&4;first_report=true;if(flags&2)Ack(report);return;
   case 0x13:ir=flags&4;if(flags&2)Ack(report);return;
   case 0x14:speaker=flags&4;if(flags&2)Ack(report);return;
   case 0x19:mute=flags&4;if(flags&2)Ack(report);return;
   case 0x1a:ir_clock=flags&4;if(flags&2)Ack(report);return;
   case 0x15: {
-    const u8 reply[]={0x20,u8(state.buttons.hex),u8(state.buttons.hex>>8),u8((leds<<4)|(speaker?4:0)|(ir?8:0)),0,0,0x69};
-    Emit(reply,sizeof reply);return;
+    Status();return;
   }
   case 0x16:
     if(size<6 || !bytes[5] || bytes[5]>16 || size<u32(6+bytes[5]))throw std::runtime_error("Malformed Wiimote memory write");
@@ -85,15 +127,18 @@ void NativeRemote::InterruptDataOutput(const u8* bytes,u32 size) {
 void NativeRemote::Update(const WiimoteEmu::DesiredWiimoteState& desired) {
   state=desired;
   if(ReadReply())return;
+  if(extension_attached!=input.nunchuk.attached) {
+    extension_attached=input.nunchuk.attached;Status();return;
+  }
   if(!continuous && !first_report && last_buttons==state.buttons.hex && mode==0x30)return;
   first_report=false;last_buttons=state.buttons.hex;
-  std::array<u8,18> reply{};reply[0]=mode;reply[1]=u8(state.buttons.hex);reply[2]=u8(state.buttons.hex>>8);u32 count=3;
-  if(mode==0x31 || mode==0x33) {
+  std::array<u8,22> reply{};reply[0]=mode;reply[1]=u8(state.buttons.hex);reply[2]=u8(state.buttons.hex>>8);u32 count=3;
+  if(mode==0x31 || mode==0x33 || mode==0x35 || mode==0x37) {
     reply[1]|=u8((state.accel[0]&3)<<5);reply[2]|=u8(((state.accel[1]>>1)&1)<<5)|u8(((state.accel[2]>>1)&1)<<6);
     for(unsigned n=0;n<3;n++)reply[3+n]=u8(state.accel[n]>>2);count=6;
   }
   if(mode==0x33) {
-    std::fill(reply.begin()+6,reply.end(),0xff);
+    std::fill(reply.begin()+6,reply.begin()+18,0xff);
     if(state.pointing && ir && ir_clock && camera[0x30]==8 && camera[0x33]==3) {
       for(unsigned n=0;n<2;n++) {
         const int x=std::clamp(int(state.pointer_x)+(n?100:-100),0,1023);const int y=state.pointer_y;
@@ -101,6 +146,25 @@ void NativeRemote::Update(const WiimoteEmu::DesiredWiimoteState& desired) {
       }
     }
     count=18;
+  }
+  if(mode==0x36 || mode==0x37) {
+    // Basic IR: two ten-bit points packed into each five-byte group.
+    std::fill_n(reply.data()+count,10,0xff);
+    if(state.pointing && ir && ir_clock && camera[0x30]==8 && camera[0x33]==1) {
+      const int x0=std::clamp(int(state.pointer_x)-100,0,1023),x1=std::clamp(int(state.pointer_x)+100,0,1023);
+      const int y=state.pointer_y;
+      reply[count]=u8(x0);reply[count+1]=u8(y);
+      reply[count+2]=u8(((x0>>8)&3)<<4|((y>>8)&3)<<6|((x1>>8)&3)|((y>>8)&3)<<2);
+      reply[count+3]=u8(x1);reply[count+4]=u8(y);
+    }
+    count+=10;
+  }
+  if(mode==0x32 || mode>=0x34) {
+    const u32 bytes=mode==0x32?8:22-count;
+    std::fill_n(reply.data()+count,bytes,0xff);
+    if(input.nunchuk.attached && ReadNunchuk(0,reply.data()+count,u16(bytes)))
+      throw std::runtime_error("Nunchuk report read failed");
+    count+=bytes;
   }
   Emit(reply.data(),count);
 }
