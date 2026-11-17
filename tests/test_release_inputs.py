@@ -37,7 +37,7 @@ class ReleaseInputs(unittest.TestCase):
             self.assertFalse((root / 'output').exists())
 
     def test_rejects_escape_before_writing_any_member(self):
-        for name in ('../escape', '/absolute', 'C:/absolute', '..\\escape'):
+        for name in ('../escape', '/absolute', 'C:/absolute', '..\\escape', 'deps/.git/config', 'deps/.GIT/HEAD'):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 archive, sha = self.archive(root, [('inputs.json', '{}'), (name, 'bad')])
