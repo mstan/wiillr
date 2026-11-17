@@ -86,7 +86,7 @@ consumer build definitions. Changing those requires a compatible configuration
 or another build directory. Changing only the package version reuses the build
 working directory. It does not make an incompatible input bundle valid.
 
-## What is a valid build input`
+## What is a valid build input?
 
 There are three different input concepts:
 
@@ -263,3 +263,22 @@ build-cache identity. Further work includes:
   public source availability alone does not provide generated original code.
 - Extend the basic preflight with platform SDK/library diagnostics where those
   checks can run without a full native build.
+
+## Adding an original IOS dependency
+
+A Menu-only runtime profile can lack the IOS files needed by an installed
+channel. This is separate from developer build inputs. When you have the
+original dependency in another extracted NAND, the source tree includes a
+verified merge tool:
+
+~~~sh
+python tools/install_nand_dependency.py --source /path/to/original-nand --profile /path/to/stopped-copied-nand --title 0000000100000025 --receipt /path/to/ios37-install.json
+~~~
+
+This example selects IOS37. The destination must be a marked, stopped writable
+copy, distinct from the source. The tool verifies the source ticket/TMD identity
+and every content SHA-1, rejects conflicting content, preserves existing license
+bytes and appends to the UID/shared-content maps. It does not synthesize a ticket
+or establish signature verification. Keep a backup of the managed profile, and
+launch only after the installer succeeds. An interrupted per-file merge is
+resumable; it is not a whole-profile transaction.

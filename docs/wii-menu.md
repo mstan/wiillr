@@ -45,13 +45,28 @@ The native IOS80 provider does not require the original IOS80 executable.
 Original IOS LLE is a separate development build and is not qualified by this
 release's native-provider checks.
 
+## Channel system dependencies
+
+Booting the Menu does not establish that every installed channel has all of its
+original system dependencies. Channel startup may also request the ticket, TMD
+and content of its required IOS version. For example, a Menu-only profile without
+IOS37 can show a supported channel's banner but return to the Menu when Start
+requests that dependency. Import a complete compatible backup from your own
+console when those files are available; Menu import does not invent missing IOS
+licenses or firmware. Existing native saves remain part of the managed profile.
+
+For a stopped test copy, developers can use the verified
+[dependency installer](building.md#adding-an-original-ios-dependency) to merge an
+original IOS title from a separate NAND source. Keep original IOS LLE/OTP
+qualification separate from the native service provider.
+
 ## Controls and peripherals
 
 Use the mouse as the pointer, left click for A and right click for B. Keyboard
-**A** is the default HOME binding; change it in **Settings â†’ Controller**.
+**A** is the default HOME binding; change it in **Settings → Controller**.
 **F1** opens settings during play. Controller mappings and window geometry persist.
 
-The launcher has separate Player 1â€“4 Wii Remote assignments. **Wii Peripherals**
+The launcher has separate Player 1–4 Wii Remote assignments. **Wii Peripherals**
 below them provides two USB slots and one SD slot:
 
 | Slot | Choices |
@@ -86,7 +101,7 @@ are available; AOSS, SSL, online WiiConnect24 and Nintendo service availability
 are outside the release's qualified feature set.
 
 Installed supported channels retain their original Menu entry and HOME return
-flow. Wii Menu â†’ Mega Man 9 â†’ HOME â†’ Wii Menu preserves the window and pointer.
+flow. Wii Menu → Mega Man 9 → HOME → Wii Menu preserves the window and pointer.
 This package does not install channel content for you or provide arbitrary Wii
 title compatibility.
 

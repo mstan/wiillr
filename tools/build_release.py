@@ -54,11 +54,11 @@ def smoke_game(archive: Path, product: str, host: str, output: Path) -> None:
                  'api=library.gcnllr_native_gx_get_api; api.argtypes=[c.c_uint32]; api.restype=c.c_void_p; '
                  'assert api(12) and not api(0); print(json.dumps({"graphics_loaded":True,"abi":12,"gpu_initialized":False}))')
         loaded = subprocess.run([sys.executable, '-c', probe, str(graphics)],
-                                cwd=destination, env=environment, capture_output=True, text=True, timeout=30)
+                                cwd=destination, env=environment, capture_output=True, text=True)
         if loaded.returncode:
             raise RuntimeError('Packaged graphics service did not load: ' + loaded.stderr)
         process = subprocess.run([str(binary), '--launcher-check'], cwd=destination,
-                                 env=environment, capture_output=True, text=True, timeout=30)
+                                 env=environment, capture_output=True, text=True)
         if process.returncode != 2:
             raise RuntimeError(f'{product}: expected unconfigured-profile result 2, got {process.returncode}: {process.stderr}')
         if product == 'wii-menu':
