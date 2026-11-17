@@ -383,13 +383,27 @@ extern "C" WiiControl* wii_control_start(CPUState* cpu,WiiMachine* machine,WiiGx
     std::fprintf(stderr,"wiillr loopback control port=%u\n",unsigned(port));return control.release();
   }catch(const std::exception& e){std::fprintf(stderr,"wiillr control: %s\n",e.what());return nullptr;}
 }
+static void paused_host_events(WiiControl* control) {
+  const auto* api=control->gx->api;if(!api)return;
+  if(api->service && !api->service()) {
+    control->cpu->halted=true;return;
+  }
+  /* service retires GPU work; status also dispatches native window events.
+   * Keep resizing/close responsive while guest execution and time stay still.
+   * Do not run the game's input or field tick from this paused host loop. */
+  if(api->status) {
+    GcnllrNativeGxStatus status{};api->status(&status);
+    if(status.failed)control->cpu->halted=true;
+    if(status.quit){control->gx->quit=true;control->quit=true;control->paused=false;}
+  }
+}
 extern "C" bool wii_control_poll(WiiControl* control) {
   if(!control)return true;
   if(control->stop_at && control->cpu->cycles>=control->stop_at){control->paused=true;control->stop_at=0;}
   if(!control->paused && control->cpu->cycles-control->last_poll<65536)return true;
   control->last_poll=control->cpu->cycles;
   try{control->pump();}catch(...){control->cpu->halted=true;return true;}
-  if(control->paused){if(control->gx->api && control->gx->api->service)control->gx->api->service();std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+  if(control->paused){paused_host_events(control);std::this_thread::sleep_for(std::chrono::milliseconds(1));}
   return !control->paused;
 }
 extern "C" void wii_control_stop(WiiControl* control){delete control;}
