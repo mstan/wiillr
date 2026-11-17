@@ -433,7 +433,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
   add_executable(test_wii_control_host tests/test_control_host.cpp)
   target_include_directories(test_wii_control_host PRIVATE include
     ${WIILLR_CORE_SOURCE_DIR}/include ${WIILLR_CORE_SOURCE_DIR}/dsp_lle/include)
-  target_compile_options(test_wii_control_host PRIVATE -ffunction-sections -fdata-sections)
+  target_compile_options(test_wii_control_host PRIVATE -UNDEBUG -ffunction-sections -fdata-sections)
   if(APPLE)
     target_link_options(test_wii_control_host PRIVATE -Wl,-dead_strip)
   else()
