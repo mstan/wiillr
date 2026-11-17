@@ -31,6 +31,10 @@ cover Windows, Linux and macOS through the shared driver and platform scripts;
 use the consumer's scripts for new Wii Menu builds.
 Consult each release's notes for its actual platform validation and limitations.
 
+Build flags are for compiling from source. The [argument and input reference](docs/building.md#build-arguments)
+explains product names, package versions and build bundles. To use a downloaded
+application or developer bundle, follow its setup guide instead.
+
 The developer tools build without a title catalog. Native game builds require
 qualified generated PowerPC inputs supplied privately; firmware, keys, NAND,
 generated guest code and user saves are never committed to this repository.
