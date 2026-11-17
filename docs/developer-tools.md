@@ -61,7 +61,7 @@ startup, and these tools do not synthesize missing hardware or firmware state.
 
 ## Prepare a static catalog
 
-For Wii Menu 4.3U reverse engineering, the [source and annotation guide](wii-menu-references.md)
+For Wii Menu 4.3U reverse engineering, the [source and annotation guide](https://github.com/mstan/wiillr/blob/wiillr-v0.1.1/docs/wii-menu-references.md)
 describes the version-verified symbol index and addressed disassembly. Its
 `tools/annotate_wii_menu.py` helper runs from a source checkout; it does not
 change catalog coverage or the prepared executable.
