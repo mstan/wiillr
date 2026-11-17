@@ -257,8 +257,7 @@ The driver now supplies directory/product/version defaults, input ZIP import,
 early version validation, a check-only preflight, and package-label-independent
 build-cache identity. Further work includes:
 
-- Qualify a fresh consumer rebuild and complete archive through these documented
-  commands with the current pinned provider recipe.
+- Qualify native consumer builds and complete archives on Linux and macOS.
 - Improve dependency-source acquisition separately from private title catalogs;
   public source availability alone does not provide generated original code.
 - Extend the basic preflight with platform SDK/library diagnostics where those
