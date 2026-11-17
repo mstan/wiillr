@@ -105,10 +105,11 @@ class DiscTests(unittest.TestCase):
         with Disc(self.iso, self.key) as disc:
             original = disc.read
             data = bytearray(original(0x500, 40))
-            data[24:33] = b'../x.dol\0'
             disc.read = lambda offset, size: bytes(data) if offset == 0x500 else original(offset, size)
-            with self.assertRaisesRegex(ValueError, 'Unsafe'):
-                disc.files()
+            for name in (b'../x.dol', b'CON.dol', b'evil.dol '):
+                data[24:40] = (name + b'\0').ljust(16, b'\0')
+                with self.assertRaisesRegex(ValueError, 'Unsafe'):
+                    disc.files()
 
     @unittest.skipUnless(NATIVE, 'Run with the native fixture executable to compare both readers')
     def test_native_reader(self):

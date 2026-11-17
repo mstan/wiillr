@@ -6,7 +6,7 @@ import argparse
 from functools import lru_cache
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import struct
 
 SECTOR = 0x8000
@@ -121,7 +121,9 @@ class Disc:
             if not stack or end < 0:
                 raise ValueError('Invalid FST entry')
             name = strings[name_offset:end].decode('utf-8')
-            if not name or name in ('.', '..') or '/' in name or '\\' in name or ':' in name:
+            if (not name or name in ('.', '..') or '/' in name or '\\' in name or ':' in name or
+                    name.endswith(('.', ' ')) or PureWindowsPath(name).is_reserved() or
+                    any(ord(c) < 32 for c in name)):
                 raise ValueError('Unsafe FST name')
             path = stack[-1][0] + name
             if word >> 24 == 1:
