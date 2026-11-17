@@ -179,7 +179,7 @@ void wii_native_install(void){
      * the live physical/cached/uncached PC when selecting the compiled body. */
     /* AOT and HLE identity checks watch their code ranges. Ordinary data keeps
      * the existing first-write/CRC fence without repeated code invalidation. */
-    gcn_native_code_set_candidate_scoped(0,GC_MAIN_RAM_SIZE,candidate,gcn_overlay_icbi);
+    gcn_native_code_set_candidate_scoped(0,GCN_NATIVE_RAM_LIMIT,candidate,gcn_overlay_icbi);
     /* Partial, unaligned or duplicate ranges retain the original search path;
      * one page-wide execution decision cannot represent those catalogs. */
     bindings_ready=full_pages;

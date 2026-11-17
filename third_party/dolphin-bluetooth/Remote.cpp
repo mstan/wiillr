@@ -75,7 +75,10 @@ u8 NativeRemote::Write(u8 space,u8 slave,u16 address,const u8* data,u16 size) {
   if(slave==0x50)return 8;
   if(slave==0x58 && ir){for(u16 n=0;n<size;n++)camera[u8(address+n)]=data[n];return 0;}
   if(slave==0x51 && u8(address)!=0){for(u16 n=0;n<size;n++)speaker_registers[u8(address+n)]=data[n];return 0;}
-  if(slave==0x51)throw std::runtime_error("Wiimote speaker audio is not implemented");
+  if(slave==0x51) {
+    if(!speaker || mute || !size || !(speaker_registers[3]|speaker_registers[4]))return 0;
+    throw std::runtime_error("Active Wiimote speaker audio is not implemented");
+  }
   if(slave==0x52 && input.nunchuk.attached) {
     if(u32(address)+size>extension.size())return 8;
     std::copy_n(data,size,extension.data()+address);
@@ -121,7 +124,16 @@ void NativeRemote::InterruptDataOutput(const u8* bytes,u32 size) {
     if(read_size){Ack(report,4);return;}
     read_space=(flags>>2)&3;read_slave=bytes[2]>>1;read_address=u16(bytes[3]<<8|bytes[4]);read_size=u16(bytes[5]<<8|bytes[6]);
     ReadReply();return;
-  default:throw std::runtime_error("Unimplemented Wiimote output report");
+  case 0x18: {
+    const u32 count=flags>>3;
+    if(count>20 || size<2+count)throw std::runtime_error("Malformed Wiimote speaker data");
+    if(std::getenv("WIILLR_IOS_TRACE"))std::fprintf(stderr,
+      "Wiimote speaker remote=%u bytes=%u enabled=%u muted=%u divisor=%u\n",
+      unsigned(device_index),count,unsigned(speaker),unsigned(mute),unsigned(speaker_registers[3]|speaker_registers[4]<<8));
+    if(!speaker || mute || !count || !(speaker_registers[3]|speaker_registers[4]))return;
+    throw std::runtime_error("Active Wiimote speaker audio is not implemented");
+  }
+  default:throw std::runtime_error("Unimplemented Wiimote output report "+std::to_string(report));
   }
 }
 void NativeRemote::Update(const WiimoteEmu::DesiredWiimoteState& desired) {

@@ -7,6 +7,15 @@ int main() {
   remote.SetInterruptCallback([&](u8 kind,const u8* data,u32 size){if(kind==0xa1)replies.emplace_back(data,data+size);});
   auto send=[&](std::initializer_list<u8> data){remote.InterruptDataOutput(data.begin(),u32(data.size()));};
   send({0x15,0});CHECK(replies.back()==std::vector<u8>({0x20,0,0,0,0,0,0x69}));
+  // SDK speaker initialization can send data while disabled or muted. The
+  // hardware consumes these packets without an ACK or active audio decoding.
+  const auto speaker_replies=replies.size();
+  send({0x18,0x08,0});CHECK(replies.size()==speaker_replies);
+  send({0x14,4});send({0x19,4});send({0x18,0x08,0});
+  CHECK(replies.size()==speaker_replies);
+  send({0x19,0});send({0x18,0x08,0}); // zero sample-rate divisor: no playback
+  bool malformed_speaker=false;try{send({0x18,0xf8});}catch(const std::runtime_error&){malformed_speaker=true;}
+  CHECK(malformed_speaker);send({0x14,0});
   send({0x17,0,0,0,0x16,0,10});
   CHECK(replies.back().size()==22 && replies.back()[0]==0x21 && replies.back()[3]==0x90 && replies.back()[5]==0x16);
   const auto calibration=replies.back();

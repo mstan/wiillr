@@ -28,7 +28,10 @@ from the same donor's `Core/HW/WiimoteEmu/EmuSubroutines.cpp` and input-report
 implementation. They retain Dolphin's GPL notices. The base source implements
 buttons, acceleration, extended infrared and reports 0x30/0x31/0x33. Nunchuk
 support is described below. Other extensions NACK; speaker audio and
-unimplemented report modes stop explicitly.
+unimplemented report modes stop explicitly. Bounded 0x18 packets received while
+the speaker is disabled, muted, empty or has no configured sample-rate divisor
+follow the pinned donor's no-playback path without an ACK. Active speaker audio
+still stops explicitly; no speaker playback or decoding is claimed.
 
 Nunchuk support adds its identity, calibration, active-low button/ten-bit
 acceleration payload, extension register bank and input modes 0x32/0x34-0x37.
