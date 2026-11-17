@@ -10,19 +10,15 @@ consumer.
 | Product | Start here |
 | --- | --- |
 | **Wii Menu Recomp** | [Application repository and releases](https://github.com/mstan/wii-menu-recomp) |
-| **Mega Man 9 Recomp** | [Game/DLC import, display settings and mods](docs/mega-man-9.md) |
 | **wiillr developer tools** | [Inspection, discovery and native code preparation](docs/developer-tools.md) |
 
 ![Wii Menu launcher](docs/images/wii-menu-launcher.png)
 
-Wii Menu and Mega Man 9 are separate applications with separate launcher
-settings. Wii Menu imports your own supported Wii Menu 4.3U NAND backup or
-extracted system folder. Mega Man 9 imports your own supported USA WAD and
-optional DLC. Neither includes original system or game content.
+Wii Menu imports your own supported Wii Menu 4.3U NAND backup or extracted
+system folder. The application includes no original system or channel content.
 
 Fresh settings use widescreen **Fit to screen**. The Wii Menu launcher includes
 four Wii Remote assignments and **Wii Peripherals** for USB 1, USB 2 and SD Card.
-Game-specific mods stay in the Mega Man 9 launcher.
 
 ![Original Wii Menu channel grid](docs/images/wii-menu-running.png)
 
