@@ -90,7 +90,9 @@ cost and do not create new detail in bitmap artwork.
 Development builds with the native Menu layout provider also offer **Adaptive
 channel grid (experimental)**. Enable it in Mods and select **Fit to screen**,
 then resize the window. The grid keeps three rows and adjusts its columns,
-including two in portrait and six or seven in wide desktop windows. It preserves
+including two in portrait and up to six in wide desktop windows. The consumer's
+viewport is capped at 21:9; wider windows retain their size with side margins.
+It preserves
 the original channel order and saves; channel rearrangement is unavailable while
 this experiment is enabled. Other Menu screens retain their original layouts.
 Portrait desktop testing does not establish Android platform support.
