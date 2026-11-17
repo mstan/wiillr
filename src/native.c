@@ -193,7 +193,7 @@ void wii_native_install(void){
 }
 void wii_native_summary(void){
     u32 observed=0;
-    for(u32 page=0;page<GC_MAIN_RAM_SIZE/4096u;++page)
+    for(u32 page=0;page<GCN_NATIVE_RAM_LIMIT/4096u;++page)
         if(gcn_native_store_pages[page]&GCN_NATIVE_STORE_OBSERVED)++observed;
     printf("{\"PPC_provider\":\"static-content-verified\",\"catalog_sha256\":\"%s\","
            "\"native_dispatches\":%llu,\"content_hashes\":%llu,\"invalidations\":%llu,\"store_observed_pages\":%u}\n",
