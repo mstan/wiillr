@@ -4,6 +4,7 @@
 #include "wiillr/menu_text.h"
 #include "wiillr/menu_picture.h"
 #include "wiillr/menu_picture_hook.h"
+#include "wiillr/menu_grid.h"
 #include "memory/memory.h"
 #include "cpu/native_code.h"
 #include <stdio.h>
@@ -116,7 +117,10 @@ int wii_menu_text_hook_call(CPUState* cpu,u32 address) {
     if(!wii_menu_native_boundary(owner)) {
         ++failures;fprintf(stderr,"Native Menu TextBox could not drain previous work\n");cpu->halted=true;return 1;
     }
-    const int result=wii_menu_text_draw(renderer,cpu->gpr[3],cpu->gpr[4],&view);
+    int result=wii_menu_text_draw(renderer,cpu->gpr[3],cpu->gpr[4],&view);
+    WiiMenuTextLabel label;
+    if(result==1 && wii_menu_grid_page_label(cpu,cpu->gpr[3],&label))
+        result=wii_menu_text_draw_label(renderer,cpu->gpr[3],cpu->gpr[4],&view,&label);
     if(result!=1) {
         WiiMenuTextStatus status;wii_menu_text_status(renderer,&status);
         if(result==0)return decline(cpu,status.error);

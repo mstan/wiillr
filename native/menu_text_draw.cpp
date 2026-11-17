@@ -98,15 +98,23 @@ void camera(const WiiMenuView& view,GcWiiNativeDraw& out) {
     out.material.flags=GC_WII_NATIVE_BLEND|view.depth_flags;
     if(view.depth_func==7)out.material.flags|=GC_WII_NATIVE_DEPTH_ALWAYS;
 }
-Plan prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenuView& view) {
+Plan prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenuView& view,const WiiMenuTextLabel* label=nullptr) {
     need(r.u32(pane)==wii_menu_classes(r.memory)->textbox,"Unbound Menu TextBox class");r.bytes(pane,0x100);r.bytes(info,0x54);
     const auto pointer=r.u32(pane+0xd4),font=r.u32(pane+0xe0),material=r.u32(pane+0x28);
-    if(!pointer || !font || !material)return {};
+    if((!pointer && !label) || !font || !material)return {};
     need(r.u32(material)==wii_menu_classes(r.memory)->material,"Unbound Menu text material");
     r.bytes(material,0x34);
     need(r.u32(pane+0xf4)==0,"Custom Menu text tags require a native adapter");
-    const auto length=r.u16(pane+0xfa);need(uint32_t(length)*2<=r.u16(pane+0xf8),"Text length exceeds buffer");
-    r.bytes(pointer,uint32_t(length)*2);
+    uint32_t length=0;
+    if(label) {
+        need(std::isfinite(label->x) && std::isfinite(label->y) && std::isfinite(label->scale) &&
+            label->scale>0 && label->scale<=4,"Invalid Menu label placement");
+        while(length<32 && label->text[length])++length;
+        need(length<32,"Unterminated Menu label");
+    } else {
+        length=r.u16(pane+0xfa);need(length*2<=r.u16(pane+0xf8),"Text length exceeds buffer");
+        r.bytes(pointer,length*2);
+    }
     if(!length)return {};
     Layout layout{};char error[192];WiiMenuFontGlyph metrics{};
     need(wii_menu_font_glyph(r.memory,font,32,&metrics,error,sizeof error)!=0,error);
@@ -116,19 +124,23 @@ Plan prepare(const Reader& r,uint32_t pane,uint32_t info,const WiiMenuView& view
     layout.ascent=metrics.font_ascent*layout.scale_y;
     need(layout.scale_x>=0 && layout.scale_y>=0 && std::isfinite(layout.line_height),"Invalid Menu font scale");
     for(uint32_t n=0;n<length;++n) {
-        Character c{};c.code=r.u16(pointer+n*2);
+        Character c{};c.code=label?label->text[n]:r.u16(pointer+n*2);
         if(c.code>=32)need(wii_menu_font_glyph(r.memory,font,c.code,&c.glyph,error,sizeof error)!=0,error);
         layout.text.push_back(c);
     }
-    const float width=r.f32(pane+0x4c),height=r.f32(pane+0x50);
+    const float width=label?512:r.f32(pane+0x4c),height=label?layout.font_height:r.f32(pane+0x50);
     need(width>=0 && height>=0,"Invalid Menu text pane dimensions");
-    const auto origin=r.u8(pane+0xcc),position=r.u8(pane+0xfc);need(origin<=8 && position<=8,"Invalid Menu text origin");
+    const auto origin=label?4:r.u8(pane+0xcc),position=label?4:r.u8(pane+0xfc);need(origin<=8 && position<=8,"Invalid Menu text origin");
     const auto bounds=layout.measure(width);
     const float hm=float(position%3)*.5f,vm=float(position/3)*.5f;
     const float left=-width*float(origin%3)*.5f+(width-bounds.width())*hm;
     const float top=-height*float(origin/3)*.5f+(height-bounds.height())*vm;
     GcWiiNativeGuiDraw base{};camera(view,base.draw);
     std::array<float,12> pose{};for(unsigned i=0;i<12;++i)pose[i]=r.f32(pane+0x84+i*4);
+    if(label) {
+        for(unsigned row=0;row<3;++row)for(unsigned col=0;col<3;++col)pose[row*4+col]*=label->scale;
+        pose[3]=label->x;pose[7]=label->y;
+    }
     if(r.u8(info+0x50)&0x80) {
         auto previous=pose;
         for(unsigned row=0;row<3;++row)for(unsigned col=0;col<4;++col) {
@@ -209,7 +221,7 @@ extern "C" int wii_menu_text_validate(WiiMenuMemory memory,uint32_t pane,uint32_
 }
 struct WiiMenuTextNative {
     WiiMenuMemory memory;const GcWiiNativeRenderApi* meshes;const GcWiiNativeGuiApi* gui;
-    std::map<uint32_t,std::vector<Stored>> panes;WiiMenuTextStatus status{};
+    std::map<uint64_t,std::vector<Stored>> panes;WiiMenuTextStatus status{};
     std::map<std::array<uint32_t,36>,uint64_t> glyph_meshes;
     ~WiiMenuTextNative(){for(auto& [pane,items]:panes)for(auto& item:items)meshes->destroy_mesh(item.mesh);for(auto& item:glyph_meshes)meshes->destroy_mesh(item.second);}
 };
@@ -218,14 +230,14 @@ extern "C" WiiMenuTextNative* wii_menu_text_create(WiiMenuMemory memory,const Gc
     try{return new WiiMenuTextNative{memory,meshes,gui,{},{}};}catch(...){return nullptr;}
 }
 extern "C" void wii_menu_text_destroy(WiiMenuTextNative* renderer){delete renderer;}
-extern "C" int wii_menu_text_draw(WiiMenuTextNative* renderer,uint32_t pane,uint32_t info,const WiiMenuView* view) {
+static int draw_text(WiiMenuTextNative* renderer,uint32_t pane,uint32_t info,const WiiMenuView* view,const WiiMenuTextLabel* label) {
     if(!renderer || !view)return 0;
     ++renderer->status.entries;
     Plan plan;
-    try{plan=prepare(Reader{renderer->memory},pane,info,*view);}
+    try{plan=prepare(Reader{renderer->memory},pane,info,*view,label);}
     catch(const std::exception& e){++renderer->status.rejected;std::snprintf(renderer->status.error,sizeof renderer->status.error,"%s",e.what());return 0;}
     try {
-        auto& retained=renderer->panes[pane];
+        auto& retained=renderer->panes[(uint64_t(pane)<<1)|(label?1:0)];
         for(size_t i=0;i<plan.batches.size();++i) {
             auto& batch=plan.batches[i];
             if(i>=retained.size())retained.emplace_back();
@@ -245,11 +257,19 @@ extern "C" int wii_menu_text_draw(WiiMenuTextNative* renderer,uint32_t pane,uint
         renderer->status.glyphs+=plan.glyphs;renderer->status.error[0]=0;return 1;
     }catch(const std::exception& e){++renderer->status.rejected;std::snprintf(renderer->status.error,sizeof renderer->status.error,"%s",e.what());return -1;}
 }
+extern "C" int wii_menu_text_draw(WiiMenuTextNative* renderer,uint32_t pane,uint32_t info,const WiiMenuView* view) {
+    return draw_text(renderer,pane,info,view,nullptr);
+}
+extern "C" int wii_menu_text_draw_label(WiiMenuTextNative* renderer,uint32_t pane,uint32_t info,const WiiMenuView* view,const WiiMenuTextLabel* label) {
+    return label?draw_text(renderer,pane,info,view,label):0;
+}
 extern "C" void wii_menu_text_forget(WiiMenuTextNative* renderer,uint32_t pane) {
     if(!renderer)return;
-    const auto found=renderer->panes.find(pane);if(found==renderer->panes.end())return;
-    for(const auto& item:found->second)renderer->meshes->destroy_mesh(item.mesh);
-    renderer->panes.erase(found);
+    for(unsigned kind=0;kind<2;kind++) {
+        const auto found=renderer->panes.find((uint64_t(pane)<<1)|kind);if(found==renderer->panes.end())continue;
+        for(const auto& item:found->second)renderer->meshes->destroy_mesh(item.mesh);
+        renderer->panes.erase(found);
+    }
 }
 extern "C" void wii_menu_text_status(const WiiMenuTextNative* renderer,WiiMenuTextStatus* out){if(renderer && out)*out=renderer->status;}
 

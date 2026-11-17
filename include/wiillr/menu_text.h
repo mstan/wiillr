@@ -34,6 +34,13 @@ int wii_menu_charwriter_style(WiiMenuMemory,uint32_t writer,WiiMenuCharWriterSty
 int wii_menu_charwriter_glyph(WiiMenuMemory,uint32_t glyph,WiiMenuFontGlyph*,char*,uint32_t);
 
 typedef struct WiiMenuTextNative WiiMenuTextNative;
+/* Consumer-authored text using an existing Menu TextBox's font, tint and
+ * opacity. Positions are in the pane's original world space. Guest text and
+ * layout bytes are never changed; label meshes have independent ownership. */
+typedef struct WiiMenuTextLabel {
+    uint16_t text[32];
+    float x,y,scale;
+} WiiMenuTextLabel;
 typedef struct {
     uint64_t entries,glyphs,draws,mesh_uploads,rejected;
     char error[192];
@@ -46,6 +53,8 @@ int wii_menu_text_validate(WiiMenuMemory,uint32_t pane,uint32_t draw_info,
 /* 1: submitted; 0: unsupported input before any upload/submission;
  * -1: resource/backend failure, which must not invoke the original renderer. */
 int wii_menu_text_draw(WiiMenuTextNative*,uint32_t pane,uint32_t draw_info,const WiiMenuView*);
+int wii_menu_text_draw_label(WiiMenuTextNative*,uint32_t style_pane,uint32_t draw_info,
+    const WiiMenuView*,const WiiMenuTextLabel*);
 /* Standalone CharWriter GPU service. Geometry input is the original Glyph
  * and explicit XYZ, with the owned model/view. No writer or glyph bytes are
  * changed; Print retains glyph lookup, controls and cursor advancement. */

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <limits>
 #define CHECK(x) do{if(!(x)){std::fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
 namespace {
 std::array<uint8_t,16384> ram{};
@@ -15,13 +16,14 @@ void half(uint32_t a,uint16_t v){byte(a,uint8_t(v>>8));byte(a+1,uint8_t(v));}
 void word(uint32_t a,uint32_t v){half(a,uint16_t(v>>16));half(a+2,uint16_t(v));}
 std::vector<GcWiiNativeVertex> uploaded;
 uint64_t uploads=0,destroys=0,draws=0;
+GcWiiNativeGuiDraw last_draw{};
 uint64_t create_mesh(const GcWiiNativeMesh* mesh) {
     uploaded.assign(mesh->vertices,mesh->vertices+mesh->vertex_count);return ++uploads;
 }
 int destroy_mesh(uint64_t){++destroys;return 1;}
 int draw_gui(const GcWiiNativeGuiDraw* job) {
     if(job->color.low[0]!=255 || job->color.high[0]!=255 || job->color.low[3]!=0 || job->color.high[3]!=255)return 0;
-    ++draws;return 1;
+    last_draw=*job;++draws;return 1;
 }
 }
 int main() {
@@ -85,6 +87,22 @@ int main() {
     CHECK(uploaded[0].position[0]==-1 && uploaded[0].position[1]==1);
     CHECK(uploaded[4].position[0]==7 && uploaded[4].position[1]==1);
     CHECK(wii_menu_text_draw(renderer,0x2000,0x2500,&view));CHECK(uploads==1 && draws==2);
+    // An additional label borrows the real style without changing the guest
+    // buffer or evicting the original TextBox's cached geometry each frame.
+    WiiMenuTextLabel label{{'A','A',0},12,34,.6f};const auto guest_before=ram;
+    CHECK(wii_menu_text_draw_label(renderer,0x2000,0x2500,&view,&label)==1);
+    CHECK(ram==guest_before && uploads==2 && uploaded.size()==8);
+    CHECK(last_draw.draw.model_view[3]==12 && last_draw.draw.model_view[7]==34 && last_draw.draw.model_view[0]==.6f);
+    CHECK(uploaded[0].position[0]<0 && uploaded[6].position[0]>0);
+    const auto label_uploads=uploads;
+    CHECK(wii_menu_text_draw(renderer,0x2000,0x2500,&view)==1);
+    CHECK(wii_menu_text_draw_label(renderer,0x2000,0x2500,&view,&label)==1 && uploads==label_uploads);
+    label.x=std::numeric_limits<float>::infinity();const auto label_draws=draws;
+    CHECK(!wii_menu_text_draw_label(renderer,0x2000,0x2500,&view,&label));
+    CHECK(uploads==label_uploads && draws==label_draws && ram==guest_before);label.x=12;
+    for(auto& ch:label.text)ch='A';
+    CHECK(!wii_menu_text_draw_label(renderer,0x2000,0x2500,&view,&label));
+    CHECK(uploads==label_uploads && draws==label_draws && ram==guest_before);
     // A constrained width wraps at a character boundary with the real line feed.
     word(0x204c,0x41000000);
     CHECK(wii_menu_text_draw(renderer,0x2000,0x2500,&view));

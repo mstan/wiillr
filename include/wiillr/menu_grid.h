@@ -7,6 +7,7 @@
 typedef struct CPUState CPUState;
 typedef struct WiiMenuPicture WiiMenuPicture;
 typedef struct WiiFs WiiFs;
+typedef struct WiiMenuTextLabel WiiMenuTextLabel;
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +28,8 @@ int wii_menu_grid_entry(CPUState*,uint32_t);
 void wii_menu_grid_transform(CPUState*,uint32_t pane);
 bool wii_menu_grid_clip(CPUState*,uint32_t scene,float* half_x,float* half_y);
 int wii_menu_grid_status(char*,size_t);
+/* Optional consumer label, submitted with the original footer TextBox style. */
+bool wii_menu_grid_page_label(CPUState*,uint32_t style_pane,WiiMenuTextLabel*);
 /* Reuse the original grid artwork, subdivided at its authored cell boundaries.
  * -1 skips a neighboring stock sheet, 0 keeps an ordinary picture. */
 int wii_menu_grid_picture_tiles(CPUState*,uint32_t pane);

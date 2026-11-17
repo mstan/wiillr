@@ -18,3 +18,4 @@ bool wii_menu_grid_clip(CPUState* cpu,uint32_t scene,float* x,float* y){(void)cp
 int wii_menu_grid_picture_tiles(CPUState* cpu,uint32_t pane){(void)cpu;(void)pane;return 0;}
 void wii_menu_grid_picture_tile(CPUState* cpu,uint32_t pane,unsigned tile,WiiMenuPicture* out){(void)cpu;(void)pane;(void)tile;(void)out;}
 int wii_menu_grid_status(char* out,size_t size){return snprintf(out,size,"{\"ok\":true,\"enabled\":false,\"ready\":false,\"columns\":4,\"rows\":3}");}
+bool wii_menu_grid_page_label(CPUState* cpu,uint32_t pane,WiiMenuTextLabel* out){(void)cpu;(void)pane;(void)out;return false;}
