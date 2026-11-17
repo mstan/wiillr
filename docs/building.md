@@ -8,7 +8,7 @@
   The launcher imports your own supported Wii Menu 4.3U NAND backup or extracted
   system folder. No compiler or build arguments are needed to run the archive.
 - **Use the developer tools:** download a
-  [wiillr developer bundle](https://github.com/mstan/wiillr/releases/tag/wiillr-v0.1.0)
+  [wiillr developer bundle](https://github.com/mstan/wiillr/releases/tag/wiillr-v0.1.1)
   and follow the [developer guide](developer-tools.md). Its inspection commands
   do not require rebuilding the native application.
 - **Compile from source:** use the instructions below. Native Menu application
@@ -149,9 +149,10 @@ python tools/release_inputs.py wiillr-release-inputs-20261116-1.zip /path/to/wii
 This verifies the archive before extraction. The build driver then verifies its
 manifest and catalog before configuring CMake. Verification is a prerequisite,
 not a guarantee that the host toolchain is installed or that any bundle matches
-every published preview. This recipe pins the retained c704fc7d shared provider and prepared catalog used
-by the adaptive preview. A fresh end-to-end source rebuild with this driver
-remains a separate qualification step from validating the published archive.
+every published preview. This recipe pins the retained c704fc7d shared provider
+and prepared catalog. A fresh Windows consumer build through this driver and
+its packaged native runtime have passed qualification. Native Linux/macOS
+consumer builds remain separate, pending platform checks.
 
 ## Prerequisites
 

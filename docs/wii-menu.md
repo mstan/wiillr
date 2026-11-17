@@ -95,6 +95,16 @@ the original channel order and saves; channel rearrangement is unavailable while
 this experiment is enabled. Other Menu screens retain their original layouts.
 Portrait desktop testing does not establish Android platform support.
 
+The consumer also offers **Expanded channel library (experimental)** in Mods,
+off by default. Choose 2x through 128x the original 48 positions and restart.
+Overflow placement and the last viewed position are saved separately in
+`.wiillr-channel-library` in the managed NAND folder. The enabled state and
+capacity use `channel-library.cfg` in the application's preferences. Native
+game saves and the stock channel-order format remain unchanged. Turning the
+feature off preserves stored overflow placements for a later re-enable.
+See the consumer's [library guide](https://github.com/mstan/wii-menu-recomp/blob/main/docs/channel-library.md)
+for ordering, shortcuts and limits.
+
 An unconfigured network profile starts as wired Connection 1 with automatic
 IP/DNS. Existing connection settings are preserved. Host IPv4 sockets and DNS
 are available; AOSS, SSL, online WiiConnect24 and Nintendo service availability
@@ -104,6 +114,10 @@ Installed supported channels retain their original Menu entry and HOME return
 flow. Wii Menu → Mega Man 9 → HOME → Wii Menu preserves the window and pointer.
 This package does not install channel content for you or provide arbitrary Wii
 title compatibility.
+
+Known native-title limitation: HOME during Mega Man 9's early startup can stop
+the renderer on an unsupported modal fade. Its title-screen HOME return has
+passed qualification; early-startup return remains unresolved.
 
 ## Updates and building
 
