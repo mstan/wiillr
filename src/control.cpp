@@ -163,7 +163,7 @@ struct WiiControl {
         << ",\"dsp_native\":" << dsp.native_instructions
         << ",\"dsp_interpreter\":" << dsp.interpreter_instructions
         << ",\"dsp_misses\":" << dsp.misses
-        << ",\"dsp_pc\":" << dsp.pc << ",\"dsp_control\":" << dsp.control
+        << ",\"dsp_provider\":" << dsp.provider << ",\"dsp_pc\":" << dsp.pc << ",\"dsp_control\":" << dsp.control
         << ",\"dsp_csr\":" << machine->dsp.registers.csr
         << ",\"dsp_cpu_mail_high\":" << (machine->dsp.engine?gcn_dsp_engine_peek_mail_high(machine->dsp.engine,true):0)
         << ",\"dsp_mail_high\":" << (machine->dsp.engine?gcn_dsp_engine_peek_mail_high(machine->dsp.engine,false):0)
