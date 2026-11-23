@@ -67,9 +67,18 @@ int main(int argc,char** argv){try{
     write(copy/"title/00000001/00000002/data/native-save",bytes("new player progress"));require(import(source,copy)==WII_NAND_SETUP_DEST_EXISTS,"no replacement or merge");require(read(copy/"title/00000001/00000002/data/native-save")==bytes("new player progress"),"preserve existing progress");
     require(import(source,source/"nested")==WII_NAND_SETUP_INVALID && !fs::exists(source/"nested"),"reject source-contained import");
     auto bad=original.at("title/00000001/00000002/content/00000000.app");bad.back()^=1;write(source/"title/00000001/00000002/content/00000000.app",bad);
-    require(import(source,own.root/"corrupt")==WII_NAND_SETUP_INVALID && !fs::exists(own.root/"corrupt"),"content mismatch never publishes");write(source/"title/00000001/00000002/content/00000000.app",original.at("title/00000001/00000002/content/00000000.app"));
-    auto metadata=original.at("title/00000001/00000002/content/title.tmd");put(metadata,0x1dc,1,2);write(source/"title/00000001/00000002/content/title.tmd",metadata);
-    require(inspect(source)==WII_NAND_SETUP_UNSUPPORTED && !info.ready && info.menu_version==1,"unsupported Startup metadata cannot become ready");write(source/"title/00000001/00000002/content/title.tmd",original.at("title/00000001/00000002/content/title.tmd"));
+    require(import(source,own.root/"corrupt")==WII_NAND_SETUP_INVALID && !fs::exists(own.root/"corrupt"),"content mismatch never publishes");
+    require(std::string(error).find("Installed system content is damaged")!=std::string::npos,"actual content integrity failure is distinct");
+    write(source/"title/00000001/00000002/content/00000000.app",original.at("title/00000001/00000002/content/00000000.app"));
+    const auto* menu_tmd="title/00000001/00000002/content/title.tmd";
+    auto metadata=original.at(menu_tmd);
+    put(metadata,0x1dc,1,2);write(source/menu_tmd,metadata);
+    require(inspect(source)==WII_NAND_SETUP_UNSUPPORTED && !info.ready && info.menu_version==1,"unsupported Startup metadata cannot become ready");
+    require(std::string(error).find("contains Wii Menu v1.")!=std::string::npos,"unsupported Menu version reports observed revision");
+    put(metadata,0x1dc,513,2);put(metadata,0x184,0x700000050ull,8);write(source/menu_tmd,metadata);
+    require(inspect(source)==WII_NAND_SETUP_UNSUPPORTED && !info.ready && info.menu_version==513,"same-version NAND with a different IOS title cannot become ready");
+    require(std::string(error).find("declares IOS title 0000000700000050")!=std::string::npos,"unsupported IOS reports the full title identity");
+    write(source/menu_tmd,original.at(menu_tmd));
     fs::remove(source/"ticket/00000001/00000050.tik");require(inspect(source)==WII_NAND_SETUP_MISSING,"missing IOS ticket");write(source/"ticket/00000001/00000050.tik",original.at("ticket/00000001/00000050.tik"));
     fs::remove(source/"ticket/00000001/00000050.tik");fs::remove(source/"title/00000001/00000050/content/title.tmd");fs::remove(source/"title/00000001/00000050/content/00000000.app");
     require(inspect(source)==WII_NAND_SETUP_READY && std::string(info.details).find("native IOS80")!=std::string::npos,"native provider needs no original IOS firmware");
@@ -82,6 +91,12 @@ int main(int argc,char** argv){try{
     require(inspect(wrapper)==WII_NAND_SETUP_READY && info.source_kind==WII_NAND_SOURCE_EXTRACTED,"known immediate NAND wrapper detected");
     folder(wrapper/"Wii");
     require(inspect(wrapper)==WII_NAND_SETUP_INVALID && !info.ready,"ambiguous wrapper refuses without choosing a system");
+    const auto wrong_size=own.root/"wrong-size.bin";write(wrong_size,bytes("wrong image"));
+    require(inspect(wrong_size)==WII_NAND_SETUP_UNSUPPORTED && !info.ready,"unsupported raw geometry cannot become ready");
+    const std::string size_error=error;
+    require(size_error.find("11 bytes")!=std::string::npos && size_error.find("553648128")!=std::string::npos &&
+            size_error.find("553649152")!=std::string::npos && size_error.find("spare/ECC")!=std::string::npos,
+            "image diagnostic reports observed bytes and both supported layouts");
     const auto raw_path=own.root/"nand.bin";raw(raw_path);require(inspect(raw_path)==WII_NAND_SETUP_READY,error);require(info.source_kind==WII_NAND_SOURCE_BOOTMII,"BootMii source identity");
     write(own.root/"keys.bin",Bytes(128,1));require(inspect(raw_path)==WII_NAND_SETUP_READY,"valid embedded backup keys take priority over an unselected sibling");fs::remove(own.root/"keys.bin");
     const auto raw_copy=own.root/"decrypted";require(import(raw_path,raw_copy)==WII_NAND_SETUP_READY,error);for(const auto& [name,data]:original)require(read(raw_copy/name)==data,"raw AES/filesystem decode exact");

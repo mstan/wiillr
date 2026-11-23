@@ -3,6 +3,7 @@
 #include <wiillr/menu_profile.h>
 #include "menu_profile_fixture.h"
 #include "nand_setup_fixture.h"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -134,6 +135,20 @@ int main(int argc,char** argv) {
         wii_package_arguments(p,"Wii Menu.exe","--launcher",&count,&values);require(count==0 && !values,"pending setup cannot launch");
         require(!wii_package_open(menu.string().c_str(),menu_user.string().c_str(),nullptr,error,sizeof error),"setup holds lifetime profile lease");
         const auto console=root.path/"original console";nand_fixture::folder(console);WiiNandSetupInfo info{};
+        const auto alternate_boot=root.path/"alternate Menu boot";
+        auto alternate_files=nand_fixture::files();
+        auto& alternate_dol=alternate_files.at("title/00000001/00000002/content/00000000.app");
+        alternate_dol.back()^=1;
+        const auto alternate_hash=nand_fixture::sha(alternate_dol);
+        auto& alternate_tmd=alternate_files.at("title/00000001/00000002/content/title.tmd");
+        std::copy(alternate_hash.begin(),alternate_hash.end(),alternate_tmd.begin()+0x1f4);
+        for(const auto& [name,data]:alternate_files)nand_fixture::write(alternate_boot/name,data);
+        require(!wii_package_import_system(p,alternate_boot.string().c_str(),nullptr,&info,error,sizeof error) &&
+                info.status==WII_NAND_SETUP_UNSUPPORTED && !info.ready && info.menu_version==513 &&
+                info.ios_profile==80,"different boot content with the same version and IOS refuses");
+        require(std::string(error)==info.details && std::string(error).find("boot content SHA-1 in title.tmd")!=std::string::npos,
+                "normal package import forwards the same-version boot content diagnostic");
+        require(!wii_package_ready(p) && !fs::exists(menu_user/".wiillr-active-nand"),"alternate boot content cannot activate a profile");
         require(wii_package_import_system(p,console.string().c_str(),nullptr,&info,error,sizeof error),error);
         require(wii_package_ready(p) && info.uid==4096 && info.ios_profile==80,"import binds validated installed identity");
         const auto first=fs::path(wii_package_nand(p));require(first.parent_path()==menu_user/"nand-imports" && read(first/"shared2/sys/SYSCONF")==menu_profile_fixture(),"managed copy preserves console settings");
