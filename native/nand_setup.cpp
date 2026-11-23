@@ -83,12 +83,21 @@ struct Folder:Source {
  void unchanged()override{for(const auto& e:entries){const auto p=origin/fs::u8path(e.name);need(fs::exists(p) && !linked(p) && fs::last_write_time(p)==e.modified && (e.directory || fs::file_size(p)==e.size),"The source changed. Close other programs using this NAND and try again.",WII_NAND_SETUP_IO_ERROR);}}
  WiiNandSourceKind kind()const override{return WII_NAND_SOURCE_EXTRACTED;}
 };
+constexpr uint64_t bootmii_image_bytes = 0x21000000;
+constexpr uint64_t bootmii_image_with_keys_bytes = bootmii_image_bytes + 0x400;
+
 struct Raw:Source {
  std::ifstream file;uint64_t raw_size;fs::file_time_type modified;Bytes super;wiillr::Aes128Key aes{};std::map<std::string,size_t> files;
  Bytes physical(uint64_t at,size_t n){Bytes b(n);file.clear();file.seekg(at);need(bool(file.read((char*)b.data(),n)),"Cannot read NAND backup",WII_NAND_SETUP_IO_ERROR);return b;}
  Bytes logical(uint32_t at,size_t n,bool ecc=true){Bytes b(n);size_t done=0;while(done<n){const uint32_t offset=at+uint32_t(done),page=offset/0x800;auto raw=physical(uint64_t(page)*0x840,0x840);if(ecc)for(unsigned i=0;i<4;++i)need(wiillr::NandController::ecc(raw.data()+i*512)==u32(raw,0x830+i*4),"NAND backup has an ECC error; obtain a verified backup before importing");const auto amount=std::min(n-done,size_t(0x800-offset%0x800));std::copy_n(raw.data()+offset%0x800,amount,b.data()+done);done+=amount;}return b;}
- explicit Raw(const fs::path& p,const char* keys){origin=fs::canonical(p);chain(origin);raw_size=fs::file_size(origin);modified=fs::last_write_time(origin);need(raw_size==0x21000000 || raw_size==0x21000400,"Choose a standard 512 MiB BootMii nand.bin or an extracted NAND folder",WII_NAND_SETUP_UNSUPPORTED);file.open(origin,std::ios::binary);need(bool(file),"Cannot open the NAND backup",WII_NAND_SETUP_IO_ERROR);
-  Bytes otp;if(raw_size==0x21000400){auto footer=physical(0x21000000,0x400);need(std::memcmp(footer.data(),"BackupMii v1",12)==0,"The appended NAND key backup is not BootMii v1");otp={footer.begin()+0x100,footer.begin()+0x180};}
+ explicit Raw(const fs::path& p,const char* keys){
+  origin=fs::canonical(p);chain(origin);raw_size=fs::file_size(origin);modified=fs::last_write_time(origin);
+  if(raw_size!=bootmii_image_bytes && raw_size!=bootmii_image_with_keys_bytes)
+   throw Failure(WII_NAND_SETUP_UNSUPPORTED,"The selected file is "+std::to_string(raw_size)+
+    " bytes. Choose a BootMii nand.bin with spare/ECC data ("+std::to_string(bootmii_image_bytes)+
+    " bytes, or "+std::to_string(bootmii_image_with_keys_bytes)+" with appended keys), or an extracted NAND folder.");
+  file.open(origin,std::ios::binary);need(bool(file),"Cannot open the NAND backup",WII_NAND_SETUP_IO_ERROR);
+  Bytes otp;if(raw_size==bootmii_image_with_keys_bytes){auto footer=physical(bootmii_image_bytes,0x400);need(std::memcmp(footer.data(),"BackupMii v1",12)==0,"The appended NAND key backup is not BootMii v1");otp={footer.begin()+0x100,footer.begin()+0x180};}
   if(keys && *keys){auto b=read_file(path(keys),0x400);if(b.size()==0x400){need(std::memcmp(b.data(),"BackupMii v1",12)==0,"Unsupported key-backup format");b=Bytes(b.begin()+0x100,b.begin()+0x180);}need(b.size()==128,"Use a BootMii keys.bin or a 128-byte OTP backup");need(otp.empty() || b==otp,"The explicit key backup does not match this NAND");otp=std::move(b);}
   need(!otp.empty(),"This NAND needs console keys. Choose its matching keys.bin in Console keys, or place keys.bin beside nand.bin.",WII_NAND_SETUP_NEEDS_KEYS);std::array<uint8_t,16> key{};std::copy_n(otp.data()+0x58,16,key.data());need(std::any_of(key.begin(),key.end(),[](uint8_t b){return b!=0 && b!=255;}),"The NAND key backup is empty or invalid");aes=wiillr::aes128_expand(key);std::fill(key.begin(),key.end(),0);std::fill(otp.begin(),otp.end(),0);
   bool found=false;uint32_t generation=0,selected=0;for(unsigned i=0;i<16;++i){auto b=logical(0x1fc00000+i*0x40000,0x40000,false);if(std::memcmp(b.data(),"SFFS",4))continue;const auto seq=u32(b,4);if(!found || int32_t(seq-generation)>0){generation=seq;selected=0x1fc00000+i*0x40000;super=std::move(b);found=true;}}
@@ -123,7 +132,7 @@ std::unique_ptr<Source> open(const char* source,const char* keys){
  }
  need(fs::is_regular_file(p),"Choose a NAND folder or BootMii backup");
  std::string companion;
- if((!keys || !*keys) && fs::file_size(p)==0x21000000){
+ if((!keys || !*keys) && fs::file_size(p)==bootmii_image_bytes){
   const auto sibling=p.parent_path()/"keys.bin";
   if(fs::is_regular_file(sibling)){chain(sibling);companion=utf8(sibling);keys=companion.c_str();}
  }
@@ -134,14 +143,23 @@ struct Title {uint64_t id,ios;uint16_t version,gid,boot;std::vector<Content> con
 Title tmd(Source& s,uint64_t id){const auto b=s.read("title/"+hex(id>>32)+"/"+hex(uint32_t(id))+"/content/title.tmd");const auto sig=u32(b,0);const size_t o=sig==0x10000?0x240:sig==0x10001?0x140:sig==0x10002?0x80:0;need(o && b.size()>=o+0xa4,"Invalid installed title metadata");Title t{u64(b,o+0x4c),u64(b,o+0x44),u16(b,o+0x9c),u16(b,o+0x58),u16(b,o+0xa0),{}};const auto count=u16(b,o+0x9e);need(t.id==id && count && count<=512 && b.size()==o+0xa4+count*36,"Invalid installed content table");std::set<unsigned> ids,indices;for(unsigned i=0;i<count;++i){const auto at=o+0xa4+i*36;Content c{u32(b,at),u16(b,at+4),u16(b,at+6),u64(b,at+8),{}};std::copy_n(b.data()+at+16,20,c.hash.data());need(ids.insert(c.id).second && indices.insert(c.index).second,"Duplicate installed content identity");t.content.push_back(c);}need(indices.contains(t.boot),"Boot content is missing from the title metadata");return t;}
 std::string content_path(Source& s,const Title& t,const Content& c){if(c.flags&0x8000){const auto m=s.read("shared1/content.map");need(m.size()%28==0,"Invalid shared content map");std::string found;for(size_t at=0;at<m.size();at+=28)if(std::equal(c.hash.begin(),c.hash.end(),m.begin()+at+8)){need(found.empty(),"Duplicate shared content mapping");found=std::string((const char*)m.data()+at,8);need(std::all_of(found.begin(),found.end(),[](unsigned char x){return std::isxdigit(x);}),"Invalid shared content filename");}need(!found.empty(),"Required shared system content is missing",WII_NAND_SETUP_MISSING);return "shared1/"+found+".app";}return "title/"+hex(t.id>>32)+"/"+hex(uint32_t(t.id))+"/content/"+hex(c.id)+".app";}
 void verify_title(Source& s,const Title& t){for(const auto& c:t.content){auto b=s.read(content_path(s,t,c));need(b.size()==c.size && digest(b)==c.hash,"Installed system content is damaged or uses the wrong NAND keys");}const auto ticket=s.read("ticket/"+hex(t.id>>32)+"/"+hex(uint32_t(t.id))+".tik");need(!ticket.empty() && ticket.size()%0x2a4==0,"Invalid installed system ticket");for(size_t at=0;at<ticket.size();at+=0x2a4)need(u32(ticket,at)==0x10001 && ticket[at+0x1bc]==0 && u64(ticket,at+0x1dc)==t.id,"System ticket does not match its title");}
-void validate(Source& s,WiiNandSetupInfo& out){out.source_kind=s.kind();for(const auto& e:s.entries){if(!e.directory){++out.files;out.bytes+=e.size;}}const auto menu=tmd(s,0x100000002ull);out.menu_version=menu.version;out.ios_profile=uint32_t(menu.ios);out.gid=menu.gid;std::snprintf(out.menu_label,sizeof out.menu_label,menu.version==1?"Startup Menu (v1)":menu.version==513?"Wii Menu 4.3U":"Wii Menu v%u",menu.version);const auto& boot=*std::find_if(menu.content.begin(),menu.content.end(),[&](const Content& c){return c.index==menu.boot;});const auto boot_path=content_path(s,menu,boot);std::snprintf(out.boot_relative,sizeof out.boot_relative,"%s",boot_path.c_str());
+void validate(Source& s,WiiNandSetupInfo& out){out.source_kind=s.kind();for(const auto& e:s.entries){if(!e.directory){++out.files;out.bytes+=e.size;}}const auto menu=tmd(s,0x100000002ull);out.menu_version=menu.version;out.ios_profile=uint32_t(menu.ios);out.gid=menu.gid;std::snprintf(out.menu_label,sizeof out.menu_label,menu.version==1?"Startup Menu (v1)":menu.version==513?"Wii Menu 4.3U":"Wii Menu v%u",menu.version);
+ const auto& boot=*std::find_if(menu.content.begin(),menu.content.end(),[&](const Content& c){return c.index==menu.boot;});const auto boot_path=content_path(s,menu,boot);std::snprintf(out.boot_relative,sizeof out.boot_relative,"%s",boot_path.c_str());
  auto setting=s.read("title/00000001/00000002/data/setting.txt");need(setting.size()==256,"Console region settings are malformed");uint32_t key=0x73b5dbfa;for(auto& c:setting){c^=uint8_t(key);key=std::rotl(key,1);}std::string text((char*)setting.data(),setting.size());std::string area;const auto at=text.find("AREA=");if(at!=std::string::npos)area=text.substr(at+5,text.find_first_of("\r\n\0",at+5)-(at+5));need(area=="USA" || area=="JPN" || area=="EUR" || area=="KOR","Console region settings are unsupported",WII_NAND_SETUP_UNSUPPORTED);std::snprintf(out.region_label,sizeof out.region_label,"%s",area=="USA"?"USA":area=="JPN"?"Japan":area=="EUR"?"Europe":"Korea");
- const auto hash=hash_text(boot.hash);bool supported=menu.version==513 && menu.ios==0x100000050ull && hash=="26116613f624061ba99c8d1a299aaa6efa85670d";
+ if(menu.version!=513)
+  throw Failure(WII_NAND_SETUP_UNSUPPORTED,"The selected NAND contains Wii Menu v"+std::to_string(menu.version)+
+   ". This release requires the original Wii Menu 4.3U (v513).");
+ if(menu.ios!=0x100000050ull)
+  throw Failure(WII_NAND_SETUP_UNSUPPORTED,"The selected Wii Menu v513 declares IOS title "+hex(menu.ios,16)+
+   ". This release requires Wii IOS80 (0000000100000050).");
+ const auto hash=hash_text(boot.hash);
+ bool supported=hash=="26116613f624061ba99c8d1a299aaa6efa85670d";
 #ifdef WIILLR_NAND_SETUP_TESTING
  // A ROM-free, fixed synthetic DOL identity exists only in component tests.
- supported=supported || (menu.version==513 && menu.ios==0x100000050ull && hash=="97225ce7a70ec083ff7b0a4fa2c3df55b7620aad");
+ supported=supported || hash=="97225ce7a70ec083ff7b0a4fa2c3df55b7620aad";
 #endif
- need(supported,"This release supports Wii Menu 4.3U (v513) with IOS80. The selected Menu revision is not covered by its native code.",WII_NAND_SETUP_UNSUPPORTED);need(area=="USA","The Menu and console region do not match",WII_NAND_SETUP_UNSUPPORTED);verify_title(s,menu);
+ need(supported,"The selected Wii Menu v513 declares a different boot content SHA-1 in title.tmd than this build requires. Choose a backup containing the original Wii Menu 4.3U boot content.",WII_NAND_SETUP_UNSUPPORTED);
+ need(area=="USA","The Menu and console region do not match",WII_NAND_SETUP_UNSUPPORTED);verify_title(s,menu);
  // The release supplies native IOS80. Original IOS firmware is not an HLE
  // launch dependency; if any installation is supplied, reject partial/damaged
  // data instead of claiming that it was validated for original-IOS startup.
