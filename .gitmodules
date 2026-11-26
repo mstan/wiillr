@@ -10,3 +10,9 @@
 [submodule "external/recomp-ui"]
 	path = external/recomp-ui
 	url = https://github.com/RetroPortingToolKit/recomp-ui.git
+[submodule "external/recomp-diagnostics-core"]
+	path = external/recomp-diagnostics-core
+	url = git@github.com:mstan/recomp-diagnostics-core-candidate-20261124.git
+[submodule "external/recomp-persistence-core"]
+	path = external/recomp-persistence-core
+	url = git@github.com:mstan/recomp-persistence-core-candidate-20261124.git

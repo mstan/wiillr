@@ -312,6 +312,15 @@ The separate `wiillr-native-discover` target permits counted interpreter misses
 for bring-up (`--ppc-mode mixed-discovery`). It cannot establish native acceptance.
 Repeat `--capture` during preparation to combine verified loader and later title
 code variants with matching title/profile identities.
+The Wii Menu's Mods page includes an independent **Diagnostics and input
+recording** control, enabled by default. Its saved choice is separate from
+display and channel-library settings. Accepted Remote inputs, including their
+slot, pointer, acceleration and Nunchuk values, are recorded with guest cycles
+under the profile's `diagnostics` directory. These are diagnostic event logs,
+not execution snapshots or a cross-build replay format. Each segment is bounded
+to 16 MiB; output failures or a full queue are reported without rejecting input.
+Turn recording off and on to begin another segment.
+
 `WIILLR_CONTROL_PORT` enables a loopback-only, nonblocking development interface;
 `WIILLR_CONTROL_PAUSED=1` parks before the first instruction. `tools/wii_control.py`
 provides `status`, `pause`, `run [guest-cycles]`, `input mask [x y pointing present

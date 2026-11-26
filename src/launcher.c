@@ -3,6 +3,7 @@
 #include "wiillr/launcher_input.h"
 #include "wiillr/launcher_peripherals.h"
 #include "wiillr/launcher_mods.h"
+#include "wiillr/diagnostics.h"
 #include "wiillr/package.h"
 #include "wiillr/nand_setup.h"
 #include "wiillr/mm9_mods.h"

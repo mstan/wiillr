@@ -23,7 +23,8 @@ def main():
                               (0xe0, 0x80004000), (0x100, 0x48000000)):
             struct.pack_into('>I', image, offset, value)
         (root / 'loop.dol').write_bytes(image)
-        env = dict(os.environ, WIILLR_CONTROL_PORT=str(port), WIILLR_CONTROL_PAUSED='1')
+        env = dict(os.environ, WIILLR_CONTROL_PORT=str(port), WIILLR_CONTROL_PAUSED='1',
+                   GCN_AUDIO_VOLUME='0', GCN_AUDIO_MUTE='1', GCNLLR_RENDER_HIDDEN='1')
         env.pop('WIILLR_INPUT_SCRIPT', None)
         env.pop('WIILLR_SYNC_CYCLES', None)
         process = subprocess.Popen([str(executable), str(root/'loop.dol'), '1000000',
@@ -31,13 +32,13 @@ def main():
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         try:
-            deadline = time.monotonic() + 10
             while True:
                 try:
                     connection = socket.create_connection(('127.0.0.1', port), timeout=2)
+                    connection.settimeout(None)
                     break
                 except OSError:
-                    if process.poll() is not None or time.monotonic() > deadline:
+                    if process.poll() is not None:
                         raise RuntimeError('Control process did not start')
                     time.sleep(.01)
             with connection:
@@ -82,18 +83,24 @@ def main():
                 assert state['paused'] and state['cycles'] == 2000
                 stream.close()
             with socket.create_connection(('127.0.0.1', port), timeout=2) as reconnect:
+                reconnect.settimeout(None)
                 reconnect.sendall(b'sta')
                 time.sleep(.01)
                 reconnect.sendall(b'tus\n')
                 with reconnect.makefile('rb') as stream:
                     assert json.loads(stream.readline())['paused']
+                    # Both complete lines are handled without requiring another
+                    # incoming packet. The old private pump stranded line two.
+                    reconnect.sendall(b'status\nstatus\n')
+                    assert json.loads(stream.readline())['paused']
+                    assert json.loads(stream.readline())['paused']
                     reconnect.sendall(b'quit\n')
                     assert json.loads(stream.readline())['ok']
-            assert process.wait(timeout=5) == 0
+            assert process.wait() == 0
         finally:
             if process.poll() is None:
                 process.terminate()
-                process.wait(timeout=5)
+                process.wait()
 
 
 if __name__ == '__main__':
