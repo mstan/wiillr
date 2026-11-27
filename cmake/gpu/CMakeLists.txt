@@ -12,6 +12,7 @@ if(NOT EXISTS "${GXRUNTIME_DIR}/graphics/aurora/CMakeLists.txt" OR
 endif()
 # Reuse only the donor dependency graph. No donor game executable is built.
 set(GC_WII_GX_WII ON CACHE BOOL "Wii address fields")
+set(GCNLLR_NATIVE_TYPED_OUTPUT ON CACHE BOOL "Qualified typed frame/raster presentation")
 set(GCNLLR_RENDER_PIPELINE retail CACHE STRING "Qualified renderer")
 set(GCNLLR_VERTEX_PREPARATION planned CACHE STRING "Qualified vertex preparation")
 set(GCNLLR_NATIVE_PIPELINE OFF CACHE BOOL "Experimental pipeline")

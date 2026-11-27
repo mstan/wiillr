@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/launcher_input.h"
+#include <recomp_input_effects.h>
 #include "wiillr/keyboard.h"
 #include "launcher_input.h"
 #include <SDL3/SDL.h>
@@ -113,12 +114,10 @@ GcnllrPad wii_launcher_input_map_player(const RecompLauncherCSettings* s,const W
         // remap/unbind controls only this Remote's pointer direction.
         const int bx=s->player_pad_bind[player][13],by=s->player_pad_bind[player][11];
         if(bx==RECOMP_LAUNCHER_PAD_AXIS(SDL_GAMEPAD_AXIS_RIGHTX,0) && s->player_pad_bind[player][14]==RECOMP_LAUNCHER_PAD_AXIS(SDL_GAMEPAD_AXIS_RIGHTX,1)) {
-            int x=input->axes[SDL_GAMEPAD_AXIS_RIGHTX];if(x>-threshold && x<threshold)x=0;x=128+x/256;
-            pad.substick_x=(uint8_t)(x<0?0:x>255?255:x);
+            pad.substick_x=ri_axis_u8(input->axes[SDL_GAMEPAD_AXIS_RIGHTX],(unsigned)deadzone,RI_AXIS_U8_CLIPPED_256);
         }
         if(by==RECOMP_LAUNCHER_PAD_AXIS(SDL_GAMEPAD_AXIS_RIGHTY,0) && s->player_pad_bind[player][12]==RECOMP_LAUNCHER_PAD_AXIS(SDL_GAMEPAD_AXIS_RIGHTY,1)) {
-            int y=-input->axes[SDL_GAMEPAD_AXIS_RIGHTY];if(y>-threshold && y<threshold)y=0;y=128+y/256;
-            pad.substick_y=(uint8_t)(y<0?0:y>255?255:y);
+            pad.substick_y=ri_axis_u8(-(int32_t)input->axes[SDL_GAMEPAD_AXIS_RIGHTY],(unsigned)deadzone,RI_AXIS_U8_CLIPPED_256);
         }
     }
     return pad;
