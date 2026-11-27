@@ -2,6 +2,7 @@
 // wiillr adaptation of Dolphin's asynchronous Bluetooth transport.
 #include "BTEmu.h"
 #include "wiillr/bluetooth.h"
+#include "wiillr/diagnostics.h"
 #include <cstdlib>
 
 namespace IOS::HLE {
@@ -312,7 +313,7 @@ bool BluetoothEmuDevice::Poll(u32* message,s32* result) {
   *message=completion.message;*result=completion.result;return true;
 }
 }
-struct WiiBluetooth {WiiBluetooth(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store):device(cpu,gpio,store){} IOS::HLE::BluetoothEmuDevice device;};
+struct WiiBluetooth {WiiBluetooth(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store):device(cpu,gpio,store),cpu(cpu){} IOS::HLE::BluetoothEmuDevice device;CPUState* cpu;};
 extern "C" WiiBluetooth* wii_bluetooth_create(CPUState* cpu,const u32* gpio,const WiiBluetoothStore* store) {
   try{return new WiiBluetooth(cpu,gpio,store);}catch(const std::exception& e){std::fprintf(stderr,"Bluetooth init: %s\n",e.what());return nullptr;}
 }
@@ -320,7 +321,7 @@ extern "C" void wii_bluetooth_destroy(WiiBluetooth* bt){delete bt;}
 extern "C" void wii_bluetooth_close(WiiBluetooth* bt){if(bt)bt->device.Close();}
 extern "C" bool wii_bluetooth_set_input(WiiBluetooth* bt,const WiiBluetoothInput* input) {return wii_bluetooth_set_input_indexed(bt,0,input);}
 extern "C" bool wii_bluetooth_set_input_indexed(WiiBluetooth* bt,u32 index,const WiiBluetoothInput* input) {
-  try{if(!bt || !input)return false;bt->device.SetInput(index,*input);return true;}
+  try{if(!bt || !input)return false;bt->device.SetInput(index,*input);wii_diagnostics_input(bt->cpu->cycles,index,input);return true;}
   catch(const std::exception& e){std::fprintf(stderr,"Bluetooth input: %s\n",e.what());return false;}
 }
 extern "C" bool wii_bluetooth_press_sync(WiiBluetooth* bt) {

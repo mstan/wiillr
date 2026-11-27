@@ -90,7 +90,14 @@ int main(int argc,char** argv){
     menu_mod_prepare(&display);
     CHECK(display.mods && !display.has_supersampling && display.mods->hide_hidden_features);
     const RecompLauncherCModProvider* provider=display.mods;
-    CHECK(provider->feature_count(provider->ctx)==3);
+    CHECK(provider->feature_count(provider->ctx)==4 && provider->package_count(provider->ctx)==2);
+    RecompLauncherCModFeature diagnostics;
+    CHECK(provider->feature_get(provider->ctx,3,&diagnostics) && diagnostics.enabled && !diagnostics.hidden);
+    CHECK(!strcmp(diagnostics.package_id,"wii.diagnostics"));
+    CHECK(provider->feature_enable(provider->ctx,diagnostics.package_id,diagnostics.id,0));
+    CHECK(provider->commit(provider->ctx,NULL));
+    menu_mod_prepare(&display);
+    CHECK(provider->feature_get(provider->ctx,3,&diagnostics) && !diagnostics.enabled);
     RecompLauncherCModFeature feature;
     CHECK(provider->feature_get(provider->ctx,0,&feature) && feature.enabled && !feature.hidden);
     RecompLauncherCModOption option;
@@ -138,5 +145,7 @@ int main(int argc,char** argv){
     CHECK(!remove(library_path));
     char grid_path[32768];snprintf(grid_path,sizeof grid_path,"%s/adaptive-grid.cfg",launcher_directory);
     CHECK(!remove(grid_path));
+    char diagnostics_path[32768];snprintf(diagnostics_path,sizeof diagnostics_path,"%s/diagnostics.cfg",launcher_directory);
+    CHECK(!remove(diagnostics_path));
     puts("Window binder: Menu/game/Menu preserves manual geometry; explicit settings and new windows apply");return 0;
 }

@@ -1,16 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <fcntl.h>
-using SOCKET=int;
-constexpr int INVALID_SOCKET=-1,SOCKET_ERROR=-1;
-#define closesocket close
-#endif
+#include <diagnostics_server.h>
 extern "C" {
 #include "wiillr/control.h"
 #include "wiillr/mm9_mods.h"
@@ -41,41 +30,19 @@ struct WiiControl {
   CPUState* cpu;WiiMachine* machine;WiiGx* gx;WiiBluetoothInput* input;bool* input_pending;
   WiiBluetoothInput remote_inputs[3]{};
   const GcnOverlayModule* native_module;
-  SOCKET listener=INVALID_SOCKET,client=INVALID_SOCKET;
-  std::string rx,tx;size_t sent=0;u64 last_poll=0,stop_at=0;bool paused=false,quit=false;
-  ~WiiControl(){if(client!=INVALID_SOCKET)closesocket(client);if(listener!=INVALID_SOCKET)closesocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+  DiagServer* server=nullptr;
+  u64 last_poll=0,stop_at=0;bool paused=false,quit=false;
+  ~WiiControl(){diag_server_destroy(server);}
+  static void dispatch(void* user,DiagServer* server,const char* line) {
+    auto* control=static_cast<WiiControl*>(user);
+    try {
+      const auto response=control->command(line);
+      if(!diag_server_reply(server,response.c_str()))throw std::runtime_error("control reply failed");
+    } catch(const std::exception&) {
+      if(!diag_server_reply(server,"{\"ok\":false,\"error\":\"invalid or unavailable command\"}"))
+        control->cpu->halted=true;
+    }
   }
-  static void nonblocking(SOCKET socket) {
-#ifdef _WIN32
-    u_long enabled=1;if(ioctlsocket(socket,FIONBIO,&enabled))throw std::runtime_error("nonblocking socket");
-#else
-    if(fcntl(socket,F_SETFL,O_NONBLOCK)<0)throw std::runtime_error("nonblocking socket");
-#ifdef SO_NOSIGPIPE
-    const int enabled=1;
-    if(setsockopt(socket,SOL_SOCKET,SO_NOSIGPIPE,&enabled,sizeof enabled)<0)throw std::runtime_error("socket SIGPIPE suppression");
-#endif
-#endif
-  }
-  static bool would_block() {
-#ifdef _WIN32
-    return WSAGetLastError()==WSAEWOULDBLOCK;
-#else
-    return errno==EAGAIN || errno==EWOULDBLOCK;
-#endif
-  }
-  static int transmit(SOCKET socket,const char* data,int size) {
-#ifdef _WIN32
-    return send(socket,data,size,0);
-#elif defined(MSG_NOSIGNAL)
-    return send(socket,data,size,MSG_NOSIGNAL);
-#else
-    return send(socket,data,size,0);
-#endif
-  }
-  void disconnect(){closesocket(client);client=INVALID_SOCKET;rx.clear();tx.clear();sent=0;}
   static u64 number(const std::string& text,int base) {
     if(text.empty() || text[0]=='-')throw std::runtime_error("invalid number");
     size_t end;const auto result=std::stoull(text,&end,base);if(end!=text.size())throw std::runtime_error("invalid number");return result;
@@ -398,26 +365,7 @@ struct WiiControl {
     throw std::runtime_error("unknown command or arguments");
   }
   void pump() {
-    if(client==INVALID_SOCKET){client=accept(listener,nullptr,nullptr);if(client!=INVALID_SOCKET){nonblocking(client);rx.clear();tx.clear();sent=0;}}
-    if(client==INVALID_SOCKET)return;
-    if(sent<tx.size()) {
-      const int count=transmit(client,tx.data()+sent,int(std::min<size_t>(65536,tx.size()-sent)));
-      if(count==SOCKET_ERROR && !would_block()){disconnect();return;}
-      if(count>0)sent+=count;
-      if(sent<tx.size())return;tx.clear();sent=0;
-    }
-    char bytes[1024];const int count=recv(client,bytes,sizeof bytes,0);
-    if(count==0 || (count==SOCKET_ERROR && !would_block())){disconnect();return;}
-    if(count>0)rx.append(bytes,count);
-    const auto end=rx.find('\n');
-    if(end!=std::string::npos) {
-      try{tx=command(rx.substr(0,end))+"\n";}catch(const std::exception&){tx="{\"ok\":false,\"error\":\"invalid or unavailable command\"}\n";}
-      rx.erase(0,end+1);
-      const int written=transmit(client,tx.data(),int(std::min<size_t>(65536,tx.size())));
-      if(written==SOCKET_ERROR && !would_block()){disconnect();return;}
-      if(written>0)sent=written;
-    }
-    if(rx.size()>1024){closesocket(client);client=INVALID_SOCKET;rx.clear();}
+    if(!diag_server_poll(server))throw std::runtime_error("control transport failed");
   }
 };
 extern "C" WiiControl* wii_control_start(CPUState* cpu,WiiMachine* machine,WiiGx* gx,WiiBluetoothInput* input,bool* pending,
@@ -426,13 +374,11 @@ extern "C" WiiControl* wii_control_start(CPUState* cpu,WiiMachine* machine,WiiGx
   auto control=std::make_unique<WiiControl>();
   try {
     const auto port=WiiControl::number(text,10);if(!port || port>65535)throw std::runtime_error("port");
-#ifdef _WIN32
-    WSADATA data;if(WSAStartup(MAKEWORD(2,2),&data))throw std::runtime_error("Winsock");
-#endif
-    control->listener=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);if(control->listener==INVALID_SOCKET)throw std::runtime_error("socket");
-    sockaddr_in address{};address.sin_family=AF_INET;address.sin_port=htons(u16(port));address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
-    if(bind(control->listener,reinterpret_cast<sockaddr*>(&address),sizeof address)==SOCKET_ERROR || listen(control->listener,1)==SOCKET_ERROR)throw std::runtime_error("listen");
-    WiiControl::nonblocking(control->listener);control->cpu=cpu;control->machine=machine;control->gx=gx;control->input=input;control->input_pending=pending;
+    control->server=diag_server_create(u16(port));
+    if(!control->server || !diag_server_protocol(control->server,1024,64u*1024u*1024u,nullptr,nullptr) ||
+       !diag_server_raw_handler(control->server,WiiControl::dispatch,control.get()))
+      throw std::runtime_error("listen");
+    control->cpu=cpu;control->machine=machine;control->gx=gx;control->input=input;control->input_pending=pending;
     control->native_module=native_module;
     control->paused=std::getenv("WIILLR_CONTROL_PAUSED") && std::string(std::getenv("WIILLR_CONTROL_PAUSED"))=="1";
     for(auto& source:control->remote_inputs){source=*input;source.buttons=0;source.present=false;}
@@ -456,9 +402,10 @@ static void paused_host_events(WiiControl* control) {
 extern "C" bool wii_control_poll(WiiControl* control) {
   if(!control)return true;
   if(control->stop_at && control->cpu->cycles>=control->stop_at){control->paused=true;control->stop_at=0;}
-  if(!control->paused && control->cpu->cycles-control->last_poll<65536)return true;
+  if(!control->paused && !control->quit && control->cpu->cycles-control->last_poll<65536)return true;
   control->last_poll=control->cpu->cycles;
   try{control->pump();}catch(...){control->cpu->halted=true;return true;}
+  if(control->quit && diag_server_pending_output(control->server))return false;
   if(control->paused){paused_host_events(control);std::this_thread::sleep_for(std::chrono::milliseconds(1));}
   return !control->paused;
 }

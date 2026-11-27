@@ -8,6 +8,12 @@ static struct {
 } menu_mods;
 static const char menu_mod_package[]="wii-menu.display";
 static const char menu_mod_feature[]="internal-resolution";
+static const char menu_diagnostics_package[]="wii.diagnostics";
+static const char menu_diagnostics_feature[]="input-recording";
+static bool menu_diagnostics_choice=true;
+static bool menu_diagnostics_identity(const char* package,const char* feature) {
+    return package && feature && !strcmp(package,menu_diagnostics_package) && !strcmp(feature,menu_diagnostics_feature);
+}
 static const char menu_grid_feature[]="adaptive-channel-grid";
 static bool menu_grid_choice,menu_library_choice;
 static unsigned menu_library_multiplier=2;
@@ -15,7 +21,7 @@ static const char menu_library_feature[]="expanded-channels";
 static bool menu_library_identity(const char* package,const char* feature) {
     return package && feature && !strcmp(package,menu_mod_package) && !strcmp(feature,menu_library_feature);
 }
-static int menu_mod_feature_count(void* context){(void)context;return wii_menu_grid_supported()?3:1;}
+static int menu_mod_feature_count(void* context){(void)context;return (wii_menu_grid_supported()?3:1)+1;}
 static bool menu_grid_identity(const char* package,const char* feature) {
     return package && feature && !strcmp(package,menu_mod_package) && !strcmp(feature,menu_grid_feature);
 }
@@ -24,16 +30,30 @@ static bool menu_mod_identity(const char* package,const char* feature) {
     return package && feature && !strcmp(package,menu_mod_package) &&
         !strcmp(feature,menu_mod_feature);
 }
-static int menu_mod_count(void* context){(void)context;return 1;}
+static int menu_mod_count(void* context){(void)context;return 2;}
 static int menu_mod_package_get(void* context,int index,RecompLauncherCModPackage* out) {
-    (void)context;if(index || !out)return 0;memset(out,0,sizeof *out);
+    (void)context;if(index<0 || index>1 || !out)return 0;memset(out,0,sizeof *out);
+    if(index==1) {
+        strcpy(out->id,menu_diagnostics_package);strcpy(out->version,"1.0");
+        strcpy(out->name,"Diagnostics");strcpy(out->license,"GPL-3.0-or-later");
+        strcpy(out->description,"Controller activity and game diagnostics for troubleshooting.");
+        out->enabled=menu_diagnostics_choice;return 1;
+    }
     strcpy(out->id,menu_mod_package);strcpy(out->version,"1.0");
     strcpy(out->name,"Wii Menu enhancements");strcpy(out->license,"GPL-3.0-or-later");
     strcpy(out->description,"Display and channel-library enhancements for the Wii Menu.");
     out->enabled=menu_mods.enabled || menu_grid_choice || menu_library_choice;return 1;
 }
 static int menu_mod_get(void* context,int index,RecompLauncherCModFeature* out) {
-    (void)context;if(index<0 || index>2 || !out)return 0;memset(out,0,sizeof *out);
+    (void)context;if(index<0 || index>=menu_mod_feature_count(context) || !out)return 0;memset(out,0,sizeof *out);
+    if(index==(wii_menu_grid_supported()?3:1)) {
+        strcpy(out->id,menu_diagnostics_feature);strcpy(out->package_id,menu_diagnostics_package);
+        strcpy(out->package_name,"Diagnostics");strcpy(out->package_version,"1.0");
+        strcpy(out->name,"Diagnostics and input recording");strcpy(out->group,"Diagnostics");
+        strcpy(out->description,"Record controller activity for troubleshooting. Recordings stay in your profile. Turn this off to stop recording; your choice is remembered.");
+        out->enabled=menu_diagnostics_choice;
+        snprintf(out->status,sizeof out->status,"%s",*wii_diagnostics_error()?wii_diagnostics_error():menu_diagnostics_choice?"Recording enabled":"Recording disabled");return 1;
+    }
     if(index==2) {
         if(!wii_menu_grid_supported())return 0;
         strcpy(out->id,menu_library_feature);strcpy(out->package_id,menu_mod_package);
@@ -64,6 +84,7 @@ static int menu_mod_get(void* context,int index,RecompLauncherCModFeature* out) 
     return 1;
 }
 static int menu_mod_enable(void* context,const char* package,const char* feature,int enabled) {
+    if(menu_diagnostics_identity(package,feature)){menu_diagnostics_choice=enabled!=0;menu_mods.error[0]=0;return 1;}
     if(menu_library_identity(package,feature)) {
         if(!wii_menu_grid_supported())return 0;
         menu_library_choice=enabled!=0;menu_mods.error[0]=0;return 1;
@@ -128,7 +149,11 @@ static int menu_mod_set_option(void* context,const char* package,const char* fea
     strcpy(menu_mods.error,"Choose one of the listed resolutions.");return 0;
 }
 static int menu_mod_commit(void* context,const char* image) {
-    (void)context;(void)image;return 1;
+    (void)context;(void)image;
+    if(!wii_diagnostics_set_enabled(menu_diagnostics_choice)) {
+        snprintf(menu_mods.error,sizeof menu_mods.error,"%s",wii_diagnostics_error());return 0;
+    }
+    return 1;
 }
 static const char* menu_mod_error(void* context){(void)context;return menu_mods.error;}
 static const RecompLauncherCModProvider menu_mod_provider={
@@ -140,6 +165,7 @@ static const RecompLauncherCModProvider menu_mod_provider={
     .hide_hidden_features=1
 };
 static void menu_mod_prepare(RecompLauncherCGameInfo* game) {
+    wii_diagnostics_configure(launcher_directory);menu_diagnostics_choice=wii_diagnostics_enabled();
     if(!game->has_supersampling)return;
     char path[32768];
     if(snprintf(path,sizeof path,"%s/adaptive-grid.cfg",launcher_directory)<(int)sizeof path) {

@@ -10,6 +10,7 @@
 #include "wiillr/gx_output.h"
 #include "wiillr/gx_session.h"
 #include "wiillr/control.h"
+#include "wiillr/diagnostics.h"
 #include "wiillr/menu_grid.h"
 #include "wiillr/host_session.h"
 #ifdef RECOMP_LAUNCHER
@@ -424,6 +425,11 @@ static int run(int argc, char** argv) {
     input_state.accel[0]=input_state.accel[1]=512;input_state.accel[2]=616;
     const char* extension=getenv("WIILLR_REMOTE_EXTENSION");
     if(extension && !strcmp(extension,"nunchuk"))input_state.nunchuk=wii_nunchuk_neutral();
+    #if WIILLR_PPC_STATIC
+    wii_diagnostics_begin(WIILLR_PPC_CATALOG_SHA);
+    #else
+    wii_diagnostics_begin("development");
+    #endif
     WiiControl* control=wii_control_start(&cpu,&machine,&gx,&input_state,&input_pending,native_module);
     if(getenv("WIILLR_CONTROL_PORT") && !control){wii_dsp_stop(&machine.dsp);wii_gx_stop(&gx);wii_fs_unmount(machine.ios.fs);cpu_free(&cpu);return 2;}
 #if GCN_COST_RING_ENABLED
@@ -547,6 +553,7 @@ static int run(int argc, char** argv) {
     const bool dump_requested=argv[3] && *argv[3];
     int saved = !dump_requested || (wii_gx_output_prepare(&gx,0,cpu.ram_size) && dump(argv[3], cpu.ram, cpu.ram_size));
     wii_control_stop(control);
+    wii_diagnostics_end();
     printf("{\"ios_provider\":\"%s\",\"native_operations\":%llu,\"ARM_interpreter_instructions\":0,\"stm_event_waiting\":%s}\n",
            WIILLR_IOS_NATIVE ? "native-development":"none",(unsigned long long)machine.ios.operations,
            machine.ios.event_waiting ? "true":"false");

@@ -2,6 +2,7 @@
 #include <wiillr/package.h>
 #include <wiillr/menu_profile.h>
 #include <wiillr/network_profile.h>
+#include <recomp_persistence/atomic_file.h>
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -106,17 +107,11 @@ fs::path active_profile(const fs::path& user) {
     need(fs::is_directory(path),"The selected system profile is missing");return path;
 }
 void select_profile(const fs::path& user,const fs::path& profile) {
-    const auto selection=user/".wiillr-active-nand",temporary=user/(".wiillr-active-nand-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    need(!linked(selection) && !fs::exists(temporary),"The system profile selection cannot be saved");
+    const auto selection=user/".wiillr-active-nand";
+    need(!linked(selection),"The system profile selection cannot be saved");
     const auto text="wiillr-active-nand-v1\n"+utf8(profile.lexically_relative(user))+"\n";
-    try {
-        {std::ofstream out(temporary,std::ios::binary);out.write(text.data(),text.size());out.close();need(!out.fail(),"Cannot save the system profile selection");}
-#ifdef _WIN32
-        need(MoveFileExW(temporary.c_str(),selection.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0,"Cannot publish the system profile selection");
-#else
-        fs::rename(temporary,selection);
-#endif
-    }catch(...){std::error_code ignored;fs::remove(temporary,ignored);throw;}
+    need(recomp_atomic_file_store(utf8(selection).c_str(),text.data(),text.size())!=0,
+         "Cannot publish the system profile selection");
 }
 struct SystemBinding {
     std::string nand,boot,uid,gid,ios;
