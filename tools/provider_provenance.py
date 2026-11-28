@@ -68,6 +68,28 @@ def resolve(root: Path, inputs: Path | None, game: bool, definitions: list[str])
 def cmake_definitions(providers: dict) -> list[str]:
     return [item["variable"] + "=" + Path(item["path"]).as_posix() for item in providers.values() if item["variable"]]
 
+def resolve_consumer(product: dict) -> dict:
+    """Only record title providers actually composed by this consumer."""
+    if not product.get("product_file"):
+        return {}
+    root = Path(product["product_file"]).parent
+    result = {}
+    for provider in product.get("source_providers", []):
+        relative = Path(provider["path"])
+        path = (root / relative).resolve()
+        if relative.is_absolute() or ".." in relative.parts or not path.is_relative_to(root):
+            raise ValueError("Title provider escapes its consumer")
+        if not (path / ".git").exists():
+            raise ValueError("Initialize the pinned title provider: " + provider["name"])
+        revision = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+        dirty = bool(subprocess.check_output(["git", "-C", str(path), "status", "--porcelain", "--untracked-files=no"], text=True).strip())
+        result["title:" + provider["name"]] = {
+            "variable": None, "path": str(path), "revision": revision,
+            "repository": provider["repository"], "selection": "consumer-provider",
+            "available": True, "dirty": dirty, "source_archives": [],
+            "license_files": [str(p) for p in (path / "LICENSE", path / "LICENSING.md", path / "PROVENANCE.md") if p.is_file()]}
+    return result
+
 def verify_cache(cache: Path, providers: dict) -> None:
     if not providers:
         return

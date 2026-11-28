@@ -19,7 +19,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from product import load as load_product
-from provider_provenance import resolve as resolve_providers, cmake_definitions, verify_cache
+from provider_provenance import resolve as resolve_providers, resolve_consumer, cmake_definitions, verify_cache
 TOOLS = ("wiillr-discover", "wiillr-starlet-discover", "wiillr-nand-setup", "dolrecomp")
 
 
@@ -296,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--common-key is only valid for the internal game product")
     identity = verify_inputs(inputs, game, product.get("catalog"))
     providers = resolve_providers(ROOT, inputs, game, args.cmake_definition)
+    providers.update(resolve_consumer(product))
     missing = preflight(inputs, game)
     missing += ["Missing selected source provider " + name + ": " + item["path"] for name, item in providers.items() if not item["available"]]
     if missing:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import subprocess
 
 def load(path: Path | None, product: str) -> dict:
     if product == "wiillr" and path is None:
@@ -26,4 +27,7 @@ def load(path: Path | None, product: str) -> dict:
             raise ValueError("Consumer path escapes product root: " + key)
         value[key] = str(resolved)
     value["product_file"] = str(path)
+    if (path.parent / ".git").exists():
+        value["source_revision"] = subprocess.check_output(
+            ["git", "-C", str(path.parent), "rev-parse", "HEAD"], text=True).strip()
     return value
