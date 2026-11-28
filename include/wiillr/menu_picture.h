@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 /* Version-verified NW4R class bindings belong to the title provider. Null
- * selects the existing retail Menu binding; resources retain the same ABI. */
+ * selects its build-supplied binding; the engine supplies no title identity. */
 typedef struct WiiMenuClasses {
     uint32_t picture,window,material,textbox,resource_font,archive_font;
 } WiiMenuClasses;

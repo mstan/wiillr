@@ -80,6 +80,7 @@ target_include_directories(test_wii_gx_completion_floor PRIVATE include ${WIILLR
 target_compile_definitions(test_wii_gx_completion_floor PRIVATE WIILLR_NATIVE_OUTPUT=0)
 add_test(NAME wii_gx_physical_completion_floor COMMAND test_wii_gx_completion_floor)
 add_executable(test_wii_package tests/test_package.cpp native/package.cpp)
+target_compile_definitions(test_wii_package PRIVATE WIILLR_GAME_PACKAGE_IOS=37)
 target_link_libraries(test_wii_package PRIVATE recomp-persistence-core::core)
 target_include_directories(test_wii_package PRIVATE include)
 add_test(NAME wii_package_persistence COMMAND test_wii_package "${CMAKE_CURRENT_BINARY_DIR}")

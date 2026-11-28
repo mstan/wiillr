@@ -43,6 +43,9 @@ struct WiiPackage {
 #ifndef WIILLR_PACKAGE_DSP_HLE
 #define WIILLR_PACKAGE_DSP_HLE 0
 #endif
+#ifndef WIILLR_GAME_PACKAGE_IOS
+#define WIILLR_GAME_PACKAGE_IOS 0
+#endif
 namespace {
 void need(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 bool linked(const fs::path& p) {
@@ -302,8 +305,8 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
         package->menu=config.contains("Nand") && config.at("Boot").starts_with("title/00000001/00000002/");
         const auto uid=number(config.at("Uid"),0xffffffffu),gid=number(config.at("Gid"),0xffffu);
         package->uid=std::to_string(uid);package->gid=std::to_string(gid);
-        const auto ios=number(config.at("Ios"),80);
-        need(package->menu?(ios==4 || ios==80):ios==37,"Unsupported package IOS profile");package->ios=std::to_string(ios);
+        const auto ios=number(config.at("Ios"),255);
+        need(package->menu?(ios==4 || ios==80):(WIILLR_GAME_PACKAGE_IOS && ios==WIILLR_GAME_PACKAGE_IOS),"Unsupported package IOS profile");package->ios=std::to_string(ios);
         const bool importing=config.contains("Import");
         need(!package->menu || !importing,"The Wii Menu package requires its prepared console data");
         package->standalone=importing;
