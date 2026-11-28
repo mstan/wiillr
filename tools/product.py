@@ -18,7 +18,8 @@ def load(path: Path | None, product: str) -> dict:
     for key in ("engine_product", "archive_prefix"):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", value.get(key, "")):
             raise ValueError("Invalid consumer " + key)
-    if not value.get("name") or any(c in value["name"] for c in "/\\\r\n"):
+    if (not value.get("name") or not value["name"].rstrip(" .") or
+            value["name"] in (".", "..") or any(c in value["name"] for c in '/\\\r\n\0<>:"|?*')):
         raise ValueError("Invalid consumer name")
     for key in ("cmake", "readme"):
         relative = Path(value[key])

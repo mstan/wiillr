@@ -67,6 +67,11 @@ class ProductProviders(unittest.TestCase):
             self.assertEqual(product.load(path,"example")["name"],"Example")
             with self.assertRaisesRegex(ValueError,"another consumer"):
                 product.load(path,"other")
+            for name in (".", "..", ".. ", "Game/Other", "Game\\Other", "Game\0"):
+                invalid = dict(description, name=name)
+                path.write_text(json.dumps(invalid))
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError,"Invalid consumer name"):
+                    product.load(path,"example")
             description["readme"] = "../README.md"
             path.write_text(json.dumps(description))
             with self.assertRaises((ValueError,FileNotFoundError)):
