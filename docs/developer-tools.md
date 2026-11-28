@@ -86,17 +86,17 @@ Consumers may select `WIILLR_REMOTE_EXTENSION=nunchuk` for the development
 default. Each Remote input carries its own extension state. Left stick and
 shoulder inputs feed Nunchuk movement/C/Z independently of Remote D-pad/Sync.
 The loopback interface accepts `remote INDEX BUTTONS [X Y POINTING PRESENT PAIRING]`
-and `nunchuk INDEX X Y BUTTONS [ACCEL_X ACCEL_Y ACCEL_Z]`. Indices are 0–3;
+and `nunchuk INDEX X Y BUTTONS [ACCEL_X ACCEL_Y ACCEL_Z]`. Indices are 0â€“3;
 button masks are hexadecimal and other values decimal. These test commands
 select scripted ownership and use ordinary Bluetooth/HID traffic, never guest
-gameplay flags. Nunchuk registers, encrypted reads and report modes 0x32/0x34–0x37
+gameplay flags. Nunchuk registers, encrypted reads and report modes 0x32/0x34â€“0x37
 are supported; MotionPlus and other extension types remain unsupported.
 
 ### Verified code preparation
 
 For Wii Menu 4.3U reverse engineering, the [source and annotation guide](https://github.com/mstan/wiillr/blob/wiillr-v0.1.1/docs/wii-menu-references.md)
 describes the version-verified symbol index and addressed disassembly. Its
-`tools/annotate_wii_menu.py` helper runs from a source checkout; it does not
+`tools/annotate_wii_menu.py` helper in the Wii Menu consumer runs from its source checkout; it does not
 change catalog coverage or the prepared executable.
 
 `prepare` uses bundled `dolrecomp` unless `--compiler` supplies another path.

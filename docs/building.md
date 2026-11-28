@@ -51,17 +51,11 @@ for large builds on another drive.
 
 ### Product names
 
-The engine defaults to `wiillr` and accepts these exact product selectors:
-
-| Selector | Result |
-| --- | --- |
-| `wiillr` | Developer CLI, native discovery/setup tools and PowerPC compiler; no generated title catalog required |
-| `wii-menu` | Base Menu application preset; use the separate Menu consumer for its adaptive provider and product packaging |
-| `mega-man-9` | Internal game-consumer preset; its application downloads remain private |
-
-A product is a build preset, not a filename, game ID, firmware revision or
-version number. In the Wii Menu consumer, omit `--product`: its `product.json`
-already selects `wii-menu`.
+The engine defaults to `wiillr`, which builds catalog-free developer tools.
+Application selectors come from each consumer's `product.json`; pass its path
+with `--product-file`, or use that consumer's `tools/build.py` wrapper.
+The consumer description owns product names, archive prefixes, native profiles
+and qualified catalog identity. A selector is independent of package version.
 
 ### Package versions
 
