@@ -282,3 +282,23 @@ bytes and appends to the UID/shared-content maps. It does not synthesize a ticke
 or establish signature verification. Keep a backup of the managed profile, and
 launch only after the installer succeeds. An interrupted per-file merge is
 resumable; it is not a whole-profile transaction.
+
+## Consumer-owned products
+
+Application builds now require `--product-file /path/to/consumer/product.json`.
+Use each consumer's `tools/build.py`; the engine no longer defines title presets.
+The consumer owns its name, archive prefix, native package profile, qualified
+catalog identity, renderer/hooks and launcher policy. `tools/build_release.py`
+accepts the same explicit product description for a single consumer release.
+
+`--check` prints the resolved HLE provider table. `build-products.json` retains
+that table, including actual paths/revisions, dirty-source state and source/license
+locations. Explicit CMake source definitions select initialized checkouts;
+otherwise the historically qualified offline providers retain their precedence.
+The configured CMake cache is checked against that selection. Selecting a source
+route does not upgrade a catalog or provider. DSP HLE requires its RecompCore
+donor and BlueWake host sources in developer builds as well as applications.
+
+The pinned `external/gcnllr-tools` supplies GC/Wii transport and native dependency
+closure. Wii retains its ASCII commands, 32 MiB plus metadata reply allowance,
+frame conversion, platform package layouts and forbidden-user-data policy.

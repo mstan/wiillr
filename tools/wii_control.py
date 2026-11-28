@@ -2,29 +2,27 @@
 """Local development control for a running wiillr process; never edits guest flags."""
 import argparse
 import json
-import socket
+import sys
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+import maintainer_tools
+from debug_transport import JsonLineClient
 from pathlib import Path
 
 
-class Control:
+def validate_reply(result, command):
+    if not isinstance(result, dict):
+        raise RuntimeError('Invalid control response')
+    if not result.get('ok'):
+        raise RuntimeError(result.get('error', 'Control command failed'))
+    return result
+
+
+class Control(JsonLineClient):
     def __init__(self, port):
-        self.socket = socket.create_connection(('127.0.0.1', port), timeout=10)
-        self.stream = self.socket.makefile('rb')
-
-    def command(self, command):
-        self.socket.sendall(command.encode('ascii') + b'\n')
-        # display is bounded at 16 MiB RGBA, encoded as hex plus JSON metadata.
-        line = self.stream.readline(32 * 1024 * 1024 + 4096)
-        if not line.endswith(b'\n'):
-            raise RuntimeError('Missing or oversized control response')
-        result = json.loads(line)
-        if not result.get('ok'):
-            raise RuntimeError(result.get('error', 'Control command failed'))
-        return result
-
-    def close(self):
-        self.stream.close()
-        self.socket.close()
+        # Display is bounded at 16 MiB RGBA, hex encoded plus JSON metadata.
+        super().__init__(port, encode=lambda value: value.encode('ascii'),
+                         validate=validate_reply, max_response=32 * 1024 * 1024 + 4096,
+                         connect_timeout=10, read_timeout=10)
 
 
 def frame_image(frame):

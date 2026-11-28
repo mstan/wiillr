@@ -27,316 +27,12 @@ import tempfile
 import time
 import zipfile
 
-PRODUCTS = {"wiillr": "wiillr", "wii-menu": "Wii Menu", "mega-man-9": "Mega Man 9"}
-PREFIXES = {"wiillr": "wiillr", "wii-menu": "WiiMenuRecomp", "mega-man-9": "MegaMan9Recomp"}
-WINDOWS_SYSTEM = set((
-    "advapi32 avrt bcrypt bcryptprimitives cabinet cfgmgr32 comctl32 comdlg32 "
-    "crypt32 cryptbase cryptsp d2d1 d3d11 d3d12 d3dcompiler_47 dbghelp dhcpcsvc "
-    "dnsapi dwrite dwmapi dxgi dxguid gdi32 hid imm32 iphlpapi kernel32 kernelbase "
-    "mf mfplat mfreadwrite mfuuid mmdevapi mpr msimg32 msvcrt mswsock ncrypt "
-    "netapi32 normaliz ntdll ole32 oleacc oleaut32 opengl32 powrprof propsys "
-    "psapi rpcrt4 secur32 setupapi shcore shell32 shlwapi ucrtbase urlmon "
-    "user32 userenv usp10 uxtheme version winhttp wininet winmm winspool "
-    "wintrust ws2_32 wtsapi32"
-).split())
-ELF_SYSTEM = re.compile(
-    r"^(?:ld-linux[^/]*|ld-musl[^/]*|lib(?:c|m|pthread|dl|rt|resolv|util)\.so(?:\..*)?"
-    r"|lib(?:GL|GLX|GLdispatch|EGL|OpenGL|vulkan|drm|gbm)\.so(?:\..*)?)$")
-
-
-class ReleaseError(RuntimeError):
-    pass
-
-
-def require(value, message):
-    if not value:
-        raise ReleaseError(message)
-
-
-def sha(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for block in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-def stream_sha(stream) -> str:
-    h = hashlib.sha256()
-    for block in iter(lambda: stream.read(1024 * 1024), b""):
-        h.update(block)
-    return h.hexdigest()
-
-
-def run(argv: list[str]) -> str:
-    try:
-        return subprocess.check_output(argv, text=True, stderr=subprocess.STDOUT)
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ReleaseError(f"Command failed: {argv[0]}: {getattr(e, 'output', str(e))}") from e
-
-
-def tool(*names: str) -> str:
-    for name in names:
-        found = shutil.which(name)
-        if found:
-            return found
-    raise ReleaseError("Required packaging tool missing: " + " or ".join(names))
-
-
-def regular(path: Path) -> Path:
-    require(path.is_file() and not path.is_symlink(), f"Expected a regular file: {path}")
-    return path
-
-
-def copy_file(source: Path, dest: Path) -> Path:
-    regular(source)
-    require(not source.is_junction() if hasattr(source, "is_junction") else True,
-            f"Linked input is unsupported: {source}")
-    if dest.exists():
-        require(sha(source) == sha(dest), f"Conflicting package filename: {dest.name}")
-        return dest
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, dest)
-    require(sha(source) == sha(dest), f"Copy verification failed: {source}")
-    return dest
-
-
-def copy_tree(source: Path, dest: Path):
-    require(source.is_dir() and not source.is_symlink(), f"Missing payload directory: {source}")
-    for p in sorted(source.rglob("*")):
-        require(not p.is_symlink() and not (hasattr(p, "is_junction") and p.is_junction()),
-                f"Linked payload is unsupported: {p}")
-        if p.is_file():
-            copy_file(p, dest / p.relative_to(source))
-
-
-def lookup(name: str, directories: list[Path]) -> Path:
-    require(Path(name).name == name, f"Dependency is not a filename: {name}")
-    for directory in directories:
-        if os.name == "nt" and os.environ.get("SystemRoot"):
-            if directory.resolve().is_relative_to(Path(os.environ["SystemRoot"]).resolve()):
-                continue  # App-local redistributables come from declared SDKs, never System32.
-        if not directory.is_dir():
-            continue
-        direct = directory / name
-        if direct.is_file():
-            return direct.resolve()
-        # PE module names are case insensitive even on a Unix packaging host.
-        for p in sorted(directory.iterdir()):
-            if p.is_file() and p.name.lower() == name.lower():
-                return p.resolve()
-    raise ReleaseError(f"Dependency {name} is missing from the declared dependency directories")
-
-
-class PE:
-    """Small bounded PE64 import/export reader; no pefile/objdump dependency."""
-    def __init__(self, path: Path, arch: str):
-        self.data = regular(path).read_bytes()
-        self.path = path
-        self.imports: dict[str, list[str | int]] = {}
-        self.exports: dict[str | int, str | None] = {}
-        self.sections = []
-        d = self.data
-        require(len(d) >= 64 and d[:2] == b"MZ", f"Not a PE executable: {path}")
-        off = self.u32(60)
-        require(self.take(off, 4) == b"PE\0\0", f"Invalid PE signature: {path}")
-        machine, count = self.unpack("<HH", off + 4)
-        require(machine == {"x86_64": 0x8664, "arm64": 0xAA64}[arch], f"Wrong PE architecture: {path}")
-        optional_size = self.unpack("<H", off + 20)[0]
-        optional = off + 24
-        require(self.unpack("<H", optional)[0] == 0x20B and optional_size >= 128,
-                f"Expected PE32+ headers: {path}")
-        for i in range(count):
-            s = optional + optional_size + 40 * i
-            virtual_size, rva, raw_size, raw = self.unpack("<IIII", s + 8)
-            self.sections.append((rva, max(virtual_size, raw_size), raw, raw_size))
-        export_rva, export_size = self.unpack("<II", optional + 112)
-        import_rva, _ = self.unpack("<II", optional + 120)
-        if import_rva:
-            n = 0
-            while True:
-                require(n < 4096, f"Excessive PE imports: {path}")
-                ilt, stamp, chain, module, iat = self.unpack("<IIIII", self.offset(import_rva + n * 20))
-                if not any((ilt, stamp, chain, module, iat)):
-                    break
-                dll = self.string(module).lower()
-                names = []
-                for i in range(65536):
-                    value = self.unpack("<Q", self.offset((ilt or iat) + i * 8))[0]
-                    if not value:
-                        break
-                    names.append(value & 0xFFFF if value & (1 << 63) else self.string(value + 2))
-                else:
-                    raise ReleaseError(f"Unterminated PE imports: {path}")
-                self.imports.setdefault(dll, []).extend(names)
-                n += 1
-        if export_rva:
-            e = self.offset(export_rva)
-            base, functions, names, address_table, name_table, ordinal_table = self.unpack("<IIIIII", e + 16)
-            require(functions < 1000000 and names <= functions, f"Invalid PE exports: {path}")
-            for i in range(functions):
-                value = self.u32(self.offset(address_table + i * 4))
-                if value:
-                    self.exports[base + i] = self.string(value) if export_rva <= value < export_rva + export_size else None
-            for i in range(names):
-                name = self.string(self.u32(self.offset(name_table + i * 4)))
-                ordinal = base + self.unpack("<H", self.offset(ordinal_table + i * 2))[0]
-                require(ordinal in self.exports, f"Invalid PE named export: {path}")
-                self.exports[name] = self.exports[ordinal]
-
-    def take(self, offset, size):
-        require(0 <= offset <= len(self.data) - size, f"Truncated PE file: {self.path}")
-        return self.data[offset:offset + size]
-
-    def unpack(self, fmt, offset):
-        return struct.unpack(fmt, self.take(offset, struct.calcsize(fmt)))
-
-    def u32(self, offset):
-        return self.unpack("<I", offset)[0]
-
-    def offset(self, rva):
-        for start, size, raw, raw_size in self.sections:
-            if start <= rva < start + size:
-                require(rva - start < raw_size, f"PE RVA has no file backing: {self.path}")
-                return raw + rva - start
-        raise ReleaseError(f"Unmapped PE RVA in {self.path}")
-
-    def string(self, rva):
-        off = self.offset(rva)
-        end = self.data.find(b"\0", off, min(off + 4096, len(self.data)))
-        require(end >= off, f"Unterminated PE name: {self.path}")
-        return self.data[off:end].decode("ascii")
-
-
-def system_dll(name: str) -> bool:
-    return name.startswith(("api-ms-win-", "ext-ms-win-")) or name.removesuffix(".dll") in WINDOWS_SYSTEM
-
-
-def windows_closure(seeds: list[Path], dest: Path, directories: list[Path], arch: str) -> dict:
-    modules: dict[str, PE] = {}
-    pending = list(seeds)
-    while pending:
-        path = pending.pop(0)
-        name = path.name.lower()
-        if name in modules:
-            continue
-        pe = PE(path, arch)
-        modules[name] = pe
-        dependencies = set(pe.imports)
-        dependencies.update(f.rsplit(".", 1)[0].lower().removesuffix(".dll") + ".dll" for f in pe.exports.values() if f)
-        for dll in sorted(dependencies):
-            if system_dll(dll) or dll in modules:
-                continue
-            source = lookup(dll, [dest, *directories])
-            target = copy_file(source, dest / source.name)
-            pending.append(target)
-    checked = 0
-    def exported(dll, symbol, seen):
-        require((dll, symbol) not in seen, f"Cyclic forwarded export: {dll}!{symbol}")
-        if system_dll(dll):
-            return
-        require(dll in modules and symbol in modules[dll].exports, f"Missing import {dll}!{symbol}")
-        forward = modules[dll].exports[symbol]
-        if forward:
-            module, target = forward.rsplit(".", 1)
-            exported(module.lower().removesuffix(".dll") + ".dll", int(target[1:]) if target.startswith("#") else target, seen | {(dll, symbol)})
-    for pe in modules.values():
-        for dll, names in pe.imports.items():
-            for name in names:
-                exported(dll, name, set())
-                checked += not system_dll(dll)
-    return {"modules": len(modules), "bundled_symbols_checked": checked,
-            "system_dependencies": sorted({d for pe in modules.values() for d in pe.imports if system_dll(d)})}
-
-
-def elf_info(path: Path, arch: str) -> tuple[list[str], list[str]]:
-    with path.open("rb") as f:
-        head = f.read(20)
-    require(head[:6] == b"\x7fELF\x02\x01" and len(head) == 20, f"Expected little-endian ELF64: {path}")
-    require(struct.unpack_from("<H", head, 18)[0] == {"x86_64": 62, "arm64": 183}[arch], f"Wrong ELF architecture: {path}")
-    text = run([tool("readelf", "llvm-readelf"), "-d", str(path)])
-    needed = re.findall(r"\(NEEDED\).*?\[([^\]]+)\]", text)
-    paths = re.findall(r"\((?:RUNPATH|RPATH)\).*?\[([^\]]*)\]", text)
-    return needed, [p for item in paths for p in item.split(":") if p]
-
-
-def linux_closure(seeds: list[Path], dest: Path, directories: list[Path], arch: str) -> dict:
-    binaries = []; pending = list(seeds); seen = set(); system = set()
-    while pending:
-        p = pending.pop(0)
-        if p in seen:
-            continue
-        seen.add(p); binaries.append(p)
-        needed, _ = elf_info(p, arch)
-        for name in needed:
-            if ELF_SYSTEM.fullmatch(name):
-                system.add(name); continue
-            source = lookup(name, [dest, *directories])
-            target = copy_file(source, dest / name)
-            if target not in seen:
-                pending.append(target)
-    # Every consumer can find the sibling lib directory from its own location.
-    if any(dest.iterdir()):
-        patcher = tool("patchelf")
-        for p in binaries:
-            relative = os.path.relpath(dest, p.parent).replace(os.sep, "/")
-            origin = "$ORIGIN" + ("/" + relative if relative != "." else "")
-            run([patcher, "--set-rpath", origin, str(p)])
-            needed, paths = elf_info(p, arch)
-            require(paths == [origin], f"ELF relocation did not stick: {p}")
-            require(all(ELF_SYSTEM.fullmatch(n) or (dest / n).is_file() for n in needed), f"Unresolved ELF closure: {p}")
-    return {"modules": len(binaries), "system_dependencies": sorted(system)}
-
-
-def macho_closure(seeds: list[Path], dest: Path, directories: list[Path], arch: str) -> dict:
-    require(sys.platform == "darwin", "macOS packaging requires native otool/install_name_tool/codesign")
-    binaries = []; pending = list(seeds); seen = set(); dependencies = {}; origins = {}
-    def inspect(p):
-        arches = run([tool("lipo"), "-archs", str(p)]).split()
-        required = {"x86_64", "arm64"} if arch == "universal" else {arch}
-        require(required.issubset(arches), f"Wrong Mach-O architecture: {p}")
-        return [line.strip().split(" (compatibility", 1)[0] for line in run([tool("otool"), "-L", str(p)]).splitlines()[1:] if line.strip()]
-    while pending:
-        p = pending.pop(0)
-        if p in seen:
-            continue
-        seen.add(p); binaries.append(p)
-        refs = inspect(p); dependencies[p] = []
-        for ref in refs:
-            if ref.startswith(("/System/Library/", "/usr/lib/")):
-                continue
-            name = PurePosixPath(ref).name
-            # A dylib's own install name is not a dependency.
-            if name == p.name and p.suffix == ".dylib":
-                continue
-            absolute = Path(ref)
-            if absolute.is_absolute() and absolute.is_file() and any(absolute.resolve().is_relative_to(d.resolve()) for d in directories):
-                source = absolute.resolve()
-            else:
-                source = lookup(name, [dest, *directories])
-            target = copy_file(source, dest / name)
-            origins[target] = source
-            dependencies[p].append((ref, target))
-            pending.append(target)
-    changer = tool("install_name_tool")
-    for p in binaries:
-        if p.suffix == ".dylib":
-            run([changer, "-id", "@rpath/" + p.name, str(p)])
-        for old, target in dependencies[p]:
-            relative = os.path.relpath(target, p.parent).replace(os.sep, "/")
-            run([changer, "-change", old, "@loader_path/" + relative, str(p)])
-        # Remove build-machine paths; all rewritten dependencies are loader-relative.
-        load = run([tool("otool"), "-l", str(p)])
-        for path in re.findall(r"cmd LC_RPATH\s+cmdsize \d+\s+path (.*?) \(offset", load):
-            run([changer, "-delete_rpath", path, str(p)])
-        for ref in inspect(p):
-            require(ref.startswith(("/System/Library/", "/usr/lib/", "@loader_path/", "@rpath/")), f"Absolute Mach-O dependency remains: {ref}")
-            if ref.startswith("@loader_path/"):
-                require((p.parent / ref[len("@loader_path/"):]).is_file(), f"Unresolved Mach-O dependency: {ref}")
-    # Dependency rewrites invalidate existing signatures. Sign deepest items first.
-    for p in reversed(binaries):
-        run([tool("codesign"), "--force", "--sign", "-", str(p)])
-    return {"modules": len(binaries), "signature": "ad-hoc; not notarized"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from product import load as load_product
+import maintainer_tools
+from artifact_closure import (WINDOWS_SYSTEM, ELF_SYSTEM, ReleaseError, require,
+    sha, stream_sha, run, tool, regular, copy_file, copy_tree, lookup, PE,
+    system_dll, windows_closure, elf_info, linux_closure, macho_closure)
 
 
 def members(root: Path) -> dict[str, dict]:
@@ -395,9 +91,9 @@ def archive(stage: Path, output: Path, platform: str) -> dict:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--product", choices=PRODUCTS, required=True)
+    parser.add_argument("--product", required=True)
     parser.add_argument("--version", required=True)
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--repo", type=Path)
     for name in ("build-dir", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--inputs-dir", type=Path)
@@ -407,10 +103,13 @@ def main(argv=None):
     parser.add_argument("--native-exe", type=Path)
     parser.add_argument("--gx-library", type=Path)
     parser.add_argument("--common-key", type=Path, help="Explicit private MM9 runtime input; never discovered or included by default")
+    parser.add_argument("--product-file", type=Path, help="Consumer-owned product.json")
     args = parser.parse_args(argv)
+    product = load_product(args.product_file, args.product)
     require(args.platform is not None, "Supply --platform for this packaging host")
     require(re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]*", args.version), "Invalid release version")
-    repo = args.repo.resolve(); build = args.build_dir.resolve(); output = args.output_dir.resolve()
+    repo = (args.repo or (args.product_file.parent if args.product_file else Path(__file__).resolve().parents[1])).resolve()
+    build = args.build_dir.resolve(); output = args.output_dir.resolve()
     require(args.arch != "universal" or args.platform == "macos", "Universal packaging is macOS-only")
     inputs = args.inputs_dir.resolve() if args.inputs_dir else None
     metadata = build / "build-products.json"
@@ -423,7 +122,7 @@ def main(argv=None):
     if inputs:
         dirs += [inputs / "bin", inputs / "lib"]
     game = args.product != "wiillr"
-    require(not args.common_key or args.product == "mega-man-9", "--common-key is only valid for Mega Man 9")
+    require(not args.common_key or product.get("common_key", False), "--common-key is only valid for Mega Man 9")
     if args.common_key:
         require(regular(args.common_key).stat().st_size == 16, "The explicit Wii common-key input must be exactly 16 bytes")
     if game:
@@ -438,9 +137,9 @@ def main(argv=None):
     require(licenses.is_dir(), "Missing prepared runtime licenses_dir in build-products.json")
     output.mkdir(parents=True, exist_ok=True)
     suffix = ".tar.gz" if args.platform == "linux" else ".zip"
-    artifact = output / f"{PREFIXES[args.product]}-{args.platform}-{args.arch}-v{args.version}{suffix}"
+    artifact = output / f"{product["archive_prefix"]}-{args.platform}-{args.arch}-v{args.version}{suffix}"
     with tempfile.TemporaryDirectory(prefix=f".{args.product}-stage-", dir=output) as scratch:
-        title = PRODUCTS[args.product]
+        title = product["name"]
         stage = Path(scratch) / title
         app = stage / (title + ".app")
         if game:
@@ -454,8 +153,10 @@ def main(argv=None):
             exe = copy_file(args.native_exe, runtime / name)
             gx = copy_file(args.gx_library, resources / args.gx_library.name)
             assets = path(products.get("assets", "bin/assets")); copy_tree(assets, resources / "assets")
-            menu = args.product == "wii-menu"
-            config = (f"[Game]\nName={title}\n" + ("Nand=seed/nand\nBoot=title/00000001/00000002/content/00000098.app\n" if menu else "Import=wad\nBoot=title/00010001/57523945/content/0000000a.app\n") + f"Graphics={gx.name}\nDspRom=hle\nDspCoef=hle\nUid=4096\nGid={1 if menu else 12344}\nIos={80 if menu else 37}\n")
+            payload = product["package"]
+            require(set(payload) in ({"Nand", "Boot", "Uid", "Gid", "Ios"}, {"Import", "Boot", "Uid", "Gid", "Ios"}), "Invalid consumer package fields")
+            require(all("\n" not in str(v) and "\r" not in str(v) for v in payload.values()), "Invalid consumer package value")
+            config = f"[Game]\nName={title}\n" + "".join(f"{k}={v}\n" for k,v in payload.items()) + f"Graphics={gx.name}\nDspRom=hle\nDspCoef=hle\n"
             (resources / "game.ini").write_text(config, encoding="utf-8")
             if args.common_key:
                 copy_file(args.common_key, resources / "system/wii-common-key.bin")

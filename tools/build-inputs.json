@@ -35,10 +35,6 @@
       "revision": "99ac007bd73477aa617f237c695cc27759135d9f"
     }
   },
-  "catalog": {
-    "path": "catalog",
-    "prepared_sha256": "387171115fcbb5885071be970860812403139f2fac3f42f9532092f80344860f"
-  },
   "public_dependencies": {
     "dawn": {
       "version": "v20260618.032059",

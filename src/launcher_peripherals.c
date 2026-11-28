@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "wiillr/launcher_peripherals.h"
 #include "wiillr/peripherals.h"
+#include <recomp_persistence/atomic_file.h>
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,11 +48,8 @@ static bool persist(int changed,const RecompLauncherCPeripheralConfig* replaceme
         }
         used+=(size_t)n;
     }
-    char temporary[32832];
-    snprintf(temporary,sizeof temporary,"%s.%llu.tmp",settings_path,(unsigned long long)SDL_GetTicksNS());
-    if(!SDL_SaveFile(temporary,data,used) || !SDL_RenamePath(temporary,settings_path)) {
-        snprintf(error,capacity,"Could not save peripheral settings: %s",SDL_GetError());
-        SDL_RemovePath(temporary);return false;
+    if(!recomp_atomic_file_store(settings_path,data,used)) {
+        snprintf(error,capacity,"Could not save peripheral settings.");return false;
     }
     return true;
 }

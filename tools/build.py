@@ -17,7 +17,9 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTS = ("wiillr", "wii-menu", "mega-man-9")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from product import load as load_product
+from provider_provenance import resolve as resolve_providers, cmake_definitions, verify_cache
 TOOLS = ("wiillr-discover", "wiillr-starlet-discover", "wiillr-nand-setup", "dolrecomp")
 
 
@@ -41,7 +43,7 @@ def below(root: Path, value: str) -> Path:
     return path
 
 
-def verify_inputs(inputs: Path | None, game: bool) -> dict:
+def verify_inputs(inputs: Path | None, game: bool, catalog_spec: dict | None = None) -> dict:
     if inputs is None:
         if game:
             raise ValueError("Game builds require --inputs-dir with the verified private catalog and donor sources")
@@ -65,8 +67,11 @@ def verify_inputs(inputs: Path | None, game: bool) -> dict:
             recorded = manifest.get("sources", {}).get(provider["path"], {}).get("commit")
             if recorded != provider["revision"]:
                 raise ValueError("Source provider revision differs: " + provider["path"])
-        receipt = below(inputs, specification["catalog"]["path"] + "/prepared.json")
-        if digest(receipt) != specification["catalog"]["prepared_sha256"]:
+        catalog_spec = catalog_spec or specification.get("catalog")
+        if not catalog_spec:
+            raise ValueError("The consumer must supply its qualified catalog identity")
+        receipt = below(inputs, catalog_spec["path"] + "/prepared.json")
+        if digest(receipt) != catalog_spec["prepared_sha256"]:
             raise ValueError("The supplied catalog is not the qualified original-code catalog")
         catalog = json.loads(receipt.read_text())
         if catalog.get("cpu") != "broadway" or catalog.get("pc_namespaces") != "preserved":
@@ -260,7 +265,7 @@ def preflight(inputs: Path | None, game: bool) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--product", choices=PRODUCTS, default="wiillr", help="Build preset (default: developer tools)")
+    parser.add_argument("--product", default="wiillr", help="Build preset (default: developer tools)")
     parser.add_argument("--version", type=release_version, default=project_version(), help="Package label (default: engine project version)")
     parser.add_argument("--build-dir", type=Path, help="Working files (default: build/PRODUCT/HOST-ARCH)")
     parser.add_argument("--output-dir", type=Path, help="Archives (default: dist)")
@@ -272,32 +277,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-package", action="store_true")
     parser.add_argument("--cmake-definition", action="append", default=[], metavar="NAME=VALUE",
                         help="Additional CPU build definition supplied by a game consumer")
-    parser.add_argument("--common-key", type=Path, help="External MM9 package input; never a compilation input")
+    parser.add_argument("--common-key", type=Path, help="External consumer package input; never a compilation input")
+    parser.add_argument("--product-file", type=Path, help="Consumer-owned product.json")
     args = parser.parse_args(argv)
     if args.jobs < 1:
         parser.error("--jobs must be positive")
     for definition in args.cmake_definition:
         if "=" not in definition or not definition.split("=", 1)[0].replace("_", "").isalnum():
             parser.error("--cmake-definition requires NAME=VALUE")
+    product = load_product(args.product_file, args.product)
     arch = architecture(args.arch)
     build = (args.build_dir or ROOT / "build" / args.product / (host_name() + "-" + arch)).resolve()
     args.output_dir = (args.output_dir or ROOT / "dist").resolve()
     print(f"Product: {args.product}\nPackage version: {args.version}\nBuild directory: {build}\nOutput directory: {args.output_dir}", flush=True)
     game = args.product != "wiillr"
     inputs = input_bundle(args.inputs_dir, build, args.inputs_sha256)
-    if args.common_key and args.product != "mega-man-9":
+    if args.common_key and not product.get("common_key"):
         parser.error("--common-key is only valid for the internal game product")
-    identity = verify_inputs(inputs, game)
+    identity = verify_inputs(inputs, game, product.get("catalog"))
+    providers = resolve_providers(ROOT, inputs, game, args.cmake_definition)
     missing = preflight(inputs, game)
+    missing += ["Missing selected source provider " + name + ": " + item["path"] for name, item in providers.items() if not item["available"]]
     if missing:
         raise ValueError("Build setup is incomplete:\n- " + "\n- ".join(missing))
     gpu_environment, gpu_compiler = (windows_gpu_environment(arch) if game and os.name == "nt" else (None, []))
     if args.check:
+        print(json.dumps({"product": product, "profile": "hle", "providers": providers}, indent=2), flush=True)
         print("Build inputs and basic prerequisites are ready. CMake will check platform SDK/library packages during configure.", flush=True)
         return 0
     binary = build / "bin"
     binary.mkdir(parents=True, exist_ok=True)
-    config = {"product": args.product, "arch": arch, "inputs": str(inputs)}
+    config = {"product": args.product, "arch": arch, "inputs": str(inputs), "product_file": product.get("product_file"), "providers": providers}
     if args.cmake_definition:
         config["consumer_definitions"] = args.cmake_definition
     marker = build / "build-configuration.json"
@@ -327,9 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     if game:
         assert inputs is not None
         graphics = build / "gpu"
-        core = inputs / "deps/gc-wii-core"
-        if not core.is_dir():
-            core = ROOT / "external/gc-wii-core"
+        core = Path(providers["gc-wii-core"]["path"])
 
         def configure_graphics() -> None:
             windows_sdk = (["-DAURORA_SDL3_PROVIDER=package", "-DCMAKE_DISABLE_FIND_PACKAGE_fmt=TRUE",
@@ -356,15 +364,19 @@ def main(argv: list[str] | None = None) -> int:
     initial = ["-DWIILLR_RELEASE_PRODUCT=" + args.product,
                "-DWIILLR_RELEASE_INPUTS=" + (inputs.as_posix() if inputs else ""),
                "-C", str(ROOT / "cmake/ReleaseBuild.cmake")]
+    product_definition = ["-DWIILLR_PRODUCT_CMAKE=" + product["cmake"]] if game else []
     run(["cmake", "-S", str(ROOT), "-B", str(cpu), *initial, *common,
-         *("-D" + definition for definition in args.cmake_definition)])
+         *("-D" + definition for definition in cmake_definitions(providers)),
+         *("-D" + definition for definition in args.cmake_definition), *product_definition])
+    verify_cache(cpu / "CMakeCache.txt", providers)
     targets = ["wiillr-native"] if game else list(TOOLS)
     run(["cmake", "--build", str(cpu), "--config", "Release", "--parallel", str(args.jobs), "--target", *targets])
     extension = ".exe" if os.name == "nt" else ""
     products = {"product": args.product, "version": args.version, "arch": arch,
                 "assets": str(binary / "assets"), "dependency_dirs": [str(binary)],
                 "licenses_dir": str(build / "licenses"), "input_identity": identity,
-                "readme": str(ROOT / "docs" / ("developer-tools.md" if not game else args.product + ".md")),
+                "readme": product.get("readme", str(ROOT / "docs/developer-tools.md")),
+                "consumer": product, "providers": providers, "build_profile": "hle",
                 "source_archives": identity.get("source_archives", []),
                 "source_readme": identity.get("source_readme"),
                 "native_exe": None, "gx_library": None, "tool_executables": [], "runtime_libraries": []}
@@ -430,8 +442,12 @@ def main(argv: list[str] | None = None) -> int:
     shutil.copy2(ROOT / "LICENSING.md", licenses / "wiillr-LICENSING.md")
     shutil.copy2(ROOT / "LICENSES/PolyForm-Noncommercial-1.0.0.txt",
                  licenses / "PolyForm-Noncommercial-1.0.0.txt")
+    if game:
+        consumer = Path(product["product_file"]).parent
+        for name in ("LICENSE", "LICENSING.md"):
+            shutil.copy2(consumer / name, licenses / (product["archive_prefix"] + "-" + name))
     # Record source roots; packaging uses the explicit notices and archives.
-    products["source_roots"] = [str(ROOT)] + ([str(inputs / "deps")] if inputs else [])
+    products["source_roots"] = [str(ROOT)] + ([str(Path(product["product_file"]).parent)] if game else []) + ([str(inputs / "deps")] if inputs else [])
     products["inputs_dir"] = str(inputs) if inputs else None
     (build / "build-products.json").write_text(json.dumps(products, indent=2) + "\n")
     if not args.no_package:
@@ -439,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
                    "--version", args.version, "--build-dir", str(build), "--output-dir", str(args.output_dir.resolve()),
                    "--arch", arch]
         if game:
+            command += ["--product-file", product["product_file"]]
             command += ["--native-exe", products["native_exe"], "--gx-library", products["gx_library"]]
         if inputs:
             command += ["--inputs-dir", str(inputs)]

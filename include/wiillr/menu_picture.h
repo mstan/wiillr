@@ -19,8 +19,10 @@ typedef struct WiiMenuMemory {
     const WiiMenuClasses* classes;
 } WiiMenuMemory;
 static inline const WiiMenuClasses* wii_menu_classes(WiiMenuMemory memory) {
-    static const WiiMenuClasses original={0x816717f4,0x81671a20,0x81671b48,
-                                         0x8167192c,0x8166fe88,0x8166ff70};
+#ifndef WIILLR_NW4R_DEFAULT_CLASSES
+#define WIILLR_NW4R_DEFAULT_CLASSES 0,0,0,0,0,0
+#endif
+    static const WiiMenuClasses original={WIILLR_NW4R_DEFAULT_CLASSES};
     return memory.classes?memory.classes:&original;
 }
 typedef struct WiiMenuView {

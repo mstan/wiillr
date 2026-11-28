@@ -12,7 +12,10 @@
 #include <stdexcept>
 
 namespace {
-constexpr uint32_t sdk_pointer=0x81695618;
+#ifndef WIILLR_NW4R_SDK_POINTER
+#define WIILLR_NW4R_SDK_POINTER 0
+#endif
+constexpr uint32_t sdk_pointer=WIILLR_NW4R_SDK_POINTER;
 void need(bool b,const char* why){if(!b)throw std::runtime_error(why);}
 struct MaterialFamily:std::runtime_error{using std::runtime_error::runtime_error;};
 void material_need(bool b,const char* why){if(!b)throw MaterialFamily(why);}

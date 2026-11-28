@@ -9,8 +9,8 @@ interfaces, code generators, build and packaging scripts, and their tests.
 
 ## Independent annotation utility
 
-[tools/annotate_wii_menu.py](https://github.com/mstan/wiillr/blob/main/tools/annotate_wii_menu.py) and its isolated test,
-[tests/test_wii_menu_annotations.py](https://github.com/mstan/wiillr/blob/main/tests/test_wii_menu_annotations.py), use
+[tools/annotate_wii_menu.py](https://github.com/mstan/wii-menu-recomp/blob/main/tools/annotate_wii_menu.py) and its isolated test,
+[tests/test_wii_menu_annotations.py](https://github.com/mstan/wii-menu-recomp/blob/main/tests/test_wii_menu_annotations.py), use
 **PolyForm Noncommercial 1.0.0**. The exact terms are in
 [LICENSES/PolyForm-Noncommercial-1.0.0.txt](https://github.com/mstan/wiillr/blob/main/LICENSES/PolyForm-Noncommercial-1.0.0.txt).
 Both files carry their own SPDX identifier and required copyright notice.

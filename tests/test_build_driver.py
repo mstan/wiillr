@@ -18,6 +18,21 @@ spec.loader.exec_module(build)
 
 
 class BuildDriver(unittest.TestCase):
+    def setUp(self):
+        resolver = patch.object(build, "resolve_providers", return_value={})
+        resolver.start()
+        self.addCleanup(resolver.stop)
+
+    def product(self, root):
+        (root / "product.cmake").write_text("# synthetic consumer\n")
+        (root / "README.md").write_text("Synthetic consumer\n")
+        (root / "LICENSE").write_text("fixture GPL terms\n")
+        (root / "LICENSING.md").write_text("fixture notices\n")
+        product = root / "product.json"
+        product.write_text(json.dumps({"engine_product":"synthetic-game", "name":"Synthetic Game",
+            "archive_prefix":"SyntheticGame", "cmake":"product.cmake", "readme":"README.md"}))
+        return product
+
     def test_private_input_integrity_and_confinement(self):
         with tempfile.TemporaryDirectory() as directory:
             inputs = Path(directory).resolve()
@@ -42,7 +57,7 @@ class BuildDriver(unittest.TestCase):
 
     def test_games_require_qualified_inputs_before_configure(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(build, "run") as run:
-            with self.assertRaisesRegex(ValueError, "Game builds require"):
+            with self.assertRaisesRegex(ValueError, "consumer --product-file"):
                 build.main(["--product", "wii-menu", "--version", "test", "--build-dir", directory,
                             "--output-dir", directory, "--no-package"])
             run.assert_not_called()
@@ -76,9 +91,9 @@ class BuildDriver(unittest.TestCase):
             self.assertEqual(len(products["tool_executables"]), 4)
             self.assertFalse(any("catalog" in arg or "cmake/gpu" in arg for call in calls for arg in call))
             self.assertIn(str(root.resolve()), products["dependency_dirs"])
-            (root / "build/build-configuration.json").write_text(json.dumps({
-                "product": "wiillr", "arch": build.architecture(None),
-                "inputs": "None", "version": "old"}))
+            previous = json.loads((root / "build/build-configuration.json").read_text())
+            previous["version"] = "old"
+            (root / "build/build-configuration.json").write_text(json.dumps(previous))
             with patch.object(build, "run", side_effect=command), patch.object(build, "preflight", return_value=[]):
                 self.assertEqual(build.main(["--version", "new", "--build-dir", str(root / "build"),
                     "--output-dir", str(root / "out"), "--no-package"]), 0)
@@ -161,8 +176,8 @@ class BuildDriver(unittest.TestCase):
                     for name in ("wiillr-native.exe", "gcnllr-native-gx.dll", "dxcompiler.dll", "dxil.dll"):
                         (binary / name).write_bytes(b"fixture")
             gpu_environment = {"PATH": "native-sdk-only"}
-            with patch.object(build, "verify_inputs", return_value={}), patch.object(build, "preflight", return_value=[]), patch.object(build, "windows_gpu_environment", return_value=(gpu_environment, ["-DCMAKE_CXX_COMPILER=native-clang"])), patch.object(build, "run", side_effect=command), patch.dict(build.os.environ, {"CMAKE_PREFIX_PATH": str(root / "mingw-prefix")}):
-                self.assertEqual(build.main(["--product", "wii-menu", "--inputs", str(inputs),
+            with patch.object(build, "resolve_providers", return_value={"gc-wii-core":{"path":str(inputs / "deps/gc-wii-core"),"variable":"WIILLR_CORE_SOURCE_DIR","available":True}}), patch.object(build, "verify_cache"), patch.object(build, "verify_inputs", return_value={}), patch.object(build, "preflight", return_value=[]), patch.object(build, "windows_gpu_environment", return_value=(gpu_environment, ["-DCMAKE_CXX_COMPILER=native-clang"])), patch.object(build, "run", side_effect=command), patch.dict(build.os.environ, {"CMAKE_PREFIX_PATH": str(root / "mingw-prefix")}):
+                self.assertEqual(build.main(["--product", "synthetic-game", "--product-file", str(self.product(root)), "--inputs", str(inputs),
                     "--build-dir", str(root / "build"), "--no-package"]), 0)
             configs = [(args, env) for args, env in calls if "-S" in args]
             self.assertEqual(len(configs), 2)

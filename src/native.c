@@ -58,23 +58,16 @@ static int binding_slot(u32 address,u32* page) {
     *page=physical>>12u;
     return (int)(bank*(GC_MAIN_RAM_SIZE/4096u)+*page);
 }
+#ifdef WIILLR_NATIVE_POLICY
+#include WIILLR_NATIVE_POLICY
+#else
+static void product_hook_pages(void){}
+static bool dispatch_hooks(CPUState* cpu,u32 address,u8 hooks){(void)cpu;(void)address;(void)hooks;return false;}
+static void product_invalidate(u32 address,u32 size){(void)address;(void)size;}
+#endif
 static void install_hook_pages(void) {
     memset(hook_pages,0,sizeof hook_pages);
-    /* SAVE returns false after staging its native snapshot: it must still
-     * run before the original body, including when that body is bound. */
-    const u32 mods[]={0x00d,0x089,0x0aa,0x0b5,0x0b7,0x0ba,0x0d5};
-    for(u32 i=0;i<sizeof mods/sizeof *mods;++i)hook_pages[mods[i]]|=HOOK_MODS;
-    hook_pages[0x24c]|=HOOK_DLC;hook_pages[0x24d]|=HOOK_DLC;
-#if WIILLR_MM9_RENDERER
-    /* Compositor/screen, sprite/HUD, frame continuations, HBM and texture
-     * invalidation. Generated same-page seams remain inside their bodies. */
-    const u32 renderer[]={0x083,0x099,0x09b,0x0a7,0x0d5,0x0e7,0x0e8,0x0ea,0x113};
-    for(u32 i=0;i<sizeof renderer/sizeof *renderer;++i)hook_pages[renderer[i]]|=HOOK_RENDERER;
-#endif
-#if WIILLR_MENU_PICTURES
-    /* Picture/TextBox draws and both destructors. */
-    hook_pages[0x1520]|=HOOK_MENU;hook_pages[0x1521]|=HOOK_MENU;
-#endif
+    product_hook_pages();
 #if WIILLR_NATIVE_CHAIN
     /* Reuse the actual build's transformed-page list. Every injected owner
      * and its continuations retain the ordinary native dispatch boundary. */
@@ -86,18 +79,6 @@ static void install_hook_pages(void) {
 #endif
 }
 const GcnOverlayModule* wii_native_module(void){return &module;}
-static bool dispatch_hooks(CPUState* cpu,u32 address,u8 hooks) {
-    if((hooks&HOOK_MODS) && ((address&0xfffc0000u)==0x80080000u || address==0x8000d664u) &&
-       wii_mm9_mods_dispatch(cpu,address))return true;
-    if((hooks&HOOK_DLC) && (address&0xffffe000u)==0x8024c000u && wii_mm9_dlc_dispatch(cpu,address))return true;
-#if WIILLR_MM9_RENDERER
-    if((hooks&HOOK_RENDERER) && wii_mm9_renderer_hook_dispatch(cpu,address))return true;
-#endif
-#if WIILLR_MENU_PICTURES
-    if((hooks&HOOK_MENU) && wii_menu_picture_hook_call(cpu,address))return true;
-#endif
-    return false;
-}
 bool gcn_overlay_call(CPUState* cpu,u32 address){
     if(!cpu || !cpu->ram)return false;
     u32 page;
@@ -124,14 +105,7 @@ void gcn_overlay_icbi(u32 address,u32 size){
             bound_known[slot]=0;bound[slot]=NULL;
         }
     }
-    wii_mm9_mods_invalidate(address,size);
-    if(physical<0x24e000u && (u64)physical+size>0x24c000u)wii_mm9_dlc_invalidate(address,size);
-#if WIILLR_MM9_RENDERER
-    wii_mm9_renderer_hook_invalidate(address,size);
-#endif
-#if WIILLR_MENU_PICTURES
-    wii_menu_picture_hook_invalidate(address,size);
-#endif
+    product_invalidate(address,size);
     gcn_overlay_module_invalidate(&module,address,size);
 }
 void wii_native_set_stop_pc(u32 address) {
