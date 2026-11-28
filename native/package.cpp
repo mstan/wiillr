@@ -43,6 +43,9 @@ struct WiiPackage {
 #ifndef WIILLR_PACKAGE_DSP_HLE
 #define WIILLR_PACKAGE_DSP_HLE 0
 #endif
+#ifndef WIILLR_GAME_PACKAGE_IOS
+#define WIILLR_GAME_PACKAGE_IOS 0
+#endif
 namespace {
 void need(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 bool linked(const fs::path& p) {
@@ -87,7 +90,7 @@ std::map<std::string,std::string> read_config(const fs::path& path) {
         need(result.contains(key),"Incomplete package launch description");
     need(result.contains("Nand")!=result.contains("Import"),"Select installed data or WAD import in game.ini");
     if(result.contains("Import"))need(result.at("Import")=="wad","Unsupported game import format");
-    if(result.contains("Name"))need(result.at("Name")=="Wii Menu" || result.at("Name")=="Mega Man 9","Unsupported package name");
+    if(result.contains("Name"))need(result.at("Name").size()<=128 && result.at("Name").find_first_of("\r\n/\\")==std::string::npos,"Invalid package name");
     need(result.size()==8+(result.contains("Name")?1:0),"Unknown package launch setting");return result;
 }
 fs::path relative(const std::string& text) {
@@ -299,11 +302,11 @@ extern "C" WiiPackage* wii_package_open(const char* base_text,const char* user_t
         need(base_text && *base_text && user_text && *user_text,"Missing package or user directory");
         const auto base=fs::canonical(fs::u8path(base_text));const auto config=read_config(base/"game.ini");
         auto package=std::make_unique<WiiPackage>();
-        package->menu=config.contains("Name") && config.at("Name")=="Wii Menu";
+        package->menu=config.contains("Nand") && config.at("Boot").starts_with("title/00000001/00000002/");
         const auto uid=number(config.at("Uid"),0xffffffffu),gid=number(config.at("Gid"),0xffffu);
         package->uid=std::to_string(uid);package->gid=std::to_string(gid);
-        const auto ios=number(config.at("Ios"),80);
-        need(package->menu?(ios==4 || ios==80):ios==37,"Unsupported package IOS profile");package->ios=std::to_string(ios);
+        const auto ios=number(config.at("Ios"),255);
+        need(package->menu?(ios==4 || ios==80):(WIILLR_GAME_PACKAGE_IOS && ios==WIILLR_GAME_PACKAGE_IOS),"Unsupported package IOS profile");package->ios=std::to_string(ios);
         const bool importing=config.contains("Import");
         need(!package->menu || !importing,"The Wii Menu package requires its prepared console data");
         package->standalone=importing;
@@ -412,9 +415,11 @@ extern "C" const char* wii_package_log(WiiPackage* p){return p->log.c_str();}
 extern "C" bool wii_package_standalone(WiiPackage* p){return p && p->standalone;}
 extern "C" bool wii_package_menu(WiiPackage* p){return p && p->menu;}
 extern "C" const char* wii_package_name(const char* base) {
-    if(!base || !*base)return "Mega Man 9";
-    try {
+    static thread_local std::string name;
+    name="Wii";
+    if(base && *base)try {
         const auto config=read_config(fs::path(base)/"game.ini");
-        return config.contains("Name") && config.at("Name")=="Wii Menu"?"Wii Menu":"Mega Man 9";
-    }catch(const std::exception&){return "Mega Man 9";}
+        if(config.contains("Name"))name=config.at("Name");
+    }catch(const std::exception&){}
+    return name.c_str();
 }

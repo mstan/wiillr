@@ -12,7 +12,7 @@ import stat
 
 PYTHON_TOOLS = (
     "wiillr.py", "wii_inputs.py", "wii.py", "prepare_ppc.py", "install_wad.py",
-    "install_nand_dependency.py", "nand_profile.py", "wii_control.py",
+    "install_nand_dependency.py", "nand_profile.py", "wii_control.py", "maintainer_tools.py",
     "requirements-inputs.txt",
 )
 NATIVE_TOOLS = ("wiillr-discover", "wiillr-starlet-discover", "wiillr-nand-setup", "dolrecomp")
@@ -22,6 +22,9 @@ def _core_source(repo: Path, build_dir: Path) -> Path:
     products = build_dir / "build-products.json"
     if products.is_file():
         metadata = json.loads(products.read_text(encoding="utf-8"))
+        actual = metadata.get("providers", {}).get("gc-wii-core", {}).get("path")
+        if actual:
+            return Path(actual).resolve()
         inputs = metadata.get("inputs_dir")
         if inputs:
             root = Path(inputs)
@@ -80,6 +83,13 @@ def stage_developer_bundle(repo: Path, build_dir: Path, stage: Path, version: st
     screenshot = repo / "docs/images/wiillr-tools.png"
     if screenshot.is_file():
         copies.append((screenshot, Path("docs/images/wiillr-tools.png")))
+    for name in ("debug_transport.py", "artifact_closure.py"):
+        copies.append((repo / "external/gcnllr-tools/tools" / name,
+                       payload / "external/gcnllr-tools/tools" / name))
+    copies.append((repo / "external/gcnllr-tools/licenses/wiillr-tools-COPYING",
+                   payload / "external/gcnllr-tools/licenses/wiillr-tools-COPYING"))
+    copies.append((repo / "external/gcnllr-tools/LICENSE",
+                   payload / "external/gcnllr-tools/LICENSE"))
     for name in NATIVE_TOOLS:
         binary = _native_tool(build_dir, name)
         if binary is not None:

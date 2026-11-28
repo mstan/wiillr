@@ -59,9 +59,9 @@ int main(int argc,char** argv) {
         auto open=[&](const fs::path& target) {return wii_package_open(base.string().c_str(),target.string().c_str(),validate,error,sizeof error);};
         WiiPackage* p=open(user);require(p,error);
         require(!fs::exists(user/".wiillr-menu-profile.lock"),"MM9 package behavior has no Menu lease");
-        require(std::string(wii_package_name(nullptr))=="Mega Man 9" &&
-            std::string(wii_package_name(""))=="Mega Man 9" &&
-            std::string(wii_package_name(base.string().c_str()))=="Mega Man 9" && !wii_package_menu(p),
+        require(std::string(wii_package_name(nullptr))=="Wii" &&
+            std::string(wii_package_name(""))=="Wii" &&
+            std::string(wii_package_name(base.string().c_str()))=="Wii" && !wii_package_menu(p),
             "legacy eight-key packages and null base keep the MM9 default");
         require(validations==1 && read(user/"nand"/save)=="initial progress" && fs::file_size(user/"nand/empty.dat")==0,"first import copies complete writable progress including empty files");
         int count;char** values;wii_package_arguments(p,"Mega Man 9.exe","--launcher",&count,&values);
@@ -165,7 +165,7 @@ int main(int argc,char** argv) {
         require(wii_package_ready(p) && fs::path(wii_package_nand(p))==second && read(menu_user/"config.ini")=="explicit launcher settings","active selection persists");
         fs::remove(menu_user/".wiillr-active-nand");fs::create_directory(menu_user/".wiillr-active-nand");
         require(!wii_package_import_system(p,console.string().c_str(),nullptr,&info,error,sizeof error) && fs::path(wii_package_nand(p))==second && wii_package_ready(p),"selection publication failure preserves old active boot");wii_package_close(p);
-        for(auto bad:{std::string(menu_config).replace(menu_config.find("Name=Wii Menu"),13,"Name=Unknown"),std::string(menu_config).replace(menu_config.find("Ios=80"),6,"Ios=37"),std::string(menu_config).replace(menu_config.find("Nand=seed/nand"),14,"Import=wad")}) {
+        for(auto bad:{std::string(menu_config).replace(menu_config.find("Name=Wii Menu"),13,"Name=../Unknown"),std::string(menu_config).replace(menu_config.find("Ios=80"),6,"Ios=37"),std::string(menu_config).replace(menu_config.find("Nand=seed/nand"),14,"Import=wad")}) {
             write(menu/"game.ini",bad);p=wii_package_open(menu.string().c_str(),(root.path/"invalid Menu profile").string().c_str(),nullptr,error,sizeof error);
             require(!p && !fs::exists(root.path/"invalid Menu profile/nand"),"invalid package identity refuses before system creation");
         }

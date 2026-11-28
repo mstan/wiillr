@@ -51,17 +51,11 @@ for large builds on another drive.
 
 ### Product names
 
-The engine defaults to `wiillr` and accepts these exact product selectors:
-
-| Selector | Result |
-| --- | --- |
-| `wiillr` | Developer CLI, native discovery/setup tools and PowerPC compiler; no generated title catalog required |
-| `wii-menu` | Base Menu application preset; use the separate Menu consumer for its adaptive provider and product packaging |
-| `mega-man-9` | Internal game-consumer preset; its application downloads remain private |
-
-A product is a build preset, not a filename, game ID, firmware revision or
-version number. In the Wii Menu consumer, omit `--product`: its `product.json`
-already selects `wii-menu`.
+The engine defaults to `wiillr`, which builds catalog-free developer tools.
+Application selectors come from each consumer's `product.json`; pass its path
+with `--product-file`, or use that consumer's `tools/build.py` wrapper.
+The consumer description owns product names, archive prefixes, native profiles
+and qualified catalog identity. A selector is independent of package version.
 
 ### Package versions
 
@@ -282,3 +276,23 @@ bytes and appends to the UID/shared-content maps. It does not synthesize a ticke
 or establish signature verification. Keep a backup of the managed profile, and
 launch only after the installer succeeds. An interrupted per-file merge is
 resumable; it is not a whole-profile transaction.
+
+## Consumer-owned products
+
+Application builds now require `--product-file /path/to/consumer/product.json`.
+Use each consumer's `tools/build.py`; the engine no longer defines title presets.
+The consumer owns its name, archive prefix, native package profile, qualified
+catalog identity, renderer/hooks and launcher policy. `tools/build_release.py`
+accepts the same explicit product description for a single consumer release.
+
+`--check` prints the resolved HLE provider table. `build-products.json` retains
+that table, including actual paths/revisions, dirty-source state and source/license
+locations. Explicit CMake source definitions select initialized checkouts;
+otherwise the historically qualified offline providers retain their precedence.
+The configured CMake cache is checked against that selection. Selecting a source
+route does not upgrade a catalog or provider. DSP HLE requires its RecompCore
+donor and BlueWake host sources in developer builds as well as applications.
+
+The pinned `external/gcnllr-tools` supplies GC/Wii transport and native dependency
+closure. Wii retains its ASCII commands, 32 MiB plus metadata reply allowance,
+frame conversion, platform package layouts and forbidden-user-data policy.

@@ -20,3 +20,6 @@
 [submodule "external/recomp-input-core"]
 	path = external/recomp-input-core
 	url = https://github.com/mstan/recomp-input-core-candidate-20261124.git
+[submodule "external/gcnllr-tools"]
+	path = external/gcnllr-tools
+	url = https://github.com/mstan/gcnllr.git

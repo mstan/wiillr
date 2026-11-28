@@ -5,6 +5,7 @@
 #include "launcher_input.h"
 #include <SDL3/SDL.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 static uint32_t selected_id[4],requested_id[4];
@@ -159,7 +160,7 @@ unsigned wii_launcher_input_poll_player(void* user,unsigned player,GcnllrPad* pa
     WiiLauncherInput input={0};int keyboard_count=0;
     const bool* keyboard_keys=SDL_GetKeyboardState(&keyboard_count);
     SDL_Window* focus=SDL_GetKeyboardFocus();
-    const bool focused=focus && (!strcmp(SDL_GetWindowTitle(focus),"Mega Man 9") || !strcmp(SDL_GetWindowTitle(focus),"Wii Menu"));
+    const bool focused=focus && (getenv("WIILLR_WINDOW_TITLE") && !strcmp(SDL_GetWindowTitle(focus),getenv("WIILLR_WINDOW_TITLE")));
     // Without a video subsystem there is no host window/focus to lose (e.g.
     // input-only components). Actual runtime windows always enforce focus.
     const bool active=focused || !(SDL_WasInit(SDL_INIT_VIDEO)&SDL_INIT_VIDEO);
